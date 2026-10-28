@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -26,7 +26,15 @@ import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
 
 const PREFIX = '/api/dsh-any-audio'
 const CLIENT_HEADER = 'any-audio/1'
-const VERSION = '0.1.0'
+// Read the version from the package manifest so the settings page never shows a
+// stale number after a release bump.
+const VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version
+  } catch {
+    return '0.0.0'
+  }
+})()
 
 const jobs = new Map()
 const audios = new Map()

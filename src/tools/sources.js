@@ -204,7 +204,9 @@ export const sourcesToolDefinition = finalizeTool({
           scores: recommended ? table.get(recommended.id) : null,
         }
       }),
-      defaultSource: config.music.font || null,
+      // Declared as `string` in the output schema: omit the key when unset
+      // instead of sending null, or the host rejects the whole result.
+      ...(config.music.font ? { defaultSource: config.music.font } : {}),
       directories: fontSearchDirs(),
       legacy,
       extensions: [...FONT_EXTENSIONS],

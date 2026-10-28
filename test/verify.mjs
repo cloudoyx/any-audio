@@ -61,6 +61,52 @@ function near(actual, expected, tolerance, message) {
   assert(Math.abs(actual - expected) <= tolerance, `${message}: expected ${expected} ±${tolerance}, got ${actual}`)
 }
 
+// The host validates every tool result against the declared output schema and
+// throws away the whole value when it does not match (ToolOutputError), so a
+// schema that disagrees with the real return type silently breaks a tool for
+// every caller. Mirror the host's subset here and check real returns.
+function typeOf(value) {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  return typeof value
+}
+
+function schemaProblems(schema, value, path = 'value') {
+  const problems = []
+  if (!schema || typeof schema !== 'object') return problems
+  if (Array.isArray(schema.anyOf)) {
+    if (!schema.anyOf.some((option) => schemaProblems(option, value, path).length === 0)) {
+      problems.push(`${path} matches none of anyOf`)
+    }
+    return problems
+  }
+  if (schema.type) {
+    const allowed = Array.isArray(schema.type) ? schema.type : [schema.type]
+    const actual = typeOf(value)
+    const ok = allowed.some((type) => type === actual || (type === 'integer' && Number.isInteger(value)) || (type === 'number' && actual === 'number'))
+    if (!ok) return [`"${path}" must be a ${allowed.join('/')}`]
+  }
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) problems.push(`${path} is not one of the enum`)
+  if (Array.isArray(value) && schema.items) {
+    value.forEach((item, index) => problems.push(...schemaProblems(schema.items, item, `${path}[${index}]`)))
+  }
+  if (typeOf(value) === 'object') {
+    for (const key of schema.required ?? []) if (!(key in value)) problems.push(`"${path}.${key}" is required`)
+    if (schema.properties) {
+      for (const [key, child] of Object.entries(schema.properties)) {
+        if (!(key in value)) continue
+        problems.push(...schemaProblems(child, value[key], `${path}.${key}`))
+      }
+    }
+  }
+  return problems
+}
+
+function assertMatchesOutputSchema(definition, value) {
+  const problems = schemaProblems(definition.output?.schema, value)
+  assert(problems.length === 0, `${definition.name} output violates its own schema: ${problems.join('; ')}`)
+}
+
 function windowRms(channels, sampleRate, startSec, endSec) {
   const start = Math.floor(startSec * sampleRate)
   const end = Math.min(channels[0].length, Math.floor(endSec * sampleRate))
@@ -483,6 +529,51 @@ await test('tool definitions are complete and discoverable', async () => {
     assert(typeof definition.output?.render === 'function', `${definition.name} needs output.render`)
     assert(definition.output?.schema?.type === 'object', `${definition.name} needs an object output schema`)
   }
+})
+
+await test('every tool return value matches its declared output schema', async () => {
+  // Regression: `defaultSource: config.music.font || null` shipped a null where
+  // the schema promised a string, and the host threw the whole list result away.
+  const emptyConfigPath = join(tmpDir, 'schema-config.json')
+  const previous = process.env.ANYAUDIO_CONFIG
+  process.env.ANYAUDIO_CONFIG = emptyConfigPath
+  try {
+    const listed = await tools.get('anyaudio_sources').execute({ action: 'list' }, exec)
+    assertMatchesOutputSchema(tools.get('anyaudio_sources'), listed)
+    assert(!('defaultSource' in listed), 'an unset default source must be omitted, not null')
+    const used = await tools.get('anyaudio_sources').execute({ action: 'use', font: 'generaluser' }, exec)
+    assertMatchesOutputSchema(tools.get('anyaudio_sources'), used)
+    const relisted = await tools.get('anyaudio_sources').execute({ action: 'list' }, exec)
+    assertMatchesOutputSchema(tools.get('anyaudio_sources'), relisted)
+    assert(typeof relisted.defaultSource === 'string' && relisted.defaultSource.length > 0, 'a saved default should come back as a string')
+  } finally {
+    if (previous === undefined) delete process.env.ANYAUDIO_CONFIG
+    else process.env.ANYAUDIO_CONFIG = previous
+  }
+
+  assertMatchesOutputSchema(tools.get('anyaudio_sources'), await tools.get('anyaudio_sources').execute({ action: 'instruments' }, exec))
+  assertMatchesOutputSchema(tools.get('anyaudio_sources'), await tools.get('anyaudio_sources').execute({ action: 'kinds' }, exec))
+  assertMatchesOutputSchema(tools.get('anyaudio_sources'), await tools.get('anyaudio_sources').execute({ action: 'presets', query: 'koto', limit: 5 }, exec))
+
+  const scorePath = join(tmpDir, 'schema-score.json')
+  await writeFile(scorePath, JSON.stringify({ tracks: [{ name: 'lead', instrument: 'koto', notes: [[0, 0.4, 'D4', 80]] }] }))
+  const music = await tools.get('anyaudio_music').execute({ score: scorePath, output: '.anyaudio/test-tmp/schema-music.wav', tailSec: 0.2 }, exec)
+  assertMatchesOutputSchema(tools.get('anyaudio_music'), music)
+  assert(music.ok === true, 'a score given as a file path should render')
+
+  const sfx = await tools.get('anyaudio_sfx').execute({ action: 'catalog' }, exec)
+  assertMatchesOutputSchema(tools.get('anyaudio_sfx'), sfx)
+  const sfxItems = await tools.get('anyaudio_sfx').execute(
+    { items: [{ type: 'impact', startSec: 0, durationSec: 0.4 }], durationSec: 0.5, output: '.anyaudio/test-tmp/schema-sfx.wav' },
+    exec,
+  )
+  assertMatchesOutputSchema(tools.get('anyaudio_sfx'), sfxItems)
+
+  const mixed = await tools.get('anyaudio_mix').execute(
+    { tracks: [{ role: 'music', path: music.absolutePath }], durationSec: 0.6, output: '.anyaudio/test-tmp/schema-mix.wav' },
+    exec,
+  )
+  assertMatchesOutputSchema(tools.get('anyaudio_mix'), mixed)
 })
 
 await test('missing files fail with actionable messages', async () => {

@@ -93,17 +93,28 @@ export async function writeWavFile(path, channels, sampleRate, bitDepth = 16) {
   return { path, bytes: info.size }
 }
 
-export async function readJsonParam(value, what) {
+export async function readJsonParam(value, what, { workspaceRoot } = {}) {
   if (value && typeof value === 'object') return value
   if (typeof value === 'string') {
-    try {
-      return JSON.parse(await readFile(resolve(value), 'utf8'))
-    } catch {
+    if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
       try {
         return JSON.parse(value)
       } catch (error) {
-        throw new Error(`${what} must be a JSON object (given text could not be parsed: ${error.message})`)
+        throw new Error(`${what} is not parseable JSON: ${error.message}`)
       }
+    }
+    // A relative path belongs to the user's project, not to the host process cwd.
+    const file = isAbsolute(value) ? value : resolve(workspaceRoot ?? process.cwd(), value)
+    let text
+    try {
+      text = await readFile(file, 'utf8')
+    } catch (error) {
+      throw new Error(`${what} must be a JSON object or a readable .json file; could not read ${file}: ${error.message}`)
+    }
+    try {
+      return JSON.parse(text)
+    } catch (error) {
+      throw new Error(`${what} file ${file} is not parseable JSON: ${error.message}`)
     }
   }
   throw new Error(`${what} is required`)

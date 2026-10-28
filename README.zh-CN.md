@@ -93,6 +93,12 @@ dsh plugin --profile desktop add "<克隆目录的绝对路径>"
 
 路径要写绝对路径（Windows 上形如 `D:/any-audio`），添加后同样要重启一次 DSH。`npm run font` 会把两套建议音源（约 72 MB）下载进共享音源库，适合想在打开设置页之前就把音源准备好的情况。
 
+克隆下来的仓库还带一个免 DSH 的离线渲染器，适合先单独把谱子调好：
+
+```bash
+node scripts/anyaudio-cli.mjs render score.json out.wav
+```
+
 ## 快速开始
 
 生成视频时像平时一样提需求，Agent 会自己调用插件进行音频渲染：

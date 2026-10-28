@@ -1,6 +1,6 @@
 {
   "name": "dsh-any-audio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AnyAudio — an agent-driven audio production toolkit for DeepSeek Harness: music, sound effects, narration and mixing.",
   "type": "module",
   "main": "src/index.js",

@@ -44,6 +44,8 @@
 - 音符是 `[起始秒, 时值秒, 音高, 力度]`；第四项力度 1–127，缺省 88。和弦把音高写成数组。也接受对象写法 `{t,d,p,v}`。
 - 音高可写 MIDI 号（60）或音名（`D3`、`F#4`、`Bb2`、`C5`）。
 - 轨道字段：`instrument`（GM 名或 program 号）、`gainDb`、`pan`（-1–1）、`reverb`/`chorus`（0–1 发送量）、`drums`（该轨用鼓组，音高按鼓件名如 `kick`/`snare` 解析）、`humanize:{timingMs,velocity}`（轻微时间/力度抖动，避免机械感）。
+- **一个 score 最多 16 条轨道**（每条独占一个 MIDI 通道，鼓组固定占通道 9）；超过会直接报错。要更多声部就把同类乐器的音符合并到同一轨（同轨可变音高，和弦写成音高数组）。
+- 谱子很长时不要把它整个内联进工具调用：把 score 写成项目里的 `.json` 文件，`score` 参数直接传这个文件的路径（也接受 JSON 文本），省上下文又不容易漏字段。
 - 自动化：`automation:[{track:"pad", controller:"volume", points:[[0,90],[20,50]]}]`，控制器支持 volume/pan/expression/modulation/sustain/reverb-send/chorus-send/brightness。
 - 时间从 0 开始、按视频时间轴写；`durationSec` 传视频总长，`tailSec` 留给尾音和混响。
 
@@ -54,6 +56,7 @@
 - 氛围：`choir`、`warm-pad`、`choir-pad`、`soundtrack`、`crystal`、`atmosphere`。
 - 不确定就调 `anyaudio_sources`（action `instruments` 或 `presets`）先看有哪些音色。要更特别的音色可以自行装其它 SF2 并传 `font` 参数。
 - 音源可以换：目前支持 `.sf2/.sf3/.dls`，以后会加 sample pack、旁白人声等类型（`action: "kinds"` 可看当前类型）；换音源不用改 score。
+- 没有 DSH 也能渲染：`node scripts/anyaudio-cli.mjs render <score.json> <out.wav>`（可加 `--font`、`--duration`、`--peak`、`--rate`），等价于只调 `anyaudio_music` 的离线路径。适合先离线把谱子调好再进视频流程。
 
 ## 每条轨道选音源（可选）
 

@@ -134,7 +134,7 @@ export const sfxToolDefinition = finalizeTool({
     type: 'object',
     properties: {
       action: { type: 'string', description: "Set to \"catalog\" to list the sound-effect presets in the default banks (optionally filter with group/query). Otherwise omit and pass items." },
-      items: { type: 'array', description: 'SFX events: preset or type, startSec, optional durationSec/gainDb/fades/note/velocity/params/seed.', items: { type: 'object', additionalProperties: true } },
+      items: { oneOf: [{ type: 'array', items: { type: 'object', additionalProperties: true } }, { type: 'string' }], description: 'SFX events: preset or type, startSec, optional durationSec/gainDb/fades/note/velocity/params/seed. A path to a .json file holding the array is also accepted.' },
       output: { type: 'string', description: "Output WAV path. Relative paths resolve against the user's project; defaults to <project>/.anyaudio/out/sfx-<timestamp>.wav." },
       durationSec: { type: 'number', description: 'Total timeline length; defaults to the latest item end.' },
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
@@ -221,7 +221,7 @@ export const sfxToolDefinition = finalizeTool({
       }
     }
 
-    const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items')
+    const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items', { workspaceRoot })
     if (!Array.isArray(items) || items.length === 0) throw new Error('items must be a non-empty array (or use action:"catalog")')
     const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.sfx.sampleRate, config.sfx.sampleRate)) || config.sfx.sampleRate
     const latestEnd = items.reduce((max, item) => {

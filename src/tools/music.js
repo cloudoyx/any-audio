@@ -30,7 +30,7 @@ export const musicToolDefinition = finalizeTool({
   parameters: {
     type: 'object',
     properties: {
-      score: { type: 'object', description: 'Score object as described above (do not stringify it).' },
+      score: { oneOf: [{ type: 'object' }, { type: 'string' }], description: 'Score object as described above. A path to a .json file holding the same object is also accepted and is the better choice for long scores — keep the notes in a file and pass the path instead of inlining thousands of numbers.' },
       output: { type: 'string', description: "Output WAV path. Relative paths resolve against the user's project; defaults to <project>/.anyaudio/out/score-<timestamp>.wav." },
       font: { type: 'string', description: 'Default SoundFont path or id (.sf2/.sf3/.dls). Tracks without "source" use it; drum kits always come from it. Defaults to the installed font.' },
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
@@ -79,7 +79,7 @@ export const musicToolDefinition = finalizeTool({
   async execute(args, exec) {
     const workspaceRoot = await workspaceRootOf(exec)
     const { config } = await readConfig()
-    const score = await readJsonParam(args.score, 'score')
+    const score = await readJsonParam(args.score, 'score', { workspaceRoot })
     const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.music.sampleRate, config.music.sampleRate)) || config.music.sampleRate
     const compiled = compileScore(score, { sampleRate })
     const tailSec = clampSeconds(args.tailSec ?? config.music.tailSec, config.music.tailSec)

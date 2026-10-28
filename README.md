@@ -87,6 +87,12 @@ dsh plugin --profile desktop add "<absolute path to the cloned folder>"
 
 The path must be absolute (on Windows, `D:/any-audio` style), and DSH needs a restart once after adding it. `npm run font` downloads both suggested banks (about 72 MB) into the shared sound library, which is handy when you want the banks ready before opening Settings.
 
+A clone also gives you the headless renderer, useful for iterating on a score without an agent:
+
+```bash
+node scripts/anyaudio-cli.mjs render score.json out.wav
+```
+
 ## Quick start
 
 Describe the work as usual while generating a video; the agent calls the plugin to render audio on its own:
