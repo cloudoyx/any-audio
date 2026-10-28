@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/hero.png" alt="AnyAudio 项目抬头图" width="100%">
+
 # AnyAudio
 
 **Let Agents Create Sound.**
