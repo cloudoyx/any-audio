@@ -73,6 +73,25 @@ const server = http.createServer((req, res) => {
   })
 })
 
+// Serves bytes slowly enough that an install is still running while the next
+// request arrives; that is what lets the queueing rules be observed.
+const slowServer = http.createServer((req, res) => {
+  const chunk = Buffer.alloc(64 * 1024, 3)
+  const chunks = 20
+  res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(chunk.length * chunks) })
+  let sent = 0
+  const timer = setInterval(() => {
+    if (sent >= chunks) {
+      clearInterval(timer)
+      res.end()
+      return
+    }
+    sent++
+    res.write(chunk)
+  }, 40)
+  req.on('close', () => clearInterval(timer))
+})
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -249,6 +268,52 @@ server.listen(0, '127.0.0.1', async () => {
     const removed = await post('/sources/remove', { path: outsider, removeFile: true })
     assert(removed.ok === false, `deleting an outside file must be refused, got ${JSON.stringify(removed)}`)
     assert((await readFile(outsider, 'utf8')) === 'keep me', 'the file must still exist')
+  })
+
+  // One install at a time, and the job must outlive the settings page that
+  // started it: the host owns the download, the page only watches it.
+  await step('a second install joins the running job instead of starting a parallel one', async () => {
+    await new Promise((resolve) => slowServer.listen(0, '127.0.0.1', resolve))
+    const slowPort = slowServer.address().port
+    try {
+      const first = await post('/sources/install', { url: `http://127.0.0.1:${slowPort}/slow-bank.sf2` })
+      assert(first.ok && first.job?.id, first.error ?? 'no job id')
+      assert(first.job.label === 'slow-bank.sf2', `job label should name the file, got ${first.job.label}`)
+      const second = await post('/sources/install', { fromPath: join(testRoot, 'custom-bank.sf2') })
+      assert(second.ok, second.error)
+      assert(second.reused === true, 'a second install must join the running job')
+      assert(second.job.id === first.job.id, `a parallel install started: ${second.job.id} != ${first.job.id}`)
+
+      // No polling happens in between: this is the "settings page was closed" case.
+      const active = await get('/jobs/active?kind=install')
+      assert(active.job?.id === first.job.id, 'a reopened settings page must find the running install')
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const seen = (await get(`/jobs?id=${encodeURIComponent(first.job.id)}`)).job
+      assert(seen && (seen.status === 'running' || seen.status === 'done'), 'the job must stay queryable without polling')
+      if (seen.status === 'running') {
+        assert(seen.received > 0, 'a restored page must get the progress that already happened')
+      }
+
+      let job = seen
+      for (let i = 0; i < 200 && job.status === 'running'; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        job = (await get(`/jobs?id=${encodeURIComponent(first.job.id)}`)).job
+      }
+      assert(job.status === 'done', `job ended as ${job.status}: ${job.error ?? ''}`)
+      assert(job.result.path === join(testFontDir, 'slow-bank.sf2'), `installed to ${job.result.path}`)
+      assert((await get('/jobs/active?kind=install')).job === null, 'no install may still be reported as running')
+      const refreshed = await get('/state')
+      assert(
+        refreshed.fonts.rows.some((row) => row.name === 'slow-bank.sf2'),
+        'the page must see the finished install on its next refresh',
+      )
+      const leftovers = (await readdir(testFontDir)).filter((name) => name.endsWith('.part'))
+      assert(leftovers.length === 0, `partial downloads left behind: ${leftovers.join(', ')}`)
+      const removed = await post('/sources/remove', { path: job.result.path, removeFile: true })
+      assert(removed.ok && removed.removed, removed.error)
+    } finally {
+      slowServer.close()
+    }
   })
 
   // The four steps below cover the "saved default points at a bank that no longer

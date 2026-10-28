@@ -61,6 +61,7 @@ function publicJob(job) {
   return {
     id: job.id,
     kind: job.kind,
+    label: job.label ?? null,
     status: job.status,
     received: job.received,
     total: job.total,
@@ -72,9 +73,9 @@ function publicJob(job) {
   }
 }
 
-function startJob(kind, runner) {
+function startJob(kind, runner, label = '') {
   const id = randomUUID()
-  const job = { id, kind, status: 'running', received: 0, total: 0, message: '', startedAt: Date.now(), abort: new AbortController() }
+  const job = { id, kind, label, status: 'running', received: 0, total: 0, message: '', startedAt: Date.now(), abort: new AbortController() }
   jobs.set(id, job)
   runner(job)
     .then((result) => {
@@ -89,6 +90,22 @@ function startJob(kind, runner) {
       job.finishedAt = Date.now()
     })
   return job
+}
+
+function runningJob(kind) {
+  for (const job of jobs.values()) {
+    if (job.kind === kind && job.status === 'running') return job
+  }
+  return null
+}
+
+/** A short name for the progress line; a malformed URL must not break the call. */
+function urlLabel(url) {
+  try {
+    return basename(new URL(url).pathname) || url
+  } catch {
+    return url
+  }
 }
 
 /** Recommended fonts plus whatever is installed, merged for the UI. */
@@ -211,6 +228,11 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : 'generaluser'
     const url = typeof body.url === 'string' && body.url.trim() ? body.url.trim() : undefined
     const fromPath = typeof body.fromPath === 'string' && body.fromPath.trim() ? body.fromPath.trim() : undefined
+    // One install at a time: a second request must join the running job instead
+    // of starting a parallel download that would write the same ".part" file.
+    const running = runningJob('install')
+    if (running) return { ok: true, job: publicJob(running), reused: true }
+    const label = url ? urlLabel(url) : fromPath ? basename(fromPath) : findRecommended(id)?.name ?? id
     const job = startJob('install', async (current) => {
       const result = await installFont({
         id,
@@ -234,7 +256,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       })
       current.message = result.alreadyInstalled ? 'already installed' : 'installed'
       return { ...result, name: basename(result.path), id: recommended?.id ?? null }
-    })
+    }, label)
     return { ok: true, job: publicJob(job) }
   }
 
@@ -493,6 +515,10 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     if (method === 'GET' && path === `${PREFIX}/jobs`) {
       const job = jobs.get(url.searchParams.get('id') ?? '')
       return json(res, job ? 200 : 404, job ? { ok: true, job: publicJob(job) } : { ok: false, error: 'job not found' })
+    }
+    if (method === 'GET' && path === `${PREFIX}/jobs/active`) {
+      const job = runningJob(url.searchParams.get('kind') ?? 'install')
+      return json(res, 200, { ok: true, job: job ? publicJob(job) : null })
     }
     if (method !== 'POST') return json(res, 405, { ok: false, error: 'method not allowed' })
 
