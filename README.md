@@ -2,15 +2,6 @@
 
 <img src="docs/assets/hero.png" alt="AnyAudio 项目抬头图" width="100%">
 
-# AnyAudio
-
-**Let Agents Create Sound.**
-
-An agent-driven audio production toolkit for music, sound effects, narration, and mixing.
-
-<p><b>Music · Sound Effects · Narration · Mixing</b><br>
-<sub>让 Agent 做出真正的声音。</sub></p>
-
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](https://github.com/cloudoyx/any-audio/blob/main/LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-339933.svg)](https://nodejs.org)
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4b6bfb.svg)](#install)
