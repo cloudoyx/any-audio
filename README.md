@@ -9,12 +9,12 @@ An agent-driven audio production toolkit for music, sound effects, narration, an
 <p><b>Music · Sound Effects · Narration · Mixing</b><br>
 <sub>让 Agent 做出真正的声音。</sub></p>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](https://github.com/cloudoyx/any-audio/blob/main/LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-339933.svg)](https://nodejs.org)
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4b6bfb.svg)](#install)
 [![Status](https://img.shields.io/badge/status-early%20release-orange.svg)](#known-limitations)
 
-[Hear the difference](#hear-the-difference) · [Install](#install) · [Sound sources](#sound-sources) · [Speech TTS](#speech-tts) · [中文说明](README.zh-CN.md)
+[Hear the difference](#hear-the-difference) · [Install](#install) · [Sound sources](#sound-sources) · [Speech TTS](#speech-tts) · [中文说明](https://github.com/cloudoyx/any-audio/blob/main/README.zh-CN.md)
 
 </div>
 
@@ -50,7 +50,7 @@ The same 57-second bossa nova. Version A was produced the way an agent works wit
 | Spectral centroid | 1,356 Hz | 1,890 Hz |
 | Energy above 4 kHz | 6.8% | 11.6% |
 
-<table><tr><td width="50%" valign="top"><img src="samples/music-version-a-waveform.png" width="100%"><sub>Music version A — waveform and spectrogram</sub></td><td width="50%" valign="top"><img src="samples/music-version-b-waveform.png" width="100%"><sub>Music version B — waveform and spectrogram</sub></td></tr><tr><td>https://github.com/user-attachments/assets/9f496f67-0bd7-496e-96d9-4c2ccb4a28eb</td><td>https://github.com/user-attachments/assets/86ac18e0-f530-452b-9711-7f7471855b80</td></tr></table>
+<table><tr><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/music-version-a-waveform.png" width="100%"><sub>Music version A — waveform and spectrogram</sub></td><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/music-version-b-waveform.png" width="100%"><sub>Music version B — waveform and spectrogram</sub></td></tr><tr><td>https://github.com/user-attachments/assets/9f496f67-0bd7-496e-96d9-4c2ccb4a28eb</td><td>https://github.com/user-attachments/assets/86ac18e0-f530-452b-9711-7f7471855b80</td></tr></table>
 
 Version B uses sampled instruments: it sounds more like real players, with more high-frequency detail and more dynamic headroom.
 
@@ -65,7 +65,7 @@ The same 24-second scene, five lines of dialogue, plus rain, footsteps and a doo
 | Spectral centroid | 5,629 Hz | 4,401 Hz |
 | Energy above 4 kHz | 55.3% | 44.0% |
 
-<table><tr><td width="50%" valign="top"><img src="samples/tts-sfx-version-a-waveform.png" width="100%"><sub>Speech and effects version A — waveform and spectrogram</sub></td><td width="50%" valign="top"><img src="samples/tts-sfx-version-b-waveform.png" width="100%"><sub>Speech and effects version B — waveform and spectrogram</sub></td></tr><tr><td>https://github.com/user-attachments/assets/c4ae1a17-d7bc-4db1-b96a-be244fd75358</td><td>https://github.com/user-attachments/assets/4fca1c9e-b373-4ab7-b18b-afe3e81ad102</td></tr></table>
+<table><tr><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-a-waveform.png" width="100%"><sub>Speech and effects version A — waveform and spectrogram</sub></td><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-b-waveform.png" width="100%"><sub>Speech and effects version B — waveform and spectrogram</sub></td></tr><tr><td>https://github.com/user-attachments/assets/c4ae1a17-d7bc-4db1-b96a-be244fd75358</td><td>https://github.com/user-attachments/assets/4fca1c9e-b373-4ab7-b18b-afe3e81ad102</td></tr></table>
 
 Version B's voices match the emotion and pacing of the scene more closely, and its effects are more realistic and more detailed.
 
@@ -74,15 +74,25 @@ Version B's voices match the emotion and pacing of the scene more closely, and i
 Node.js 22.19+ (22.x) or 24+ (bundled with DSH); ffmpeg is only needed for speech and for muxing video.
 
 ```bash
+dsh plugin --profile desktop add dsh-any-audio
+```
+
+If DSH boots a different profile, replace `desktop` with that profile name. Restart DSH once after installing so it picks up the plugin.
+
+Then open the **AnyAudio** page in DSH Settings to install a sound source (GeneralUser GS is the default suggestion), switch the speech engine and adjust mixing defaults. No SoundFont is bundled with the package.
+
+### From source
+
+For local development, install from a clone instead of the registry:
+
+```bash
 git clone https://github.com/cloudoyx/any-audio.git
 cd any-audio
 npm install && npm run font
 dsh plugin --profile desktop add "<absolute path to the cloned folder>"
 ```
 
-The path must be absolute (on Windows, `D:/any-audio` style). If DSH boots a different profile, replace `desktop` with that profile name. `npm run font` downloads both suggested banks (about 72 MB) into the shared sound library.
-
-Once installed, an **AnyAudio** page appears in DSH Settings, where you install sound sources, switch the speech engine and adjust mixing defaults. If the page does not show up, restart DSH once.
+The path must be absolute (on Windows, `D:/any-audio` style), and DSH needs a restart once after adding it. `npm run font` downloads both suggested banks (about 72 MB) into the shared sound library, which is handy when you want the banks ready before opening Settings.
 
 ## Quick start
 
@@ -113,7 +123,7 @@ The repository does not bundle SoundFonts. The plugin offers two **suggested** b
 | Upright Piano KW | 27 MB (7z) | CC0 1.0 | Manual | Single-instrument piano bank, used on piano tracks only |
 | Electric Guitar Clean | 446 MB (unpacked) | CC0 1.0 | Manual | Single-instrument electric guitar bank |
 
-Installing both suggested banks gives the widest coverage: GeneralUser GS stays the default, while MuseScore General joins the automatic ranking for orchestral families. Download links and extraction notes for the last two are in Settings and in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); keep the file names unchanged after extracting so the plugin can recognise them.
+Installing both suggested banks gives the widest coverage: GeneralUser GS stays the default, while MuseScore General joins the automatic ranking for orchestral families. Download links and extraction notes for the last two are in Settings and in [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md); keep the file names unchanged after extracting so the plugin can recognise them.
 
 ## Speech TTS
 
@@ -139,12 +149,12 @@ AnyAudio is an independent open-source project. If it helps your work or your cr
 Any amount is appreciated.
 
 <div align="center">
-  <img src="docs/assets/wechat-donate.png" alt="WeChat Pay QR code" width="200">
+  <img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/docs/assets/wechat-donate.png" alt="WeChat Pay QR code" width="200">
   <p>WeChat Pay</p>
 </div>
 
 ## License
 
-Code is MIT, see [LICENSE](LICENSE).
+Code is MIT, see [LICENSE](https://github.com/cloudoyx/any-audio/blob/main/LICENSE).
 
-SoundFonts and third-party components keep their own licenses, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This repository distributes no sample banks.
+SoundFonts and third-party components keep their own licenses, see [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md). This repository distributes no sample banks.

@@ -8,12 +8,12 @@ An agent-driven audio production toolkit for music, sound effects, narration, an
 
 一套由 Agent 驱动的音频制作工具，涵盖音乐、音效、配音与混音，让 Agent 具备音频制作能力。
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](https://github.com/cloudoyx/any-audio/blob/main/LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-339933.svg)](https://nodejs.org)
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4b6bfb.svg)](#安装)
 [![Status](https://img.shields.io/badge/status-early%20release-orange.svg)](#已知限制)
 
-[先听为快](#先听为快) · [安装](#安装) · [音源](#音源) · [语音-tts](#语音-tts) · [English](README.md)
+[先听为快](#先听为快) · [安装](#安装) · [音源](#音源) · [语音-tts](#语音-tts) · [English](https://github.com/cloudoyx/any-audio/blob/main/README.md)
 
 </div>
 
@@ -49,7 +49,7 @@ Agent 负责创意与编排，AnyAudio 提供将声音创意转化为实际音�
 | 频谱质心 | 1,356 Hz | 1,890 Hz |
 | 4 kHz 以上能量 | 6.8% | 11.6% |
 
-<table><tr><td width="50%" valign="top"><img src="samples/music-version-a-waveform.png" width="100%"><sub>音乐 A 版 — 波形与频谱图</sub></td><td width="50%" valign="top"><img src="samples/music-version-b-waveform.png" width="100%"><sub>音乐 B 版 — 波形与频谱图</sub></td></tr><tr><td>https://github.com/user-attachments/assets/9f496f67-0bd7-496e-96d9-4c2ccb4a28eb</td><td>https://github.com/user-attachments/assets/86ac18e0-f530-452b-9711-7f7471855b80</td></tr></table>
+<table><tr><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/music-version-a-waveform.png" width="100%"><sub>音乐 A 版 — 波形与频谱图</sub></td><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/music-version-b-waveform.png" width="100%"><sub>音乐 B 版 — 波形与频谱图</sub></td></tr><tr><td>https://github.com/user-attachments/assets/9f496f67-0bd7-496e-96d9-4c2ccb4a28eb</td><td>https://github.com/user-attachments/assets/86ac18e0-f530-452b-9711-7f7471855b80</td></tr></table>
 
 B 版使用音源素材，声音更真实，高频细节更多、动态余量更大。
 
@@ -64,7 +64,7 @@ B 版使用音源素材，声音更真实，高频细节更多、动态余量更
 | 频谱质心 | 5,629 Hz | 4,401 Hz |
 | 4 kHz 以上能量 | 55.3% | 44.0% |
 
-<table><tr><td width="50%" valign="top"><img src="samples/tts-sfx-version-a-waveform.png" width="100%"><sub>语音与音效 A 版 — 波形与频谱图</sub></td><td width="50%" valign="top"><img src="samples/tts-sfx-version-b-waveform.png" width="100%"><sub>语音与音效 B 版 — 波形与频谱图</sub></td></tr><tr><td>https://github.com/user-attachments/assets/c4ae1a17-d7bc-4db1-b96a-be244fd75358</td><td>https://github.com/user-attachments/assets/4fca1c9e-b373-4ab7-b18b-afe3e81ad102</td></tr></table>
+<table><tr><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-a-waveform.png" width="100%"><sub>语音与音效 A 版 — 波形与频谱图</sub></td><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-b-waveform.png" width="100%"><sub>语音与音效 B 版 — 波形与频谱图</sub></td></tr><tr><td>https://github.com/user-attachments/assets/c4ae1a17-d7bc-4db1-b96a-be244fd75358</td><td>https://github.com/user-attachments/assets/4fca1c9e-b373-4ab7-b18b-afe3e81ad102</td></tr></table>
 
 B 版人声情绪和节奏更贴合场景，音效更真实，细节更多。
 
@@ -73,15 +73,25 @@ B 版人声情绪和节奏更贴合场景，音效更真实，细节更多。
 需要 Node.js 22.19+（22.x）或 24+（DSH 运行时自带）；ffmpeg 只在生成语音和封装视频时需要。
 
 ```bash
+dsh plugin --profile desktop add dsh-any-audio
+```
+
+如果 DSH 启动的不是 `desktop` profile，把 `desktop` 换成实际使用的 profile 名。装完重启一次 DSH，它才会加载这个插件。
+
+之后在 DSH 设置里打开 **AnyAudio** 页面，安装音源（默认推荐 GeneralUser GS）、切换语音引擎、调整混音默认值。安装包本身不带任何 SoundFont。
+
+### 从源码安装
+
+本地开发时用克隆仓库的方式，而不是从 npm 安装：
+
+```bash
 git clone https://github.com/cloudoyx/any-audio.git
 cd any-audio
 npm install && npm run font
 dsh plugin --profile desktop add "<克隆目录的绝对路径>"
 ```
 
-路径要写绝对路径（Windows 上形如 `D:/any-audio`）。如果 DSH 启动的不是 `desktop` profile，把 `desktop` 换成实际使用的 profile 名。`npm run font` 会把两套建议音源（约 72 MB）下载进共享音源库。
-
-装好后 DSH 设置里会出现 **AnyAudio** 页面，用来安装音源、切换语音引擎和调整混音默认值。如果没出现，重启一次 DSH。
+路径要写绝对路径（Windows 上形如 `D:/any-audio`），添加后同样要重启一次 DSH。`npm run font` 会把两套建议音源（约 72 MB）下载进共享音源库，适合想在打开设置页之前就把音源准备好的情况。
 
 ## 快速开始
 
@@ -112,7 +122,7 @@ dsh plugin --profile desktop add "<克隆目录的绝对路径>"
 | Upright Piano KW | 27 MB（7z） | CC0 1.0 | 手动 | 单乐器钢琴库，只用于钢琴轨 |
 | Electric Guitar Clean | 446 MB（解压后） | CC0 1.0 | 手动 | 单乐器电吉他库 |
 
-两套都装覆盖最广：GeneralUser GS 仍是默认音源，MuseScore General 参与管弦乐族的自动选择。后两套的下载地址与解压说明在设置页和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；解压后保持文件名不变，插件才能识别。
+两套都装覆盖最广：GeneralUser GS 仍是默认音源，MuseScore General 参与管弦乐族的自动选择。后两套的下载地址与解压说明在设置页和 [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md)；解压后保持文件名不变，插件才能识别。
 
 ## 语音 TTS
 
@@ -138,12 +148,12 @@ AnyAudio 是一个独立开源项目。如果它对你的工作或创作有所�
 无论金额多少，都感谢你的支持。
 
 <div align="center">
-  <img src="docs/assets/wechat-donate.png" alt="微信赞赏码" width="200">
+  <img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/docs/assets/wechat-donate.png" alt="微信赞赏码" width="200">
   <p>微信支付</p>
 </div>
 
 ## 许可证
 
-代码采用 MIT，见 [LICENSE](LICENSE)。
+代码采用 MIT，见 [LICENSE](https://github.com/cloudoyx/any-audio/blob/main/LICENSE)。
 
-SoundFont 与第三方组件沿用各自许可证，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本仓库不分发任何音源库。
+SoundFont 与第三方组件沿用各自许可证，见 [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md)。本仓库不分发任何音源库。
