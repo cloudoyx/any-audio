@@ -1,0 +1,73 @@
+{
+  "name": "dsh-any-audio",
+  "version": "0.1.0",
+  "description": "AnyAudio — an agent-driven audio production toolkit for DeepSeek Harness: music, sound effects, narration and mixing.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "lib",
+    "cordis.patch.yml",
+    "scripts/fetch-font.mjs",
+    "scripts/smoke.mjs",
+    "scripts/anyaudio-cli.mjs",
+    "test",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cloudoyx/any-audio.git"
+  },
+  "homepage": "https://github.com/cloudoyx/any-audio#readme",
+  "bugs": {
+    "url": "https://github.com/cloudoyx/any-audio/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "font": "node scripts/fetch-font.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "render": "node scripts/anyaudio-cli.mjs",
+    "test": "node test/verify.mjs",
+    "test:client": "node test/client-bundle.mjs",
+    "test:settings": "node test/settings.mjs"
+  },
+  "dependencies": {
+    "node-edge-tts": "^1.2.11",
+    "spessasynth_core": "^4.3.22",
+    "https-proxy-agent": "^7.0.6"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "audio",
+    "music",
+    "soundfont",
+    "sound-effects",
+    "tts",
+    "narration",
+    "mixing",
+    "video"
+  ],
+  "license": "MIT"
+}
