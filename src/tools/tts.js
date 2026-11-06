@@ -39,6 +39,32 @@ function styleFromLegacy({ rate, pitch }) {
   return parts.join('，')
 }
 
+/**
+ * Settle the engine of every item before anything else happens.
+ *
+ * The top-level `provider` is a default, not a verdict: an item may name its own
+ * engine, and that choice decides which key is needed and which per-engine
+ * defaults apply. Resolving it late — after a MiMo key was demanded for the
+ * whole batch — used to reject an all-edge batch whenever the configured
+ * default was MiMo.
+ *
+ * @param items - normalised items, each optionally carrying `provider`
+ * @param fallbackProvider - the top-level provider or the configured default
+ * @returns the same items with `provider` filled in, plus whether any of them
+ *   will actually need a MiMo key
+ * @throws when an item names an engine this plugin does not implement
+ */
+export function resolveProviders(items, fallbackProvider) {
+  for (const item of items) {
+    const chosen = String(item.provider ?? fallbackProvider)
+    if (!providerInfo(chosen)) {
+      throw new Error(`unknown TTS provider "${chosen}"; use ${Object.keys(TTS_PROVIDERS).join(' or ')}`)
+    }
+    item.provider = chosen
+  }
+  return { items, needsMimoKey: items.some((item) => item.provider === 'mimo' && item.text) }
+}
+
 export const ttsToolDefinition = finalizeTool({
   name: 'anyaudio_tts',
   description:
@@ -96,7 +122,6 @@ export const ttsToolDefinition = finalizeTool({
     const info = providerInfo(provider)
     if (!info) throw new Error(`unknown TTS provider "${provider}"; use ${Object.keys(TTS_PROVIDERS).join(' or ')}`)
     const warnings = []
-    const defaults = provider === 'mimo' ? config.tts.mimo : config.tts.edge
     const sampleRate = 48000
 
     const items = Array.isArray(args.items) && args.items.length > 0
@@ -104,25 +129,34 @@ export const ttsToolDefinition = finalizeTool({
       : [{ text: String(args.text ?? '').trim(), output: args.output, label: 'text' }]
     if (items.length === 1 && !items[0].text) throw new Error('anyaudio_tts needs "text" or a non-empty "items" array')
 
-    const mimoKey = provider === 'mimo' ? await resolveMimoKey() : null
-    if (provider === 'mimo' && !mimoKey) {
-      throw new Error('MiMo TTS needs an API key. Save one in Settings → AnyAudio (stored in the DSH credential store) or set MIMO_API_KEY. This plugin supports normal Open Platform API keys, not Token Plan keys.')
-    }
+    const { needsMimoKey } = resolveProviders(items, provider)
+    const mimoKey = needsMimoKey ? await resolveMimoKey() : null
 
     const stamp = nowStamp()
     const files = []
     for (let index = 0; index < items.length; index++) {
       const item = items[index]
       const label = items.length > 1 ? `item #${index + 1}` : 'text'
-      const itemProvider = String(item.provider ?? provider)
+      const itemProvider = item.provider
+      const itemInfo = providerInfo(itemProvider)
       if (!item.text) {
         warnings.push(`${label} has no text and was skipped`)
         continue
       }
+      if (itemProvider === 'mimo' && !mimoKey) {
+        // One item asking for an engine it cannot reach must not sink the batch:
+        // report it and keep synthesising the rest.
+        warnings.push(`${label} (mimo) was skipped: MiMo TTS needs an API key. Save one in Settings → AnyAudio (stored in the DSH credential store) or set MIMO_API_KEY. This plugin supports normal Open Platform API keys, not Token Plan keys.`)
+        continue
+      }
       if (item.text.length > 4000) warnings.push(`${label}: ${item.text.length} characters — the service may truncate long input`)
       const voice = String(item.voice ?? (itemProvider === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice))
+      // Rate/pitch/volume are Edge-only fields; MiMo gets its delivery from `style`.
+      const edgeRate = item.rate ?? config.tts.edge.rate
+      const edgePitch = item.pitch ?? config.tts.edge.pitch
+      const edgeVolume = item.volume ?? config.tts.edge.volume
       const style = itemProvider === 'mimo'
-        ? [config.tts.mimo.style, item.style, styleFromLegacy({ rate: item.rate, pitch: item.pitch })].filter((part) => typeof part === 'string' && part.trim()).join('。')
+        ? [config.tts.mimo.style, item.style, styleFromLegacy({ rate: edgeRate, pitch: edgePitch })].filter((part) => typeof part === 'string' && part.trim()).join('。')
         : undefined
       const target = resolveOutputPath({ workspaceRoot, outputDir: config.output.dir, requested: item.output, defaultName: items.length > 1 ? `speech-${stamp}-${index + 1}.wav` : `speech-${stamp}.wav` })
       await mkdir(dirname(target), { recursive: true })
@@ -132,9 +166,9 @@ export const ttsToolDefinition = finalizeTool({
           provider: itemProvider,
           text: item.text,
           voice,
-          rate: item.rate ?? config.tts.edge.rate,
-          pitch: item.pitch ?? config.tts.edge.pitch,
-          volume: item.volume ?? config.tts.edge.volume,
+          rate: edgeRate,
+          pitch: edgePitch,
+          volume: edgeVolume,
           style: itemProvider === 'mimo' ? style : item.style,
           proxy: typeof item.proxy === 'string' && item.proxy.trim()
             ? item.proxy.trim()
@@ -147,7 +181,7 @@ export const ttsToolDefinition = finalizeTool({
           signal: exec?.signal,
         })
       } catch (error) {
-        throw new Error(`${info.label} failed for ${label}: ${describeError(error)}`)
+        throw new Error(`${itemInfo.label} failed for ${label}: ${describeError(error)}`)
       }
       const wav = encodeWav({ sampleRate: audio.sampleRate, channels: audio.channels, bitDepth: 16 })
       await (await import('node:fs/promises')).writeFile(target, wav)
@@ -164,7 +198,9 @@ export const ttsToolDefinition = finalizeTool({
         text: item.text.slice(0, 120),
       })
     }
-    if (files.length === 0) throw new Error('no narration was produced')
+    if (files.length === 0) {
+      throw new Error(warnings.length > 0 ? `no narration was produced: ${warnings.join('; ')}` : 'no narration was produced')
+    }
     return { ok: true, provider, files, warnings }
   },
 })

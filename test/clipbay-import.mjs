@@ -87,6 +87,15 @@ await runFfmpeg(ffmpeg.command, [
   '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', mp4Path,
 ])
 
+// The same picture with no audio stream at all — a screen recording, a silent
+// render, anything a tool wrote without a soundtrack.
+const silentMp4Path = join(fixtureDir, 'silent.mp4')
+await runFfmpeg(ffmpeg.command, [
+  '-y', '-hide_banner', '-loglevel', 'error',
+  '-f', 'lavfi', '-i', 'color=c=navy:s=64x64:d=3:r=5',
+  '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', silentMp4Path,
+])
+
 await test('kindOfFile recognises audio and video extensions', async () => {
   assert(kindOfFile('a.wav') === 'audio', 'wav is audio')
   assert(kindOfFile('a.MP3') === 'audio', 'uppercase mp3 is audio')
@@ -158,6 +167,34 @@ await test('importing a video keeps the picture and extracts its sound track', a
   assert(reread.video && reread.video.path === video.path, 'project.json points at the video copy')
   assert(Math.abs(reread.video.durationSec - 4) < 0.3, 'the video duration was probed')
   assert(reread.durationSec >= 4, 'the project duration follows the video when it is longer')
+})
+
+await test('a picture with no audio stream still imports as a reference picture', async () => {
+  const project = await createProject(ws, { name: 'silent video' })
+  const { material, video, silent } = await importFile(ws, project.id, silentMp4Path, { findFfmpeg })
+  assert(silent === true, 'the import reports that there was no soundtrack')
+  assert(material === null, 'no soundtrack means no soundtrack material')
+  assert(video && video.path.startsWith('video/'), 'the picture is still copied and recorded')
+  assert(video.locked === true, 'the picture is locked the same way a sounding one is')
+  assert(existsSync(join(projectDir(ws, project.id), video.path)), 'the silent picture really landed in video/')
+  assert(Math.abs(video.durationSec - 3) < 0.3, `the silent picture duration was probed, got ${video.durationSec}`)
+
+  const index = await readMaterialIndex(ws, project.id)
+  assert(index.materials.length === 0, 'a silent picture registers no material')
+
+  const reread = await readProject(ws, project.id)
+  assert(reread.video && reread.video.path === video.path, 'project.json points at the silent picture')
+  assert(reread.durationSec >= 3, 'the project length still follows the picture')
+})
+
+await test('an import that fails for another reason is still an error', async () => {
+  // The silent-picture path must not swallow unrelated ffmpeg failures. A file
+  // that is not a video at all dies at the duration probe, before any audio
+  // extraction is attempted.
+  const project = await createProject(ws, { name: 'broken video' })
+  const broken = join(fixtureDir, 'broken.mp4')
+  await (await import('node:fs/promises')).writeFile(broken, Buffer.from('this is not a video'))
+  await rejects(() => importFile(ws, project.id, broken, { findFfmpeg }), /could not read the duration/, 'a corrupt mp4 is still refused')
 })
 
 await test('a missing or empty file fails with a clear message', async () => {

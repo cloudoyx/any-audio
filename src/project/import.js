@@ -130,6 +130,15 @@ async function isAlreadyInternalFormat(path) {
   }
 }
 
+async function pathExists(path) {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function readAudioForPeaks(path) {
   try {
     return await readWavChannels(path)
@@ -163,37 +172,50 @@ export async function importFile(workspaceRoot, projectId, sourcePath, { findFfm
   await copyFile(from, resolveInside(dir, `${SOURCES_DIR}/${id}.orig.${ext}`))
 
   if (role === 'video') {
-    if (!ffmpeg) throw new ImportError('ffmpeg not found; importing a video needs it to extract the original sound track (set ANYAUDIO_FFMPEG or add ffmpeg to PATH)')
+    if (!ffmpeg) throw new ImportError('ffmpeg not found; importing a video needs it to read its duration and sound track (set ANYAUDIO_FFMPEG or add ffmpeg to PATH)')
     const videoName = `${id}.${ext}`
     const videoCopy = resolveInside(dir, `${VIDEO_DIR}/${videoName}`)
     await mkdir(resolve(dir, VIDEO_DIR), { recursive: true })
     await copyFile(from, videoCopy)
     const durationSec = await probeMediaDuration(ffmpeg.command, videoCopy, { signal })
     if (!durationSec) throw new ImportError(`could not read the duration of "${basename(from)}"`)
-    await convertToInternalFormat(ffmpeg.command, videoCopy, materialCopy, { signal })
-    const decoded = await readAudioForPeaks(materialCopy)
-    await writePeaks(resolveInside(dir, peaksRel), computePeaks(decoded.channels, decoded.durationSec))
 
-    const material = await registerMaterial(workspaceRoot, projectId, {
-      id,
-      file: `${MATERIALS_DIR}/${id}.wav`,
-      durationSec: decoded.durationSec,
-      sampleRate: IMPORT_SAMPLE_RATE,
-      channels: IMPORT_CHANNELS,
-      kind: 'video-audio',
-      bytes: (await stat(materialCopy)).size,
-      source: {
-        kind: 'imported',
-        originalName: basename(from),
-        originalFormat: ext,
-        importedAt: nowIso(),
-        original: `${SOURCES_DIR}/${id}.orig.${ext}`,
-        video: `${VIDEO_DIR}/${videoName}`,
-      },
-    })
+    // A picture with no audio stream is a normal file (a screen recording, a
+    // silent render). It is still a usable reference picture, so it is imported
+    // as one — only without a soundtrack material.
+    let material = null
+    let peaksRelPath = null
+    try {
+      await convertToInternalFormat(ffmpeg.command, videoCopy, materialCopy, { signal })
+    } catch (error) {
+      if (!/does not contain any stream/i.test(String(error.stderr ?? ''))) throw error
+    }
+    if (await pathExists(materialCopy)) {
+      const decoded = await readAudioForPeaks(materialCopy)
+      peaksRelPath = peaksRel
+      await writePeaks(resolveInside(dir, peaksRel), computePeaks(decoded.channels, decoded.durationSec))
+      material = await registerMaterial(workspaceRoot, projectId, {
+        id,
+        file: `${MATERIALS_DIR}/${id}.wav`,
+        durationSec: decoded.durationSec,
+        sampleRate: IMPORT_SAMPLE_RATE,
+        channels: IMPORT_CHANNELS,
+        kind: 'video-audio',
+        bytes: (await stat(materialCopy)).size,
+        source: {
+          kind: 'imported',
+          originalName: basename(from),
+          originalFormat: ext,
+          importedAt: nowIso(),
+          original: `${SOURCES_DIR}/${id}.orig.${ext}`,
+          video: `${VIDEO_DIR}/${videoName}`,
+        },
+      })
+    }
+
     const updated = { ...project, video: { path: `${VIDEO_DIR}/${videoName}`, durationSec, locked: true } }
     await saveProject(workspaceRoot, updated, { by: 'agent', note: `imported video ${basename(from)}` })
-    return { material, video: updated.video, peaks: peaksRel }
+    return { material, video: updated.video, peaks: peaksRelPath, silent: material === null }
   }
 
   // Audio import. A 48 kHz stereo PCM WAV is already in the internal format, so

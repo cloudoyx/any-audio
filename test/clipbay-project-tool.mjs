@@ -174,6 +174,81 @@ await test('add_material without a track name only registers the material', asyn
   assert.equal(result.tracks.length, 1, 'no track may be created without a name')
 })
 
+await test('add_material puts a picture soundtrack on its own track without being told', async () => {
+  // Improvement plan 01, I-02. Before this, importing a video registered the
+  // extracted soundtrack as a material and left it off the timeline, so the
+  // picture's own sound was silent until someone dragged it in by hand.
+  const { findFfmpeg } = await import('../src/tools/shared.js')
+  if (!findFfmpeg()) {
+    console.log('     (skipped: ffmpeg is not available)')
+    return
+  }
+  const { runFfmpeg } = await import('../src/tools/shared.js')
+  const pictureProject = await call({ mode: 'create', name: '带画面的工程' })
+  const mp4 = join(scratch, 'tool-picture.mp4')
+  await runFfmpeg(findFfmpeg().command, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'color=c=navy:s=64x64:d=2:r=5',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', mp4,
+  ])
+
+  const result = await call({ mode: 'add_material', projectId: pictureProject.projectId, sourcePath: mp4 })
+  assert.equal(result.ok, true)
+  assert.ok(result.clip, 'the soundtrack must land on a track without a trackName')
+  assert.equal(result.clip.startSec, 0, 'the soundtrack starts with the picture')
+  const track = result.tracks.find((entry) => entry.id === result.clip.trackId) ?? result.tracks[0]
+  assert.equal(track.category, 'video-audio', 'the track is categorised as the picture soundtrack')
+  assert.equal(track.clips.length, 1)
+  assert.match(track.name, /画面原声/, 'the track is named after the picture')
+})
+
+await test('add_material still honours an explicit track name for a picture', async () => {
+  // An Agent that wants the soundtrack elsewhere keeps control.
+  const { findFfmpeg, runFfmpeg } = await import('../src/tools/shared.js')
+  if (!findFfmpeg()) return
+  const secondProject = await call({ mode: 'create', name: '原声另放' })
+  const mp4 = join(scratch, 'tool-picture-2.mp4')
+  await runFfmpeg(findFfmpeg().command, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'color=c=teal:s=64x64:d=2:r=5',
+    '-f', 'lavfi', '-i', 'sine=frequency=550:duration=2',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', mp4,
+  ])
+  const result = await call({
+    mode: 'add_material',
+    projectId: secondProject.projectId,
+    sourcePath: mp4,
+    trackName: '我自己的轨',
+    category: 'other',
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.clip.trackName, '我自己的轨')
+  assert.equal(result.tracks.length, 1)
+  assert.equal(result.tracks[0].category, 'other')
+})
+
+await test('add_material reports a silent picture instead of failing', async () => {
+  // A picture with no audio stream is usable as a reference picture; it simply
+  // has nothing to place.
+  const { findFfmpeg, runFfmpeg } = await import('../src/tools/shared.js')
+  if (!findFfmpeg()) return
+  const silentProject = await call({ mode: 'create', name: '无声画面' })
+  const mp4 = join(scratch, 'tool-silent.mp4')
+  await runFfmpeg(findFfmpeg().command, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'color=c=black:s=64x64:d=2:r=5',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', mp4,
+  ])
+  const result = await call({ mode: 'add_material', projectId: silentProject.projectId, sourcePath: mp4 })
+  assert.equal(result.ok, true, 'a silent picture is not an import failure')
+  assert.equal(result.silent, true)
+  assert.equal(result.material, null)
+  assert.equal(result.clip, null)
+  assert.equal(result.tracks.length, 0, 'no empty track is created for a missing soundtrack')
+  assert.ok(result.durationSec >= 2, 'the picture still sets the project length')
+})
+
 await test('add_material trims outSec to the material length', async () => {
   const tone = await writeTone('tone-d.wav', 1, 660)
   const result = await call({

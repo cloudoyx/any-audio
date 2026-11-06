@@ -182,6 +182,21 @@ async function runAddMaterial(workspaceRoot, args, exec) {
 
   const index = await readMaterialIndex(workspaceRoot, project.id)
   const material = index.materials.find((entry) => !before.has(entry.id))
+
+  // A picture with no audio stream produces no material at all. It is still a
+  // usable reference picture, so the import succeeded — say so instead of
+  // reporting an import that "produced nothing".
+  if (!material && imported.silent) {
+    const updated = await readProject(workspaceRoot, project.id)
+    return {
+      ok: true,
+      mode: 'add_material',
+      material: null,
+      clip: null,
+      silent: true,
+      ...(await projectSummary(workspaceRoot, updated)),
+    }
+  }
   if (!material) throw new Error('the import produced no material entry')
 
   // The importer reports what it could tell from the file; the caller knows what
@@ -192,13 +207,18 @@ async function runAddMaterial(workspaceRoot, args, exec) {
     await writeMaterialIndex(workspaceRoot, project.id, index)
   }
 
+  // A picture's soundtrack is part of the picture, not an optional extra: it
+  // belongs on the timeline the moment the picture arrives. `trackName` still
+  // wins when the caller names a track, so an Agent that wants it elsewhere
+  // keeps control.
+  const trackName = args.trackName || (material.kind === 'video-audio' ? `画面原声 · ${material.source?.originalName ?? material.id}` : null)
+
   let clip = null
-  if (args.trackName) {
+  if (trackName) {
     const reloaded = await readProject(workspaceRoot, project.id)
-    const track = ensureTrack(reloaded, {
-      name: args.trackName,
-      category: args.category || (kind === 'tts' ? 'tts' : kind === 'music' ? 'music' : 'other'),
-    })
+    const category = args.category
+      || (material.kind === 'video-audio' ? 'video-audio' : kind === 'tts' ? 'tts' : kind === 'music' ? 'music' : 'other')
+    const track = ensureTrack(reloaded, { name: trackName, category })
     clip = placeClip(track, material, {
       startSec: args.startSec,
       inSec: args.inSec,
@@ -222,7 +242,7 @@ async function runAddMaterial(workspaceRoot, args, exec) {
       file: material.file,
       durationSec: material.durationSec,
     },
-    clip: clip ? { id: clip.id, trackName: args.trackName, startSec: clip.startSec, inSec: clip.inSec, outSec: clip.outSec } : null,
+    clip: clip ? { id: clip.id, trackName, startSec: clip.startSec, inSec: clip.inSec, outSec: clip.outSec } : null,
     ...(await projectSummary(workspaceRoot, updated)),
   }
 }
@@ -383,6 +403,12 @@ export const projectToolDefinition = finalizeTool({
         ].join('\n')
       }
       if (value.mode === 'add_material') {
+        if (value.silent) {
+          return [
+            'The picture was imported as a reference picture, but it has no audio stream, so there is no soundtrack material to place.',
+            `Project now has ${value.tracks.length} tracks, ${Number(value.durationSec).toFixed(2)}s long.`,
+          ].join('\n')
+        }
         const lines = [
           `Added ${value.material.kind} material ${value.material.id} (${Number(value.material.durationSec).toFixed(2)}s)`,
         ]
