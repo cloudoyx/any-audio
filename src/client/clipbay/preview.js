@@ -68,7 +68,11 @@ export function Preview({ root, projectId, project, transport }) {
     style: {
       border: `1px solid ${C.border}`, borderRadius: 8, background: '#000', position: 'relative',
       overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      aspectRatio: '16 / 9', maxHeight: '42vh', width: '100%',
+      // The box takes the height its row gives it and letterboxes the picture
+      // inside (`objectFit: contain`). A fixed 16:9 box would grow on a wide
+      // screen and eat the room the tracks need; letterboxing is what 剪映 does
+      // too, and the user accepted the black bars.
+      width: '100%', height: '100%', minHeight: 0,
     },
   },
     hasVideo

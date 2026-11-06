@@ -23,6 +23,10 @@ export const C = {
 
 export const S = {
   page: { display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 900, padding: '4px 2px 32px', fontSize: 13, lineHeight: 1.55 },
+  // The workbench fills whatever width the view gets: a timeline that stops at
+  // 900px wastes most of a wide screen, and every pixel is another second of
+  // waveform. The settings page keeps `page` — a form reads worse when stretched.
+  workbench: { display: 'flex', flexDirection: 'column', gap: 10, width: '100%', minWidth: 0, padding: '4px 8px 16px', fontSize: 13, lineHeight: 1.55, boxSizing: 'border-box' },
   header: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' },
   title: { margin: 0, fontSize: 18, fontWeight: 600 },
   chip: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 8px', borderRadius: 999, border: `1px solid ${C.border}`, fontSize: 11, color: C.muted, whiteSpace: 'nowrap' },

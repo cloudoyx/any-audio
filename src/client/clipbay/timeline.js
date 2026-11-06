@@ -20,9 +20,9 @@ import { drawClipWaveform } from './waveform.js'
 import { usePeaks } from './peaks.js'
 import { itemLength, itemEnd } from './edit.js'
 
-const TRACK_HEIGHT = 68
-const TRACK_HEIGHT_ACTIVE = 88
-const HEAD_WIDTH = 168
+const TRACK_HEIGHT = 52
+const TRACK_HEIGHT_ACTIVE = 68
+const HEAD_WIDTH = 148
 const RULER_HEIGHT = 22
 const EDGE_GRAB = 6
 
@@ -301,7 +301,7 @@ function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, sel
   )
 }
 
-export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange }) {
+export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange, onClearSelection }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const peaksById = usePeaks(root, projectId, materials)
@@ -356,8 +356,13 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
       rangeRef.current = null
       setRangeDrag(false)
       if (!current) return
-      // A click without a drag clears the range instead of leaving a zero-width one.
-      if (range && range.toSec - range.fromSec < 0.05) onRange?.(null)
+      // A click on empty track space clears the range and the clip selection
+      // rather than leaving a zero-width one: clicking away from a clip is the
+      // mouse equivalent of Escape.
+      if (range && range.toSec - range.fromSec < 0.05) {
+        onRange?.(null)
+        onClearSelection?.()
+      }
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', finish)
@@ -367,7 +372,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
     }
-  }, [rangeDrag, scale, duration, onRange, range])
+  }, [rangeDrag, scale, duration, onRange, range, onClearSelection])
 
   const onCommit = useCallback((deltaSec, payload) => {
     onEdit?.({ kind: payload.kind, deltaSec, trackId: payload.trackId, itemId: payload.itemId, edge: payload.edge })
@@ -424,12 +429,20 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
     }
   }, [drag, scale, onCommit])
 
-  // Delete / Ctrl+D act on the selection; Ctrl+Z / Ctrl+Shift+Z walk the history.
+  // Delete / Ctrl+D act on the selection; Ctrl+Z / Ctrl+Shift+Z walk the history;
+  // Escape clears the selection and any dragged range.
   useEffect(() => {
     const onKey = (event) => {
       const tag = event.target?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
       const mod = event.ctrlKey || event.metaKey
+      if (event.key === 'Escape') {
+        // There has to be a way out of a selection: without Escape the only paths
+        // were deleting the clip or reloading the page.
+        event.preventDefault()
+        onClearSelection?.()
+        return
+      }
       if (mod && (event.key === 'z' || event.key === 'Z')) {
         event.preventDefault()
         if (event.shiftKey) onRedo?.()
@@ -447,7 +460,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selection, onEdit, onUndo, onRedo])
+  }, [selection, onEdit, onUndo, onRedo, onClearSelection])
 
   const seekTo = useCallback((seconds) => {
     transport?.seek?.(Math.max(0, Math.min(duration, seconds)))
@@ -455,10 +468,21 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
 
   useEffect(() => {
     const onKey = (event) => {
-      const tag = event.target?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
+      const target = event.target
+      const tag = target?.tagName
+      // Space belongs to the transport, always. Only a field that is being typed
+      // into may keep it.
+      //
+      // A focused button is the case that matters: after clicking 静音 the button
+      // keeps focus, and the browser activates it on Space, so the transport key
+      // silently toggles mute instead. Bailing out on BUTTON (tried first) is
+      // wrong for the same reason in reverse — Space would then do nothing at all.
+      // The answer is to consume the key and drop the focus, so the next Space
+      // goes straight to the transport.
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return
       if (event.code === 'Space') {
         event.preventDefault()
+        if (tag === 'BUTTON' || tag === 'A') target.blur()
         if (transport?.playing) transport.pause()
         else transport?.play?.()
       }
@@ -470,7 +494,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const dragPreview = drag ? { trackId: drag.trackId, itemId: drag.itemId, deltaSec: drag.deltaSec } : null
   const playheadX = positionSec * scale
 
-  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 } },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
       h(Btn, { onClick: () => (transport?.playing ? transport.pause() : transport?.play?.()), kind: 'primary' },
         transport?.playing ? t('暂停') : t('播放')),
@@ -484,13 +508,23 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
     ),
     transport?.error ? h('div', { style: S.notice('error') }, transport.error) : null,
     h('div', {
+      // The only scrolling area in the panel: the transport row above and the
+      // ruler inside stay put, so the person never loses the time reference
+      // while scrolling a tall project.
       style: {
         border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'auto',
-        maxHeight: '60vh', background: C.softer,
+        flex: 1, minHeight: 0, background: C.softer,
       },
     },
       h('div', { style: { width: HEAD_WIDTH + duration * scale, minWidth: '100%', position: 'relative' } },
-        h('div', { style: { display: 'flex' } },
+        h('div', {
+          // Sticky ruler: it is the one thing that must stay visible while the
+          // tracks scroll under it (the "frozen pane" the user asked for).
+          style: {
+            display: 'flex', position: 'sticky', top: 0, zIndex: 2,
+            background: 'rgb(28,28,30)', borderBottom: `1px solid ${C.border}`,
+          },
+        },
           h('div', { style: { width: HEAD_WIDTH, flex: '0 0 auto', borderRight: `1px solid ${C.border}` } }),
           h('div', { style: { flex: 1, position: 'relative' } },
             h(Ruler, { scale, durationSec: duration, onSeek: seekTo }),
@@ -515,7 +549,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
           })),
         h('div', {
           style: {
-            position: 'absolute', top: 0, bottom: 0, width: 1,
+            position: 'absolute', top: 0, bottom: 0, width: 1, zIndex: 1,
             left: HEAD_WIDTH + playheadX, background: C.accent, pointerEvents: 'none',
           },
         }),
