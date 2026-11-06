@@ -59,8 +59,8 @@ export function bytes(value) {
   return `${value} B`
 }
 
-export function Btn({ children, onClick, kind, disabled, style }) {
-  return h('button', { type: 'button', onClick, disabled, style: { ...S.btn(kind, disabled), ...style } }, children)
+export function Btn({ children, onClick, kind, disabled, style, title }) {
+  return h('button', { type: 'button', onClick, disabled, title, style: { ...S.btn(kind, disabled), ...style } }, children)
 }
 
 export function Field({ label, hint, children }) {
@@ -82,13 +82,61 @@ export function TextInput({ value, onChange, placeholder, type }) {
   })
 }
 
-export function NumberInput({ value, onChange, step }) {
+export function NumberInput({ value, onChange, step, style, title }) {
   return h('input', {
     type: 'number',
     step: step || '0.1',
     value: value ?? '',
+    title,
     onChange: event => onChange(event.target.value === '' ? '' : Number(event.target.value)),
-    style: S.input,
+    style: { ...S.input, ...style },
+  })
+}
+
+/**
+ * A track-head fader.
+ *
+ * A bare `input[type=range]` renders the browser's chunky track with a thick
+ * accent-coloured fill, which is both louder than a track head should be and
+ * impossible to slim down from an inline style — pseudo-elements need a real
+ * stylesheet. One rule set is injected once and every fader in the plugin uses
+ * it, so the heads read as thin DAW faders instead of form controls.
+ */
+const SLIDER_CSS = [
+  '.aa-slider{-webkit-appearance:none;appearance:none;background:transparent;margin:0;display:block}',
+  '.aa-slider:focus{outline:none}',
+  '.aa-slider::-webkit-slider-runnable-track{height:3px;border-radius:999px;background:rgba(128,128,128,0.34)}',
+  '.aa-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:9px;height:9px;margin-top:-3px;border:none;border-radius:50%;background:#4f7cff}',
+  '.aa-slider::-moz-range-track{height:3px;border-radius:999px;background:rgba(128,128,128,0.34)}',
+  '.aa-slider::-moz-range-thumb{width:9px;height:9px;border:none;border-radius:50%;background:#4f7cff}',
+].join('')
+
+function ensureSliderCss() {
+  if (typeof document === 'undefined' || !document.head) return
+  if (document.getElementById('anyaudio-slider-css')) return
+  const style = document.createElement('style')
+  style.id = 'anyaudio-slider-css'
+  style.textContent = SLIDER_CSS
+  document.head.appendChild(style)
+}
+
+ensureSliderCss()
+
+export function Slider({ value, min, max, step, onChange, title, disabled }) {
+  ensureSliderCss()
+  return h('input', {
+    type: 'range',
+    className: 'aa-slider',
+    min,
+    max,
+    step,
+    value,
+    title,
+    disabled,
+    onChange: event => onChange(Number(event.target.value)),
+    onClick: event => event.stopPropagation(),
+    onPointerDown: event => event.stopPropagation(),
+    style: { flex: 1, minWidth: 0, height: 12, cursor: 'pointer' },
   })
 }
 
@@ -98,10 +146,10 @@ export function Select({ value, onChange, options }) {
   )
 }
 
-export function Switch({ checked, onChange, label }) {
-  return h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' } },
+export function Switch({ checked, onChange, label, title }) {
+  return h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' }, title },
     h('input', { type: 'checkbox', checked: Boolean(checked), onChange: event => onChange(event.target.checked) }),
-    h('span', { style: { fontSize: 12 } }, label),
+    label ? h('span', { style: { fontSize: 12 } }, label) : null,
   )
 }
 

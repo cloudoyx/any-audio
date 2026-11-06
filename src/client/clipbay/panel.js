@@ -402,6 +402,7 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           selection,
           track: selectedTrack,
           item: selectedItem,
+          onClear: clearSelection,
           onEdit: (request) => applyEdit({ ...request, trackId: selection?.trackId, itemId: selection?.itemId }),
         }),
       ),

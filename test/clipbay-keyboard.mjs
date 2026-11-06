@@ -103,5 +103,36 @@ test('the timeline accepts the clear prop', () => {
   assert.match(signature, /onClearSelection/, 'and it is in the destructured props')
 })
 
+test('Escape still works while the focus is in a properties field', () => {
+  // Editing 增益 leaves the focus in the `<input>`; the typing guard used to sit
+  // above the Escape branch, so the one gesture a person would reach for to
+  // leave the selection did nothing right after they had edited a field.
+  const escapeAt = source.indexOf("if (event.key === 'Escape')")
+  const guardAt = source.indexOf("if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'")
+  assert.ok(escapeAt > 0 && guardAt > 0, 'both branches exist')
+  assert.ok(escapeAt < guardAt, 'Escape must be checked before the typing guard')
+})
+
+test('the properties panel offers an explicit way out of a selection', () => {
+  // Not everyone reaches for Escape, and the panel is where the selection is
+  // being looked at.
+  const properties = readFileSync(join(root, 'src', 'client', 'clipbay', 'properties.js'), 'utf8').replace(/\r\n/g, '\n')
+  assert.match(properties, /onClear/, 'the panel takes a clear handler')
+  assert.match(properties, /t\('取消选择'\)/, 'and renders a labelled button for it')
+  const panel = readFileSync(join(root, 'src', 'client', 'clipbay', 'panel.js'), 'utf8').replace(/\r\n/g, '\n')
+  assert.match(panel, /onClear: clearSelection/, 'the shell wires it to the same handler as Escape')
+})
+
+test('the track head faders are thin, not raw browser sliders', () => {
+  // A bare `input[type=range]` draws a thick track with a chunky accent fill.
+  // Pseudo-elements cannot be styled inline, so the plugin ships one stylesheet
+  // rule set and every fader uses it.
+  const ui = readFileSync(join(root, 'src', 'client', 'ui.js'), 'utf8').replace(/\r\n/g, '\n')
+  assert.match(ui, /slider-runnable-track\{height:3px/, 'the track is 3px tall')
+  assert.match(ui, /function Slider\(/, 'a shared Slider component exists')
+  assert.match(source, /h\(Slider,/, 'the track heads use it')
+  assert.equal(/type: 'range'/.test(source), false, 'no raw range input is left in the timeline')
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1

@@ -118,11 +118,26 @@ test('the ruler stays visible while the tracks scroll', () => {
 
 test('tracks are compact enough to fit several on screen', () => {
   const height = Number(timeline.match(/const TRACK_HEIGHT = (\d+)/)[1])
-  const active = Number(timeline.match(/const TRACK_HEIGHT_ACTIVE = (\d+)/)[1])
   assert.ok(height <= 52, `a track row must stay at or under 52px, got ${height}`)
-  assert.ok(active >= height, 'the active row may be taller but never shorter')
   // 1366×768 leaves ~227px of track area; four rows has to fit in that.
   assert.ok(height * 4 <= 230, `four rows must fit in 230px, four rows take ${height * 4}px`)
+})
+
+test('every track row is the same height, selected or not', () => {
+  // An "active" row used to be 16px taller. That fired on Alt-drag range
+  // selection too, so selecting a 20–35s stretch silently made that one track
+  // taller than its neighbours — it read as a rendering bug, not as emphasis.
+  assert.equal(/TRACK_HEIGHT_ACTIVE/.test(timeline), false, 'there is no separate active height')
+  const row = timeline.slice(timeline.indexOf('function TrackRow('), timeline.indexOf('function TrackRow(') + 400)
+  assert.match(row, /const height = TRACK_HEIGHT\b/, 'the row uses the one track height')
+})
+
+test('the track head is never taller than the track it labels', () => {
+  // The head stacked four rows of controls (name / M·S·段·✕ / volume / pan) and
+  // grew to 81px, stretching every 52px row to 82px — 30px wasted per track.
+  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 900)
+  assert.match(head, /width: HEAD_WIDTH, height,/, 'the head takes its height from the row instead of its content')
+  assert.equal(/flexDirection: 'column', gap: 4/.test(head), false, 'the controls are no longer four stacked rows')
 })
 
 test('the head is narrow enough to leave the waveform its space', () => {

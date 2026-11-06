@@ -13,15 +13,18 @@
  * release, so the project and its history see one edit, not one per frame.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { h, S, Btn, C } from '../ui.js'
+import { h, S, Btn, C, Slider } from '../ui.js'
 import { t } from '../i18n.js'
 import { itemLengthSec, contentEndSec } from './serialize.js'
 import { drawClipWaveform } from './waveform.js'
 import { usePeaks } from './peaks.js'
 import { itemLength, itemEnd } from './edit.js'
 
+// One row height for every track, selected or not. An "active" row used to be
+// 16px taller, which made the one track the person had just clicked stand out —
+// that read as a bug, not as emphasis (and it fired on Alt-drag range selection
+// too, so selecting a range silently changed the row height).
 const TRACK_HEIGHT = 52
-const TRACK_HEIGHT_ACTIVE = 68
 const HEAD_WIDTH = 148
 const RULER_HEIGHT = 22
 const EDGE_GRAB = 6
@@ -158,7 +161,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, onPointerD
   )
 }
 
-function TrackHead({ track, active, onSelect, onEdit }) {
+function TrackHead({ track, active, height, onSelect, onEdit }) {
   const [name, setName] = useState(track.name)
   const [editing, setEditing] = useState(false)
 
@@ -174,93 +177,88 @@ function TrackHead({ track, active, onSelect, onEdit }) {
   return h('div', {
     onClick: onSelect,
     style: {
-      width: HEAD_WIDTH, flex: '0 0 auto', padding: '4px 8px 4px 8px', boxSizing: 'border-box',
-      display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'center',
+      // The head is exactly as tall as the track body. Left to itself its four
+      // rows of controls grew to 81px and stretched every 52px row to 82px,
+      // wasting 30px per track — the head is a header for the waveform, not a
+      // mixer strip, so it must not be the tallest thing in the row.
+      width: HEAD_WIDTH, height, flex: '0 0 auto', padding: '2px 6px', boxSizing: 'border-box',
+      display: 'flex', flexDirection: 'column', gap: 1, justifyContent: 'center',
       borderRight: `1px solid ${C.border}`, background: active ? C.soft : 'transparent', cursor: 'pointer',
+      overflow: 'hidden',
     },
   },
-    editing
-      ? h('input', {
-        autoFocus: true,
-        value: name,
-        onChange: (event) => setName(event.target.value),
-        onBlur: commitName,
-        onKeyDown: (event) => {
-          if (event.key === 'Enter') commitName()
-          if (event.key === 'Escape') { setName(track.name); setEditing(false) }
-          event.stopPropagation()
-        },
-        onClick: (event) => event.stopPropagation(),
-        style: { ...S.input, fontSize: 12, padding: '1px 4px', width: '100%' },
-      })
-      : h('span', {
-        onDoubleClick: (event) => { event.stopPropagation(); setEditing(true) },
-        title: t('双击改名'),
-        style: { fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      }, track.name),
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 } },
+      editing
+        ? h('input', {
+          autoFocus: true,
+          value: name,
+          onChange: (event) => setName(event.target.value),
+          onBlur: commitName,
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') commitName()
+            if (event.key === 'Escape') { setName(track.name); setEditing(false) }
+            event.stopPropagation()
+          },
+          onClick: (event) => event.stopPropagation(),
+          style: { ...S.input, fontSize: 11, padding: '0 4px', flex: 1, minWidth: 0 },
+        })
+        : h('span', {
+          onDoubleClick: (event) => { event.stopPropagation(); setEditing(true) },
+          title: t('双击改名'),
+          style: { fontSize: 11, fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+        }, track.name),
       h(Btn, {
         kind: track.muted ? 'primary' : 'plain',
         onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-mute', muted: !track.muted }) },
         title: t('静音'),
-        style: { padding: '0 5px', fontSize: 10, minWidth: 18 },
+        style: { padding: '0 4px', fontSize: 9, minWidth: 16, lineHeight: 1.4 },
       }, 'M'),
       h(Btn, {
         kind: track.solo ? 'primary' : 'plain',
         onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-solo', solo: !track.solo }) },
         title: t('独奏'),
-        style: { padding: '0 5px', fontSize: 10, minWidth: 18 },
+        style: { padding: '0 4px', fontSize: 9, minWidth: 16, lineHeight: 1.4 },
       }, 'S'),
-      h('span', { style: { ...S.desc, fontSize: 10, marginLeft: 2 } }, `${track.items.length} ${t('段')}`),
-      h('span', { style: { flex: 1 } }),
       h(Btn, {
         onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-delete' }) },
         title: t('删除轨道'),
-        style: { padding: '0 4px', fontSize: 9, lineHeight: 1.3 },
+        style: { padding: '0 3px', fontSize: 9, lineHeight: 1.4 },
       }, '✕'),
     ),
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 24, color: C.muted } }, t('音量')),
-      h('input', {
-        type: 'range',
+    // Volume and pan share one row: two thin faders with their current values,
+    // which is all a track head needs to be read at a glance.
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } },
+      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 26, color: C.muted } }, `${track.volumeDb} dB`),
+      h(Slider, {
         min: -60,
         max: 12,
         step: 0.5,
         value: track.volumeDb,
         title: `${t('音量')} ${track.volumeDb} dB`,
-        onChange: (event) => onEdit({ kind: 'track-volume', volumeDb: Number(event.target.value) }),
-        onClick: (event) => event.stopPropagation(),
-        onPointerDown: (event) => event.stopPropagation(),
-        style: { flex: 1, minWidth: 0, height: 11 },
+        onChange: (value) => onEdit({ kind: 'track-volume', volumeDb: value }),
       }),
-      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 30, textAlign: 'right' } }, `${track.volumeDb}`),
     ),
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 24, color: C.muted } }, t('声像')),
-      h('input', {
-        type: 'range',
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } },
+      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 26, color: C.muted } }, track.pan.toFixed(2)),
+      h(Slider, {
         min: -1,
         max: 1,
         step: 0.05,
         value: track.pan,
         title: `${t('声像')} ${track.pan}`,
-        onChange: (event) => onEdit({ kind: 'track-pan', pan: Number(event.target.value) }),
-        onClick: (event) => event.stopPropagation(),
-        onPointerDown: (event) => event.stopPropagation(),
-        style: { flex: 1, minWidth: 0, height: 11 },
+        onChange: (value) => onEdit({ kind: 'track-pan', pan: value }),
       }),
-      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 30, textAlign: 'right' } }, track.pan.toFixed(2)),
     ),
   )
 }
 
 function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
-  const height = active ? TRACK_HEIGHT_ACTIVE : TRACK_HEIGHT
+  const height = TRACK_HEIGHT
   const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h(TrackHead, { track, active, onSelect, onEdit }),
+    h(TrackHead, { track, active, height, onSelect, onEdit }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -331,7 +329,6 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
     if (!box) return
     const at = Math.max(0, Math.min(duration, (event.clientX - box.left) / scale))
     rangeRef.current = { trackId: track.id, anchorSec: at, pointerId: event.pointerId }
-    setActiveTrackId(track.id)
     setRangeDrag(true)
     onRange?.({ trackId: track.id, fromSec: at, toSec: at })
   }, [duration, scale, onRange])
@@ -434,15 +431,19 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   useEffect(() => {
     const onKey = (event) => {
       const tag = event.target?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
-      const mod = event.ctrlKey || event.metaKey
+      // Escape is checked before the typing guard on purpose. After editing a
+      // field in the properties panel the focus sits in an `<input>`, and the
+      // guard below would swallow the key — so the one gesture the person would
+      // reach for to leave the selection did nothing exactly when they had just
+      // been editing it.
       if (event.key === 'Escape') {
-        // There has to be a way out of a selection: without Escape the only paths
-        // were deleting the clip or reloading the page.
         event.preventDefault()
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || event.target?.isContentEditable) event.target.blur()
         onClearSelection?.()
         return
       }
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
+      const mod = event.ctrlKey || event.metaKey
       if (mod && (event.key === 'z' || event.key === 'Z')) {
         event.preventDefault()
         if (event.shiftKey) onRedo?.()
