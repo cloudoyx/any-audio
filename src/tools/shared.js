@@ -179,15 +179,58 @@ export function findFfmpeg() {
   return ffmpegCache
 }
 
-export function runFfmpeg(command, args, { timeoutMs = 600000 } = {}) {
+function abortError() {
+  const error = new Error('the media process was cancelled')
+  error.name = 'AbortError'
+  return error
+}
+
+/** Kill the whole process tree: on Windows a killed parent leaves children running. */
+function killTree(child) {
+  if (!child?.pid) return
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+      return
+    } catch {
+      // fall through to the plain kill below
+    }
+  }
+  try {
+    child.kill('SIGKILL')
+  } catch {
+    // the process already exited
+  }
+}
+
+export function runFfmpeg(command, args, { timeoutMs = 600000, signal } = {}) {
   return new Promise((resolvePromise, reject) => {
+    if (signal?.aborted) {
+      reject(abortError())
+      return
+    }
     const child = spawn(command, args, { windowsHide: true })
     let stderr = ''
     let stdout = ''
+    let settled = false
+    const settle = (run) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      run()
+    }
+    const onAbort = () => {
+      // Cancelling must reach the process itself, not just stop waiting: an
+      // orphaned encoder keeps burning CPU and keeps writing the output file.
+      killTree(child)
+      settle(() => reject(abortError()))
+    }
     const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error(`ffmpeg timed out after ${Math.round(timeoutMs / 1000)}s`))
+      killTree(child)
+      settle(() => reject(new Error(`ffmpeg timed out after ${Math.round(timeoutMs / 1000)}s`)))
     }, timeoutMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout?.on('data', (chunk) => {
       stdout += chunk
     })
@@ -195,13 +238,11 @@ export function runFfmpeg(command, args, { timeoutMs = 600000 } = {}) {
       stderr += chunk
     })
     child.on('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
+      settle(() => reject(error))
     })
     child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code === 0) resolvePromise({ stdout, stderr })
-      else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim().split('\n').slice(-3).join(' ')}`))
+      if (code === 0) settle(() => resolvePromise({ stdout, stderr }))
+      else settle(() => reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim().split('\n').slice(-3).join(' ')}`)))
     })
   })
 }

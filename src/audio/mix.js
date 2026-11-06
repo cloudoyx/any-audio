@@ -40,6 +40,34 @@ export function applyGainDb(channels, gainDb) {
   })
 }
 
+/**
+ * Equal-power gains for a pan value. Centre is a true bypass (1, 1) rather than
+ * the 0.707 the raw formula gives, so a centred clip is never 3 dB quieter than
+ * the same clip with panning removed.
+ */
+export function panGains(pan) {
+  const amount = Math.max(-1, Math.min(1, Number(pan) || 0))
+  if (amount === 0) return [1, 1]
+  const angle = ((amount + 1) * Math.PI) / 4
+  return [Math.cos(angle), Math.sin(angle)]
+}
+
+/**
+ * Add `source` into `acc` at `offsetFrames`, in place. The renderer uses this
+ * instead of sumTracks so a 20-track project does not allocate 20 full-length
+ * buffers (plan M3).
+ */
+export function accumulateInto(acc, source, offsetFrames, gainLeft, gainRight) {
+  const length = source[0].length
+  const start = Math.max(0, offsetFrames)
+  const end = Math.min(acc[0].length, offsetFrames + length)
+  for (let i = start; i < end; i++) {
+    const j = i - offsetFrames
+    acc[0][i] += source[0][j] * gainLeft
+    acc[1][i] += source[1][j] * gainRight
+  }
+}
+
 export function sumTracks(parts) {
   if (!parts.length) throw new Error('sumTracks needs at least one track')
   const frames = parts[0][0].length
