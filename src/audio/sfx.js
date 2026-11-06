@@ -503,3 +503,65 @@ export function renderSfxTimeline({ items, durationSec, sampleRate = 48000 }) {
   })
   return { channels: [left, right], report }
 }
+
+/**
+ * Which spec §5.2 layer a sound belongs to, so the Agent can split the result
+ * across tracks without judging each sound by taste.
+ *
+ * The three layers are the spec's own: 环境音 beds, 动效 things that happen,
+ * 其他 transitions and stingers.
+ */
+export const SFX_CATEGORY = {
+  wind: '环境音',
+  rain: '环境音',
+  water: '环境音',
+  fire: '环境音',
+  birds: '环境音',
+  thunder: '环境音',
+  footsteps: '动效',
+  stones: '动效',
+  impact: '动效',
+  bell: '动效',
+  gong: '动效',
+  drum: '动效',
+  heartbeat: '动效',
+  whoosh: '其他',
+  riser: '其他',
+}
+
+/** Preset groups that describe a layer rather than a single generator. */
+const GROUP_CATEGORY = {
+  weather: '环境音',
+  noise: '其他',
+  animals: '动效',
+  home: '动效',
+  traffic: '动效',
+  crowd: '动效',
+  weapons: '动效',
+}
+
+export function categoryOf({ type, group } = {}) {
+  if (group && GROUP_CATEGORY[group]) return GROUP_CATEGORY[group]
+  if (type && SFX_CATEGORY[type]) return SFX_CATEGORY[type]
+  return '动效'
+}
+
+/**
+ * Render one sound effect as its own short buffer starting at t=0 (plan M7).
+ *
+ * This is the "materials" half of `anyaudio_sfx`: the tool produces sound
+ * material and the project file decides where it sits. Placement is deliberately
+ * absent here — that separation is the point of the split.
+ */
+export function renderSfxMaterial({ type, durationSec, sampleRate = 48000, params = {}, seed = 1, gainDb = 0 }) {
+  const channels = synthesizeSfx({ type, durationSec, sampleRate, params, seed })
+  const gain = Number.isFinite(Number(gainDb)) ? Math.pow(10, Number(gainDb) / 20) : 1
+  const scaled = gain === 1
+    ? channels
+    : channels.map((channel) => {
+      const out = new Float32Array(channel.length)
+      for (let i = 0; i < channel.length; i++) out[i] = channel[i] * gain
+      return out
+    })
+  return [scaled[0], scaled[1] ?? scaled[0]]
+}

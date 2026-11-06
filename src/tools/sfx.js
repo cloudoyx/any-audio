@@ -1,11 +1,11 @@
 import { compileScore } from '../audio/score.js'
 import { loadSoundBank, renderCompiled } from '../audio/synth.js'
 import { findRecommendedByFile, listFonts, sha256File } from '../audio/fonts.js'
-import { renderSfxTimeline, SFX_HELP, SFX_TYPES } from '../audio/sfx.js'
+import { renderSfxMaterial, renderSfxTimeline, SFX_HELP, SFX_TYPES, categoryOf } from '../audio/sfx.js'
 import { listSfxPresets, resolveSfxPreset, SFX_FONTS, SFX_GROUPS } from '../audio/sfx-presets.js'
-import { fromDb, peakOf, rmsOf, toDb } from '../audio/wav.js'
-import { basename } from 'node:path'
-import { stat } from 'node:fs/promises'
+import { fromDb, padOrTrim, peakOf, rmsOf, toDb } from '../audio/wav.js'
+import { basename, dirname, join } from 'node:path'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, resolveOutputPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 import { readConfig } from '../config.js'
 
@@ -122,23 +122,141 @@ async function renderPresetItem(item, { sampleRate, durationSec, paths, bankCach
   return { entry, channels: rendered.channels, holdSec, note, velocity }
 }
 
+async function renderMaterials(args, items, { workspaceRoot, config, paths }) {
+  const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.sfx.sampleRate, config.sfx.sampleRate)) || config.sfx.sampleRate
+  const requested = typeof args.output === 'string' && args.output.trim() ? args.output : ''
+  const directory = requested
+    ? (requested.toLowerCase().endsWith('.wav')
+      ? dirname(resolveOutputPath({ workspaceRoot, requested, defaultName: 'x.wav' }))
+      : resolveOutputPath({ workspaceRoot, requested, defaultName: '.' }))
+    : resolveOutputPath({ workspaceRoot, outputDir: config.output.dir, defaultName: `sfx-materials-${nowStamp()}` })
+  await mkdir(directory, { recursive: true })
+
+  const fallbackLength = Number.isFinite(Number(args.durationSec)) ? Number(args.durationSec) : null
+  const bankCache = new Map()
+  const usedFonts = new Set()
+  const materials = []
+  const taken = new Set()
+
+  for (const [index, item] of items.entries()) {
+    const gainDb = Number.isFinite(Number(item.gainDb)) ? Number(item.gainDb) : 0
+    let channels
+    let entry = null
+    let lengthSec
+    if (item.preset || item.sfx) {
+      const rendered = await renderPresetItem(item, { sampleRate, durationSec: fallbackLength ?? 60, paths, bankCache })
+      entry = rendered.entry
+      usedFonts.add(entry.font)
+      // A preset renders its release tail on top of the hold, which is right for a
+      // timeline but wrong for a material: the project places the file itself, so
+      // the file has to be exactly as long as the caller asked for.
+      const wanted = Number.isFinite(Number(item.durationSec ?? item.duration))
+        ? Number(item.durationSec ?? item.duration)
+        : null
+      channels = wanted && wanted > 0
+        ? padOrTrim(rendered.channels, Math.max(1, Math.round(wanted * sampleRate)))
+        : rendered.channels
+      lengthSec = channels[0].length / sampleRate
+    } else {
+      const type = item.type ?? item.name
+      if (!type) throw new Error(`sfx item #${index} needs a preset or a type`)
+      if (!Number.isFinite(Number(item.durationSec ?? item.duration)) && fallbackLength === null) {
+        throw new Error(`sfx item #${index} ("${type}") needs durationSec in materials mode: each material has a length of its own, so there is no timeline to fall back on`)
+      }
+      const wanted = Number(item.durationSec ?? item.duration ?? fallbackLength)
+      if (!Number.isFinite(wanted) || wanted <= 0) throw new Error(`sfx item #${index} has an invalid durationSec`)
+      const seed = Number.isFinite(Number(item.seed)) ? Number(item.seed) : index * 104729 + 17
+      channels = renderSfxMaterial({ type, durationSec: wanted, sampleRate, params: item.params ?? {}, seed, gainDb })
+      lengthSec = channels[0].length / sampleRate
+    }
+
+    const slug = (entry?.id ?? item.type ?? item.name ?? 'sfx').replace(/[^A-Za-z0-9_-]+/g, '-')
+    let name = `${String(index + 1).padStart(2, '0')}-${slug}.wav`
+    if (taken.has(name)) {
+      let suffix = 2
+      while (taken.has(name)) name = `${String(index + 1).padStart(2, '0')}-${slug}-${suffix++}.wav`
+    }
+    taken.add(name)
+    const written = await writeWavFile(join(directory, name), channels, sampleRate)
+    materials.push({
+      file: relativeToWorkspace(workspaceRoot, written.path),
+      absolutePath: written.path,
+      category: entry ? categoryOf({ group: entry.group }) : categoryOf({ type: item.type ?? item.name }),
+      durationSec: Number(lengthSec.toFixed(3)),
+      peakDb: Number(toDb(peakOf(channels)).toFixed(2)),
+      rmsDb: Number(toDb(rmsOf(channels)).toFixed(3)),
+      ...(entry
+        ? { preset: entry.id, presetName: `${entry.name}（${entry.zh}）`, font: entry.font, program: entry.program, bank: entry.bank }
+        : { type: item.type ?? item.name }),
+      gainDb,
+      params: item.params ?? {},
+    })
+  }
+
+  const calibration = []
+  for (const fontId of usedFonts) {
+    const fontPath = paths.get(fontId)
+    if (fontPath) calibration.push(await fontCalibration(fontId, fontPath))
+  }
+  const warnings = calibration.filter((item) => item.note).map((item) => item.note)
+  // A per-file peak target cannot be applied here without silently rebalancing
+  // the mix relative to what the caller asked for, and the manifest already
+  // reports each peak, so materials mode keeps the raw levels.
+  if (args.peakDb !== undefined && args.peakDb !== null) {
+    warnings.push('materials mode keeps raw levels; peakDb is ignored because normalising each file separately would change the relative balance between effects')
+  }
+
+  const manifestPath = join(directory, 'manifest.json')
+  const manifest = {
+    mode: 'materials',
+    sampleRate,
+    createdAt: new Date().toISOString(),
+    materials: materials.map((entry) => ({
+      file: entry.file,
+      category: entry.category,
+      durationSec: entry.durationSec,
+      peakDb: entry.peakDb,
+      rmsDb: entry.rmsDb,
+      ...(entry.preset ? { preset: entry.preset } : { type: entry.type }),
+      gainDb: entry.gainDb,
+      params: entry.params,
+    })),
+  }
+  const { writeFile: writeTextFile } = await import('node:fs/promises')
+  await writeTextFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+
+  return {
+    ok: true,
+    mode: 'materials',
+    directory: relativeToWorkspace(workspaceRoot, directory),
+    absoluteDirectory: directory,
+    manifest: relativeToWorkspace(workspaceRoot, manifestPath),
+    sampleRate,
+    materials,
+    calibration,
+    warnings,
+  }
+}
+
 export const sfxToolDefinition = finalizeTool({
   name: 'anyaudio_sfx',
   description:
-    'Synthesise a timeline of sound effects and write a WAV. Two engines: ' +
+    'Synthesise sound effects. Two engines: ' +
     '① presets from the default SoundFont banks — {preset:"rain"} or {preset:"gun-shot"}; these are real samples of birds, seashore, wind, door, car, applause, explosion and so on (run action:"catalog" to see them with notes on shape and level); ' +
     '② procedural generators — {type:"wind"} etc. (wind, rain, water, fire, birds, footsteps, stones, whoosh, impact, bell, gong, drum, riser, heartbeat, thunder). ' +
-    'Items are placed on the video timeline in seconds and mix together: {items:[{preset|type, startSec, durationSec?, gainDb?, fadeInSec?, fadeOutSec?, note?, velocity?, params?, seed?}], durationSec}. ' +
-    'Use presets for recognisable real-world sounds, procedural generators when no preset fits or when you need a controllable bed. Music itself comes from anyaudio_music; narration from anyaudio_tts.',
+    'Two modes, and the default does not change: mode:"timeline" (default) places the items on one timeline and writes a single WAV of durationSec. ' +
+    'mode:"materials" writes one short WAV per item, each starting at t=0, plus a manifest with file, category (环境音/动效/其他), duration and peak — use this for a clip bay project, where the project file decides where each sound sits. ' +
+    'Music itself comes from anyaudio_music; narration from anyaudio_tts.',
   parameters: {
     type: 'object',
     properties: {
       action: { type: 'string', description: "Set to \"catalog\" to list the sound-effect presets in the default banks (optionally filter with group/query). Otherwise omit and pass items." },
-      items: { oneOf: [{ type: 'array', items: { type: 'object', additionalProperties: true } }, { type: 'string' }], description: 'SFX events: preset or type, startSec, optional durationSec/gainDb/fades/note/velocity/params/seed. A path to a .json file holding the array is also accepted.' },
-      output: { type: 'string', description: "Output WAV path. Relative paths resolve against the user's project; defaults to <project>/.anyaudio/out/sfx-<timestamp>.wav." },
-      durationSec: { type: 'number', description: 'Total timeline length; defaults to the latest item end.' },
+      mode: { type: 'string', enum: ['timeline', 'materials'], description: 'How the items become files. "timeline" (default) lays them out on one shared timeline and writes a single WAV. "materials" writes one file per item, each from t=0, plus a manifest — the clip bay then places them itself.' },
+      items: { oneOf: [{ type: 'array', items: { type: 'object', additionalProperties: true } }, { type: 'string' }], description: 'SFX events: preset or type, optional durationSec/gainDb/fades/note/velocity/params/seed. A path to a .json file holding the array is also accepted. In "materials" mode startSec is ignored and each item becomes its own file; in "timeline" mode it decides where the sound sits.' },
+      output: { type: 'string', description: 'In "timeline" mode the output WAV path; in "materials" mode the folder that receives one file per item plus manifest.json. Relative paths resolve against the user\'s project; defaults to <project>/.anyaudio/out/.' },
+      durationSec: { type: 'number', description: 'Total timeline length in "timeline" mode; defaults to the latest item end. In "materials" mode it is the fallback length for an item that names none.' },
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
-      peakDb: { type: 'number', description: 'Peak normalisation in dBFS, default -4. null keeps raw level.' },
+      peakDb: { type: 'number', description: 'Peak normalisation in dBFS, default -4 in "timeline" mode. null keeps raw level. "materials" mode never normalises across files, so one setting cannot silently rebalance the mix.' },
       group: { type: 'string', description: 'Catalog filter: noise, weather, animals, home, traffic, crowd or weapons.' },
       query: { type: 'string', description: 'Catalog search text (name, Chinese name or tag).' },
     },
@@ -151,13 +269,17 @@ export const sfxToolDefinition = finalizeTool({
       properties: {
         ok: { type: 'boolean' },
         action: { type: 'string' },
+        mode: { type: 'string' },
         file: { type: 'string' },
         absolutePath: { type: 'string' },
+        directory: { type: 'string' },
+        manifest: { type: 'string' },
         durationSec: { type: 'number' },
         sampleRate: { type: 'number' },
         peakDb: { type: 'number' },
         rmsDb: { type: 'number' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        materials: { type: 'array', items: { type: 'object', additionalProperties: true } },
         presets: { type: 'array', items: { type: 'object', additionalProperties: true } },
         calibration: { type: 'array', items: { type: 'object', additionalProperties: true } },
         warnings: { type: 'array' },
@@ -182,6 +304,16 @@ export const sfxToolDefinition = finalizeTool({
         for (const item of value.calibration ?? []) {
           if (item.match === false) lines.push('', `! ${item.note}`)
         }
+        return lines.join('\n')
+      }
+      if (value.mode === 'materials') {
+        const lines = [
+          `Wrote ${value.materials.length} sound material(s) to ${value.directory} → manifest ${value.manifest}`,
+          'Materials (each starts at t=0):',
+          ...value.materials.map((entry) => `- ${entry.file} · ${entry.category} · ${entry.durationSec.toFixed(2)}s · peak ${entry.peakDb.toFixed(1)} dBFS`),
+          'Add them to a project with anyaudio_project mode:"add_material", one per track per category, so different sounds stay separable.',
+          ...(value.warnings ?? []).map((warning) => `! ${warning}`),
+        ]
         return lines.join('\n')
       }
       const lines = [
@@ -223,6 +355,9 @@ export const sfxToolDefinition = finalizeTool({
 
     const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items', { workspaceRoot })
     if (!Array.isArray(items) || items.length === 0) throw new Error('items must be a non-empty array (or use action:"catalog")')
+    const mode = String(args.mode ?? 'timeline').toLowerCase()
+    if (mode !== 'timeline' && mode !== 'materials') throw new Error(`unknown mode "${args.mode}"; use "timeline" or "materials"`)
+    if (mode === 'materials') return renderMaterials(args, items, { workspaceRoot, config, paths })
     const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.sfx.sampleRate, config.sfx.sampleRate)) || config.sfx.sampleRate
     const latestEnd = items.reduce((max, item) => {
       const start = Number(item.startSec ?? item.start ?? 0)
@@ -298,6 +433,7 @@ export const sfxToolDefinition = finalizeTool({
       ok: true,
       file: relativeToWorkspace(workspaceRoot, written.path),
       absolutePath: written.path,
+      mode: 'timeline',
       durationSec: Number((channels[0].length / sampleRate).toFixed(3)),
       sampleRate,
       peakDb: Number(toDb(peakOf(channels)).toFixed(2)),

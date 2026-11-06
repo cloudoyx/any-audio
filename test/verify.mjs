@@ -811,6 +811,67 @@ await test('unknown sfx preset points at the catalog', async () => {
   assert(/action:"catalog"/.test(error.message), 'error should point at the catalog')
 })
 
+await test('sfx materials mode writes one file per item, each from t=0', async () => {
+  const dir = join(tmpDir, 'sfx-materials')
+  const result = await tools.get('anyaudio_sfx').execute(
+    {
+      mode: 'materials',
+      items: [
+        { type: 'impact', durationSec: 0.8, params: { weight: 0.8 } },
+        { preset: 'rain', durationSec: 1.5, gainDb: -6 },
+        { type: 'whoosh', durationSec: 0.6 },
+      ],
+      output: dir,
+      peakDb: null,
+    },
+    exec,
+  )
+  assert(result.mode === 'materials', 'the mode should be echoed')
+  assert(result.materials.length === 3, `expected 3 materials, got ${result.materials.length}`)
+  // One file per entry, and every file starts at t=0: that is the whole point of
+  // the materials split — placement belongs to the project, not the tool.
+  for (const entry of result.materials) {
+    const wav = parseWav(await readFile(entry.absolutePath))
+    assert(wav.channels[0][0] !== undefined, `${entry.file} must exist and decode`)
+    assert(peakOf(wav.channels) > 0.0005, `${entry.file} must not be silent`)
+    assert(Math.abs(wav.durationSec - entry.durationSec) < 0.05, `${entry.file}: report says ${entry.durationSec}s, file is ${wav.durationSec}s`)
+  }
+  assert(result.materials[0].category === '动效', `impact is 动效, got ${result.materials[0].category}`)
+  assert(result.materials[1].category === '环境音', `rain is 环境音, got ${result.materials[1].category}`)
+  assert(result.materials[2].category === '其他', `whoosh is 其他, got ${result.materials[2].category}`)
+  // The per-item length is honoured, not the preset's natural tail.
+  assert(Math.abs(result.materials[1].durationSec - 1.5) < 0.02, `rain should be cut at 1.5s, got ${result.materials[1].durationSec}`)
+  const manifestRaw = await readFile(join(dir, 'manifest.json'), 'utf8')
+  const manifest = JSON.parse(manifestRaw)
+  assert(manifest.materials.length === 3, 'the manifest must list every material')
+  assert(manifest.materials.every((entry) => typeof entry.category === 'string'), 'each manifest row carries a category')
+})
+
+await test('sfx materials mode refuses an item without a length', async () => {
+  let error = null
+  try {
+    await tools.get('anyaudio_sfx').execute({ mode: 'materials', items: [{ type: 'wind' }], output: join(tmpDir, 'sfx-materials-2') }, exec)
+  } catch (caught) {
+    error = caught
+  }
+  assert(error, 'an unbounded material should fail')
+  assert(/needs durationSec/.test(error.message), `message should name the missing length, got: ${error.message}`)
+})
+
+await test('the default sfx mode is still timeline', async () => {
+  const output = join(tmpDir, 'sfx-default.wav')
+  const result = await tools.get('anyaudio_sfx').execute(
+    { items: [{ type: 'impact', startSec: 0.3, durationSec: 0.4 }], durationSec: 2, output, peakDb: null },
+    exec,
+  )
+  // The default must not have moved: old callers that never pass `mode` keep
+  // getting one full-length file with the sound placed at startSec.
+  assert(result.mode === 'timeline', `default mode should be timeline, got ${result.mode}`)
+  const wav = parseWav(await readFile(output))
+  assert(Math.abs(wav.durationSec - 2) < 0.01, `expected a 2s timeline, got ${wav.durationSec}`)
+  assert(Math.abs(wav.channels[0][0]) < 1e-4, 'nothing should sound before startSec')
+})
+
 await test('both general banks are suggested, GeneralUser is the default', async () => {
   const { RECOMMENDED_FONTS } = await import('../src/audio/fonts.js')
   const suggested = RECOMMENDED_FONTS.filter((font) => font.suggested).map((font) => font.id)

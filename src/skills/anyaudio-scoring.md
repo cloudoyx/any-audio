@@ -156,6 +156,28 @@ MuseScore General 另有一组更响的版本（`sea-shore`、`bird-tweet`、`te
 - 音效不要铺满；关键点之外保持干净。
 - 环境底噪可以用低音量 `wind`/`rain` 或 `preset:"wind"` 轨道（role `ambience`），它同样会被 ducking 压低。
 
+### 两种模式：`timeline` 与 `materials`
+
+`anyaudio_sfx` 默认 `mode:"timeline"`：把 items 按 `startSec` 摆到一条时间轴上，输出一个 `durationSec` 长的 WAV。**这个默认没有变**，旧调用照旧拿全长文件。
+
+`mode:"materials"` 是给剪辑台用的：N 个 items 产出 **N 个各自从 t=0 开始的短文件**，外加一份 `manifest.json`（文件、类别、时长、峰值）。位置不再由工具决定，交给 `anyaudio_project`。
+
+```json
+{ "mode": "materials",
+  "items": [
+    { "preset": "rain", "durationSec": 30, "gainDb": -14 },
+    { "type": "impact", "durationSec": 0.8, "params": { "weight": 0.8 } }
+  ],
+  "output": ".anyaudio/out/sfx" }
+```
+
+要点：
+
+- `startSec` 在 `materials` 模式下被忽略；每段必须有自己的 `durationSec`（没有时间轴可当兜底）。
+- 清单里的「类别」是 spec §5.2 的分轨依据：环境音 / 动效 / 其他。同类别同时刻不共轨，不同时刻可以复用。
+- 每个文件的峰值单独报告，工具不会拿 `peakDb` 把各文件拉平——那样会改掉音效之间的相对关系。平衡在工程里用片段增益做。
+- 产出的文件直接喂给 `anyaudio_project` 的 `add_material`，不要再用 `anyaudio_mix` 手动摆放。
+
 ## 验收清单
 
 渲染/混音完成后自检，并把结果写进最终回复：
