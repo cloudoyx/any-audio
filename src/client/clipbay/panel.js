@@ -151,6 +151,37 @@ function useNoInput() {
   return null
 }
 
+/**
+ * Height of the message composer, which the host now draws *over* the view
+ * rather than beside it. The panel has to reserve that band itself or the last
+ * track ends up underneath the input.
+ *
+ * Measured from the DOM instead of hard-coded: the composer grows when the draft
+ * wraps, and its height differs between the plain and the side-panel layouts. A
+ * `ResizeObserver` catches the wrap; the fallback constant is only for the first
+ * paint, before that runs.
+ */
+const COMPOSER_FALLBACK = 127
+
+function useComposerInset() {
+  const [inset, setInset] = useState(COMPOSER_FALLBACK)
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    const seat = document.querySelector('[data-composer-seat]')
+    if (!seat) return undefined
+    const read = () => {
+      const height = Math.round(seat.getBoundingClientRect().height)
+      if (height > 0) setInset(height)
+    }
+    read()
+    if (typeof ResizeObserver !== 'function') return undefined
+    const observer = new ResizeObserver(read)
+    observer.observe(seat)
+    return () => observer.disconnect()
+  }, [])
+  return inset
+}
+
 function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const { status, error, project, materials, dirty, reload, update, undo, redo, canUndo, canRedo, markSaved } = useProject(root, projectId)
   const transport = usePlayback(root, projectId)
@@ -160,6 +191,7 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const [editError, setEditError] = useState('')
   const [saveError, setSaveError] = useState('')
   const [mentionNotice, setMentionNotice] = useState('')
+  const composerInset = useComposerInset()
   // Export settings live in the panel, not in project.json: they describe this
   // one export, and spec §6.8 keeps one-off UI state out of the project.
   const [exportFormat, setExportFormat] = useState('')
@@ -319,24 +351,34 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const formats = availableFormats(project)
   const chosenFormat = formats.includes(exportFormat) ? exportFormat : formats[0]
 
-  // The panel owns its own height so the header, the preview row and the
-  // transport stay put while only the tracks scroll (improvement plan 01, I-05).
+  // The panel fills the view area and handles its own scrolling, so the header,
+  // the preview row and the transport stay put while only the tracks scroll
+  // (improvement plan 01, I-05).
   //
-  // Getting this number right took two tries and either mistake is worth
-  // knowing about: `height: 100%` does not work, because the slot's container is
-  // content-sized (`conversation.view` reports 0×0 while its children render), so
-  // a percentage resolves against nothing and the panel grows without limit. And
-  // subtracting only the conversation header is not enough either — the message
-  // composer is drawn *over* the bottom of the view.
+  // `data-conversation-composer-overlay` is the host's own switch for exactly
+  // this case: while any element in the view carries it, the host lays the view
+  // area over the whole column (`overflow: hidden`, `min-height: 0`) and lifts
+  // the composer out of the flow, so the composer can no longer push the panel
+  // down. Without it a multi-line draft grew the composer from 127px to 210px and
+  // the workbench scrolled out from under the picture — that is the middle-wheel
+  // complaint from improvement plan 01, not a stray wheel event.
   //
-  // Measured across the widths the panel is used at: the view starts 76px down
-  // (82px once the conversation header wraps) and the composer takes 167px, so
-  // 82 + 167 = 249 is the allowance. Checked at 720×600, 1000×700, 1366×768,
-  // 1920×1020, 1920×1080 and 2867×1200, with the sidebars open, closed and
-  // dragged to several widths; the panel stays clear of the composer each time.
-  // `minHeight` is a floor for absurdly short windows, kept below what a 600px
-  // window leaves so it can never push the panel under the composer.
-  return h('div', { style: { ...S.workbench, height: 'calc(100vh - 250px)', minHeight: 300, overflow: 'hidden' } },
+  // The attribute has to sit on the panel root: the host rule is a `:has()` on
+  // the scroll body, and mounting it on a child changed nothing in the browser.
+  // `height: 100%` only works because of that rule; on its own it resolved
+  // against a content-sized container and grew the panel to 944px, under the
+  // composer. The padding is the composer's own height, read after mount, so the
+  // last track still clears it.
+  return h('div', {
+    'data-conversation-composer-overlay': '',
+    style: {
+      ...S.workbench,
+      height: '100%',
+      minHeight: 300,
+      overflow: 'hidden',
+      paddingBottom: composerInset,
+    },
+  },
     // The header, the notices and the preview row are frozen: only the track
     // area scrolls, so the picture and the tools never scroll away (improvement
     // plan 01, I-05 — the "frozen pane" the user asked for).

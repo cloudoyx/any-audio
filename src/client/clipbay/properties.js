@@ -60,7 +60,7 @@ export function ClipProperties({ selection, track, item, onEdit, onClear }) {
         style: cellInput,
         onChange: (value) => onEdit({ kind: 'gain', gainDb: Number(value) || 0 }),
       })),
-      cell(t('声像'), h(NumberInput, {
+      cell(t('声像 (-1=极左, 1=极右)'), h(NumberInput, {
         value: item.pan,
         step: '0.1',
         style: cellInput,

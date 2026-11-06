@@ -29,6 +29,18 @@ export function dbToGain(db) {
   return value === 0 ? 1 : 10 ** (value / 20)
 }
 
+/**
+ * One clip's pan as the renderer computes it: clip pan plus track pan, clamped.
+ *
+ * Shared by the scheduled graph and the live update so a pan move during
+ * playback lands on the same number a render would (plan M5: one parameter set
+ * for preview and export).
+ */
+export function clipPan(item, track) {
+  const value = (Number(item?.pan) || 0) + (Number(track?.pan) || 0)
+  return Math.max(-1, Math.min(1, value))
+}
+
 /** Time constant for a live gain move: short enough to feel immediate, long
  * enough that a step does not click. `setTargetAtTime` reaches ~95% in 3τ. */
 export const TARGET_TAU_SEC = 0.01
@@ -102,7 +114,7 @@ export function scheduleClips(project, fromSec = 0) {
         trackGain,
         itemGain,
         gain: trackGain * itemGain,
-        pan: Math.max(-1, Math.min(1, (Number(item.pan) || 0) + (Number(track.pan) || 0))),
+        pan: clipPan(item, track),
         // Fades are relative to the clip, so a clip entered mid-way keeps only
         // the part of its fade the playhead has not passed yet.
         fadeInSec: Math.max(0, (Number(item.fadeInSec) || 0) - skipped),
@@ -341,8 +353,12 @@ export function usePlayback(root, projectId) {
    * while the transport runs is heard at once instead of on the next play. The
    * ramp is short (about 30 ms) because a step change in gain clicks.
    *
-   * Only the two gain stages are touched: the fade stage keeps whatever ramp it
-   * is in the middle of, so a live fader move cannot cancel a fade.
+   * Only the three level stages are touched: the fade stage keeps whatever ramp
+   * it is in the middle of, so a live fader move cannot cancel a fade.
+   *
+   * Pan is pushed here too, and it has to be: the panner is built once when
+   * playback starts, so without this a pan move made while the transport runs
+   * was never heard until the next play.
    */
   const applyMix = useCallback((project) => {
     const context = contextRef.current
@@ -355,6 +371,9 @@ export function usePlayback(root, projectId) {
       const item = track?.items?.find((entry) => entry.id === node.itemId)
       node.trackLevel?.gain.setTargetAtTime(resolveTrackGain(track, anySolo), now, TARGET_TAU_SEC)
       node.itemLevel?.gain.setTargetAtTime(item && !item.muted ? dbToGain(item.gainDb) : 0, now, TARGET_TAU_SEC)
+      if (node.panner) {
+        node.panner.pan.setTargetAtTime(clipPan(item, track), now, TARGET_TAU_SEC)
+      }
     }
   }, [])
 

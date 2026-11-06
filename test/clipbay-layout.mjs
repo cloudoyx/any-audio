@@ -7,9 +7,9 @@
  * visible after freezing"; measured in the browser it is 4 at 1366×768 and 8 at
  * 1920×1080.
  *
- * The layout is CSS, so these checks read the source and keep the two mistakes
- * that were already made once from coming back:
- *  - `height: 100%` does not work (the slot container is content-sized),
+ * The layout is CSS, so these checks read the source and keep the mistakes that
+ * were already made once from coming back:
+ *  - a `calc(100vh - Npx)` allowance only held for a one-line composer,
  *  - subtracting only the conversation header lets the tracks slide under the
  *    message composer on a narrow window.
  */
@@ -59,25 +59,29 @@ test('the clip bay no longer uses the capped page style', () => {
   assert.match(panel, /S\.workbench/, 'and the workbench style is used')
 })
 
-test('the panel owns a viewport height that leaves room for the composer', () => {
-  const match = panel.match(/height: 'calc\(100vh - (\d+)px\)'/)
-  assert.ok(match, 'the panel sets a calc height')
-  const allowance = Number(match[1])
-  // The view starts ~76px down and the composer is 127–167px tall; anything
-  // below 76 + 167 would let the tracks slide under it at 1366×768.
-  assert.ok(allowance >= 243, `the allowance must cover header + composer, got ${allowance}px`)
-  assert.ok(allowance <= 280, `but not waste a band of empty space, got ${allowance}px`)
+test('the panel opts into the host composer overlay', () => {
+  // The composer is drawn over the view; a multi-line draft used to push the
+  // workbench out of the viewport. The host already has the switch for this, so
+  // the panel carries its attribute rather than fighting the layout with a
+  // magic calc() number.
+  assert.match(panel, /'data-conversation-composer-overlay': ''/, 'the panel carries the overlay attribute')
+  const at = panel.indexOf("'data-conversation-composer-overlay'")
+  const root = panel.slice(Math.max(0, at - 200), at + 400)
+  assert.match(root, /height: '100%'/, 'and fills the view area the host then gives it')
+  assert.match(root, /paddingBottom: composerInset/, 'while reserving the composer band itself')
 })
 
-test('the panel does not rely on a percentage height', () => {
-  // `height: 100%` resolved against nothing and let the panel grow to 1640px in
-  // a 1080px viewport when this was tried.
-  assert.equal(/height: '100%'/.test(panel), false, 'a percentage height does not work here')
+test('the panel measures the composer instead of assuming a height', () => {
+  // The target was a hard-coded 250px allowance (header + one-line composer).
+  // It broke the moment the draft wrapped and the composer grew to 210px.
+  assert.equal(/calc\(100vh - \d+px\)/.test(panel), false, 'the calc height is gone')
+  assert.match(panel, /new ResizeObserver/, 'the composer height is observed, not guessed')
+  assert.match(panel, /\[data-composer-seat\]/, 'the observer watches the composer seat')
 })
 
 test('the panel clips its overflow so the frozen parts really stay put', () => {
-  const head = panel.slice(panel.indexOf("height: 'calc(100vh -"))
-  assert.match(head.slice(0, 160), /overflow: 'hidden'/, 'the panel hides overflow')
+  const head = panel.slice(panel.indexOf("height: '100%'"))
+  assert.match(head.slice(0, 200), /overflow: 'hidden'/, 'the panel hides overflow')
 })
 
 test('the preview row is capped so the tracks keep most of the height', () => {

@@ -266,5 +266,24 @@ test('the transport pushes the mix when the project changes', () => {
   assert.match(setProjectBody.slice(0, 400), /applyMix\(project\)/, 'setProject pushes the mix')
 })
 
+test('pan follows the same live path as the faders', () => {
+  // Pan was written once when the graph was built, so turning the knob during
+  // playback did nothing until the next play. It has to ramp like the gains do,
+  // and the clip and the track must read the same sum (improvements plan 01).
+  const raw = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
+  assert.match(raw, /export function clipPan/, 'clipPan is exported so preview and export share one sum')
+  const applyMix = raw.slice(raw.indexOf('const applyMix = useCallback'), raw.indexOf('const applyMix = useCallback') + 900)
+  assert.match(applyMix, /panner\.pan\.setTargetAtTime/, 'applyMix ramps the panner too')
+  assert.match(applyMix, /clipPan\(/, 'using the shared sum')
+  const schedule = raw.slice(raw.indexOf('export function scheduleClips'), raw.indexOf('export function scheduleClips') + 3000)
+  assert.match(schedule, /clipPan\(/, 'scheduleClips uses it as well')
+})
+
+test('pan is described in the labels the user reads', () => {
+  // The user asked for the meaning next to the word: -1 and 1 are not obvious.
+  const i18n = readFileSync(join(root, 'src', 'client', 'i18n.js'), 'utf8')
+  assert.match(i18n, /'声像 \(-1=极左, 1=极右\)'/, 'the pan label spells out both ends')
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1

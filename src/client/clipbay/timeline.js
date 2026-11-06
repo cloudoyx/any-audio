@@ -245,7 +245,7 @@ function TrackHead({ track, active, height, onSelect, onEdit }) {
         max: 1,
         step: 0.05,
         value: track.pan,
-        title: `${t('声像')} ${track.pan}`,
+        title: `${t('声像 (-1=极左, 1=极右)')} ${track.pan}`,
         onChange: (value) => onEdit({ kind: 'track-pan', pan: value }),
       }),
     ),
@@ -495,17 +495,22 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const dragPreview = drag ? { trackId: drag.trackId, itemId: drag.itemId, deltaSec: drag.deltaSec } : null
   const playheadX = positionSec * scale
 
-  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 } },
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-      h(Btn, { onClick: () => (transport?.playing ? transport.pause() : transport?.play?.()), kind: 'primary' },
-        transport?.playing ? t('暂停') : t('播放')),
-      h('span', { style: { ...S.mono, minWidth: 96 } }, `${clockLabel(positionSec)} / ${clockLabel(duration)}`),
+  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 } },
+    // One compact row. Every pixel here comes out of the track area, so the
+    // transport is icon-only (title carries the word) and the track count is
+    // printed once, in the header, not again beside the zoom.
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minHeight: 22 } },
+      h(Btn, {
+        onClick: () => (transport?.playing ? transport.pause() : transport?.play?.()),
+        kind: 'primary',
+        title: transport?.playing ? t('暂停') : t('播放'),
+        style: { padding: '2px 10px', fontSize: 12, lineHeight: 1.3 },
+      }, transport?.playing ? '❚❚' : '▶'),
+      h('span', { style: { ...S.mono, fontSize: 11, minWidth: 92 } }, `${clockLabel(positionSec)} / ${clockLabel(duration)}`),
       h('span', { style: { flex: 1 } }),
-      h('span', { style: S.desc }, t('缩放')),
-      h(Btn, { onClick: () => setScale((value) => Math.max(10, value / 1.5)) }, '−'),
-      h('span', { style: { ...S.mono, minWidth: 56, textAlign: 'center' } }, `${Math.round(scale)} px/s`),
-      h(Btn, { onClick: () => setScale((value) => Math.min(600, value * 1.5)) }, '+'),
-      h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
+      h(Btn, { onClick: () => setScale((value) => Math.max(10, value / 1.5)), title: t('缩小'), style: { padding: '0 7px', fontSize: 12, lineHeight: 1.5 } }, '−'),
+      h('span', { style: { ...S.mono, fontSize: 10, minWidth: 46, textAlign: 'center' } }, `${Math.round(scale)} px/s`),
+      h(Btn, { onClick: () => setScale((value) => Math.min(600, value * 1.5)), title: t('放大'), style: { padding: '0 7px', fontSize: 12, lineHeight: 1.5 } }, '+'),
     ),
     transport?.error ? h('div', { style: S.notice('error') }, transport.error) : null,
     h('div', {
