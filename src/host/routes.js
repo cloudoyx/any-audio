@@ -23,6 +23,8 @@ import { EDGE_VOICES, MIMO_VOICES, providerInfo, synthesizeSpeech } from '../aud
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
+import { handleClipBay, needsClientHeader } from './clipbay-routes.js'
+import { describeError, json, readJsonBody } from './http.js'
 
 const PREFIX = '/api/dsh-any-audio'
 const CLIENT_HEADER = 'any-audio/1'
@@ -38,32 +40,6 @@ const VERSION = (() => {
 
 const jobs = new Map()
 const audios = new Map()
-
-function json(res, status, body) {
-  const payload = JSON.stringify(body)
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  res.end(payload)
-}
-
-async function readJsonBody(req, limit = 1024 * 1024) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > limit) throw new Error('request body is too large')
-    chunks.push(chunk)
-  }
-  if (size === 0) return {}
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  } catch {
-    throw new Error('request body is not valid JSON')
-  }
-}
-
-function describeError(error) {
-  return error instanceof Error ? error.message : String(error)
-}
 
 function publicJob(job) {
   return {
@@ -499,6 +475,15 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     if (path === `${PREFIX}/audio`) {
       await audioRoute(res, url.searchParams.get('id'))
       return
+    }
+    if (path.startsWith(`${PREFIX}/clipbay/`)) {
+      const suffix = path.slice(PREFIX.length)
+      // The media routes sit outside the header gate: <audio>/<video> cannot
+      // send a custom header, so only the cross-site rejection above protects them.
+      if (needsClientHeader(suffix) && req.headers['x-any-audio-client'] !== CLIENT_HEADER) {
+        return json(res, 403, { ok: false, error: 'requests must come from the AnyAudio settings page' })
+      }
+      return handleClipBay(req, res, { url, method, path: suffix, ctx })
     }
     if (req.headers['x-any-audio-client'] !== CLIENT_HEADER) {
       return json(res, 403, { ok: false, error: 'requests must come from the AnyAudio settings page' })
