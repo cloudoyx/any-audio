@@ -17,6 +17,11 @@ import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
 import { usePlayback } from './audio.js'
 import { Timeline } from './timeline.js'
+import { ClipProperties } from './properties.js'
+import {
+  moveClip, trimClip, splitClip, deleteClip, duplicateClip,
+  setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits,
+} from './edit.js'
 
 export const CLIP_BAY_ID = 'clip-bay'
 
@@ -99,15 +104,84 @@ function ProjectList({ root, onOpen }) {
 }
 
 function ProjectShell({ root, projectId, onBack }) {
-  const { status, error, project, materials, reload } = useProject(root, projectId)
+  const { status, error, project, materials, reload, update } = useProject(root, projectId)
   const transport = usePlayback(root, projectId)
   const setTransportProject = transport.setProject
+  const [selection, setSelection] = useState(null)
+  const [editError, setEditError] = useState('')
 
   // The transport schedules from the project it is handed, so it must see the
   // current arrangement rather than whatever was loaded when it mounted.
   useEffect(() => {
     if (project) setTransportProject(project)
   }, [project, setTransportProject])
+
+  const selectClip = useCallback((trackId, itemId) => {
+    setSelection(itemId ? { trackId, itemId } : null)
+  }, [])
+
+  /**
+   * One entry point for every clip edit. The mutators are pure and return a note
+   * for `history`; an empty note means "nothing changed" and is not recorded,
+   * which is what keeps a drag that lands back where it started out of the log.
+   */
+  const applyEdit = useCallback((request) => {
+    if (!project) return
+    const trackId = request.trackId ?? selection?.trackId
+    const itemId = request.itemId ?? selection?.itemId
+    if (!itemId) return
+    const track = project.tracks.find((entry) => entry.id === trackId)
+    const item = track?.items.find((entry) => entry.id === itemId)
+    if (!track || !item) return
+
+    const playhead = transport.positionSec
+    let result
+    try {
+      switch (request.kind) {
+        case 'move':
+          result = moveClip(project, { trackId, itemId, startSec: item.startSec + request.deltaSec })
+          break
+        case 'trim':
+          result = trimClip(project, { trackId, itemId, edge: request.edge, deltaSec: request.deltaSec })
+          break
+        case 'split':
+          result = splitClip(project, { trackId, itemId, atSec: playhead })
+          break
+        case 'delete':
+          result = deleteClip(project, { trackId, itemId })
+          break
+        case 'duplicate':
+          result = duplicateClip(project, { trackId, itemId })
+          break
+        case 'gain':
+          result = setClipGain(project, { trackId, itemId, gainDb: request.gainDb })
+          break
+        case 'pan':
+          result = setClipPan(project, { trackId, itemId, pan: request.pan })
+          break
+        case 'fades':
+          result = setClipFades(project, {
+            trackId, itemId,
+            fadeInSec: request.fadeInSec,
+            fadeOutSec: request.fadeOutSec,
+          })
+          break
+        case 'mute':
+          result = setClipMuted(project, { trackId, itemId, muted: request.muted })
+          break
+        default:
+          return
+      }
+      assertWithinLimits(result.project)
+    } catch (caught) {
+      setEditError(caught.message)
+      return
+    }
+    setEditError('')
+    if (!result.note) return
+    update(() => result.project, result.note)
+    if (request.kind === 'delete') setSelection(null)
+  }, [project, selection, transport.positionSec, update])
 
   // Starting playback needs a resumed AudioContext, which the browser only allows
   // after a gesture; the play button is that gesture.
@@ -121,6 +195,9 @@ function ProjectShell({ root, projectId, onBack }) {
     )
   }
 
+  const selectedTrack = selection ? project.tracks.find((entry) => entry.id === selection.trackId) : null
+  const selectedItem = selectedTrack?.items.find((entry) => entry.id === selection.itemId) ?? null
+
   return h('div', { style: S.page },
     h('div', { style: S.header },
       h(Btn, { onClick: onBack }, t('← 返回')),
@@ -128,7 +205,23 @@ function ProjectShell({ root, projectId, onBack }) {
       h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
     ),
-    h(Timeline, { root, projectId, project, materials, transport }),
+    editError ? h(Notice, { tone: 'error' }, editError) : null,
+    h(Timeline, {
+      root,
+      projectId,
+      project,
+      materials,
+      transport,
+      onEdit: applyEdit,
+      selection,
+      onSelect: selectClip,
+    }),
+    h(ClipProperties, {
+      selection,
+      track: selectedTrack,
+      item: selectedItem,
+      onEdit: (request) => applyEdit({ ...request, trackId: selection?.trackId, itemId: selection?.itemId }),
+    }),
   )
 }
 

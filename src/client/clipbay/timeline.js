@@ -1,15 +1,16 @@
 /**
- * The timeline surface (plan M5.2–M5.3).
+ * The timeline surface (plan M5.2–M5.4).
  *
- * Track heads on the left, a time ruler on top, one canvas per clip, and a
- * playhead driven by the transport.
+ * Track heads on the left, a time ruler on top, one canvas per clip, a playhead
+ * driven by the transport, and pointer editing: drag a clip to move it, drag an
+ * edge to trim it.
  *
  * Geometry: seconds map to pixels through one `scale`. Every clip is positioned
  * with `left = (startSec - scrollSec) * scale` and sized `lengthSec * scale`;
  * zoom only changes `scale`, which is why zooming never re-reads a peak file.
  *
- * Editing (drag, trim, split) is M5.4 — the pointer handlers below only place the
- * playhead and select a track.
+ * A drag previews locally (the clip follows the pointer) and commits once on
+ * release, so the project and its history see one edit, not one per frame.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { h, S, Btn, C } from '../ui.js'
@@ -17,11 +18,13 @@ import { t } from '../i18n.js'
 import { itemLengthSec, contentEndSec } from './serialize.js'
 import { drawClipWaveform } from './waveform.js'
 import { usePeaks } from './peaks.js'
+import { itemLength, itemEnd } from './edit.js'
 
 const TRACK_HEIGHT = 54
 const TRACK_HEIGHT_ACTIVE = 78
 const HEAD_WIDTH = 150
 const RULER_HEIGHT = 22
+const EDGE_GRAB = 6
 
 const CATEGORY_COLOR = {
   music: '#4f7cff',
@@ -78,13 +81,11 @@ function ClipCanvas({ peaks, inSec, outSec, width, height, color }) {
   })
 }
 
-function Ruler({ scale, durationSec, scrollSec }) {
+function Ruler({ scale, durationSec, onSeek }) {
   const step = rulerStep(scale)
-  const first = Math.floor(scrollSec / step) * step
   const marks = []
-  for (let at = first; at <= scrollSec + durationSec; at += step) {
-    const x = (at - scrollSec) * scale
-    if (x < -1) continue
+  for (let at = 0; at <= durationSec; at += step) {
+    const x = at * scale
     marks.push(h('div', {
       key: at,
       style: { position: 'absolute', left: x, top: 0, width: 1, height: RULER_HEIGHT, background: C.border },
@@ -92,14 +93,21 @@ function Ruler({ scale, durationSec, scrollSec }) {
       style: { position: 'absolute', left: 4, top: 2, fontSize: 10, color: C.muted, whiteSpace: 'nowrap' },
     }, rulerLabel(at, step))))
   }
-  return h('div', { style: { position: 'relative', height: RULER_HEIGHT, overflow: 'hidden', borderBottom: `1px solid ${C.border}` } }, marks)
+  return h('div', {
+    style: { position: 'relative', height: RULER_HEIGHT, overflow: 'hidden', borderBottom: `1px solid ${C.border}`, cursor: 'pointer' },
+    onClick: (event) => {
+      const box = event.currentTarget.getBoundingClientRect()
+      onSeek((event.clientX - box.left) / scale)
+    },
+  }, marks)
 }
 
-function Clip({ item, track, peaks, scale, scrollSec, height }) {
+function Clip({ item, track, peaks, scale, height, selected, preview, onPointerDown, onSelect }) {
   const lengthSec = itemLengthSec(item)
-  const left = (item.startSec - scrollSec) * scale
+  const dragging = preview && preview.itemId === item.id && preview.trackId === track.id
+  const offset = dragging ? preview.deltaSec * scale : 0
   const width = Math.max(2, lengthSec * scale)
-  if (left + width < 0) return null
+  const left = item.startSec * scale + offset
 
   const color = CATEGORY_COLOR[track.category] || CATEGORY_COLOR.other
   const fadeIn = Math.min(width / 2, (Number(item.fadeInSec) || 0) * scale)
@@ -107,6 +115,8 @@ function Clip({ item, track, peaks, scale, scrollSec, height }) {
   const dimmed = track.muted || item.muted
 
   return h('div', {
+    onPointerDown,
+    onClick: (event) => { event.stopPropagation(); onSelect() },
     style: {
       position: 'absolute',
       left,
@@ -114,10 +124,13 @@ function Clip({ item, track, peaks, scale, scrollSec, height }) {
       width,
       height: height - 4,
       borderRadius: 4,
-      border: `1px solid ${dimmed ? C.border : color}`,
+      border: `1px solid ${selected ? '#fff' : dimmed ? C.border : color}`,
+      boxShadow: selected ? `0 0 0 1px ${C.accent}` : 'none',
       background: dimmed ? 'rgba(128,128,128,0.10)' : `${color}22`,
       overflow: 'hidden',
       opacity: item.muted ? 0.45 : 1,
+      cursor: 'grab',
+      touchAction: 'none',
     },
   },
     h(ClipCanvas, { peaks, inSec: item.inSec, outSec: item.outSec, width, height: height - 4, color }),
@@ -129,64 +142,135 @@ function Clip({ item, track, peaks, scale, scrollSec, height }) {
       : null,
     h('span', {
       style: {
-        position: 'absolute', left: 5, top: 1, fontSize: 10, color: 'inherit',
-        maxWidth: Math.max(0, width - 10), overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        opacity: 0.85,
+        position: 'absolute', left: 6, top: 1, fontSize: 10, color: 'inherit',
+        maxWidth: Math.max(0, width - 12), overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        opacity: 0.85, pointerEvents: 'none',
       },
     }, item.label || item.id),
+    h('div', {
+      'data-edge': 'start',
+      style: { position: 'absolute', left: 0, top: 0, width: EDGE_GRAB, height: '100%', cursor: 'ew-resize' },
+    }),
+    h('div', {
+      'data-edge': 'end',
+      style: { position: 'absolute', right: 0, top: 0, width: EDGE_GRAB, height: '100%', cursor: 'ew-resize' },
+    }),
   )
 }
 
-function TrackRow({ track, peaksById, scale, scrollSec, active, onSelect }) {
+function TrackRow({ track, peaksById, scale, active, onSelect, drag, selection, onClipPointerDown, onClipSelect }) {
   const height = active ? TRACK_HEIGHT_ACTIVE : TRACK_HEIGHT
   return h('div', {
-    onClick: onSelect,
-    style: { display: 'flex', borderBottom: `1px solid ${C.border}`, cursor: 'pointer' },
+    style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
     h('div', {
+      onClick: onSelect,
       style: {
         width: HEAD_WIDTH, flex: '0 0 auto', padding: '4px 8px', boxSizing: 'border-box',
         display: 'flex', flexDirection: 'column', gap: 2, justifyContent: 'center',
-        borderRight: `1px solid ${C.border}`, background: active ? C.soft : 'transparent',
+        borderRight: `1px solid ${C.border}`, background: active ? C.soft : 'transparent', cursor: 'pointer',
       },
     },
       h('span', { style: { fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, track.name),
       h('span', { style: { ...S.desc, fontSize: 10 } },
         `${track.items.length} ${t('段')} · ${track.volumeDb} dB${track.muted ? ` · ${t('已静音')}` : ''}${track.solo ? ` · ${t('独奏')}` : ''}`),
     ),
-    h('div', {
-      style: { position: 'relative', height, flex: 1, overflow: 'hidden' },
-      onClick: (event) => {
-        const box = event.currentTarget.getBoundingClientRect()
-        onSelect(event, (event.clientX - box.left) / scale + scrollSec)
-      },
-    },
+    h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' } },
       track.items.map((item) => h(Clip, {
         key: item.id,
         item,
         track,
         peaks: peaksById.get(item.material),
         scale,
-        scrollSec,
         height,
+        selected: selection?.itemId === item.id,
+        preview: drag.preview,
+        onSelect: () => onClipSelect(track.id, item.id),
+        onPointerDown: (event) => onClipPointerDown(event, track, item),
       })),
     ),
   )
 }
 
-export function Timeline({ root, projectId, project, materials, transport }) {
+export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const peaksById = usePeaks(root, projectId, materials)
   const duration = Math.max(contentEndSec(project), 1)
   const positionSec = transport?.positionSec ?? 0
-  const playheadX = positionSec * scale
+
+  const dragRef = useRef(null)
+
+  const onCommit = useCallback((deltaSec, payload) => {
+    onEdit?.({ kind: payload.kind, deltaSec, trackId: payload.trackId, itemId: payload.itemId, edge: payload.edge })
+  }, [onEdit])
+
+  const startDrag = useCallback((event, track, item) => {
+    event.preventDefault()
+    event.stopPropagation()
+    onSelect?.(track.id, item.id)
+    const edge = event.target?.dataset?.edge
+    dragRef.current = {
+      startX: event.clientX,
+      pointerId: event.pointerId,
+      payload: { kind: edge ? 'trim' : 'move', trackId: track.id, itemId: item.id, edge },
+    }
+    setDrag({ kind: edge ? 'trim' : 'move', trackId: track.id, itemId: item.id, edge, deltaSec: 0 })
+  }, [onSelect])
+
+  const [drag, setDrag] = useState(null)
+
+  useEffect(() => {
+    if (!drag) return undefined
+    const move = (event) => {
+      const current = dragRef.current
+      if (!current || current.pointerId !== event.pointerId) return
+      const deltaSec = (event.clientX - current.startX) / scale
+      current.deltaSec = deltaSec
+      current.moved = current.moved || Math.abs(event.clientX - current.startX) > 2
+      setDrag({ ...current.payload, deltaSec })
+    }
+    const finish = (event) => {
+      const current = dragRef.current
+      if (!current || current.pointerId !== event.pointerId) return
+      dragRef.current = null
+      setDrag(null)
+      if (current.moved && Math.abs(current.deltaSec) > 1e-4) {
+        onCommit(current.deltaSec, current.payload)
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+  }, [drag, scale, onCommit])
+
+  // Delete / Ctrl+D / Ctrl+Z act on the selection. Ctrl+Z belongs to M5.6.
+  useEffect(() => {
+    const onKey = (event) => {
+      const tag = event.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
+      if (!selection?.itemId) return
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault()
+        onEdit?.({ kind: 'delete', trackId: selection.trackId, itemId: selection.itemId })
+      } else if (event.ctrlKey && (event.key === 'd' || event.key === 'D')) {
+        event.preventDefault()
+        onEdit?.({ kind: 'duplicate', trackId: selection.trackId, itemId: selection.itemId })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selection, onEdit])
 
   const seekTo = useCallback((seconds) => {
     transport?.seek?.(Math.max(0, Math.min(duration, seconds)))
   }, [transport, duration])
 
-  // Space toggles playback unless the focus is in a field. Ctrl+Z is M5.6.
   useEffect(() => {
     const onKey = (event) => {
       const tag = event.target?.tagName
@@ -200,6 +284,9 @@ export function Timeline({ root, projectId, project, materials, transport }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [transport])
+
+  const dragPreview = drag ? { trackId: drag.trackId, itemId: drag.itemId, deltaSec: drag.deltaSec } : null
+  const playheadX = positionSec * scale
 
   return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
@@ -223,14 +310,8 @@ export function Timeline({ root, projectId, project, materials, transport }) {
       h('div', { style: { width: HEAD_WIDTH + duration * scale, minWidth: '100%', position: 'relative' } },
         h('div', { style: { display: 'flex' } },
           h('div', { style: { width: HEAD_WIDTH, flex: '0 0 auto', borderRight: `1px solid ${C.border}` } }),
-          h('div', {
-            style: { flex: 1, position: 'relative', cursor: 'pointer' },
-            onClick: (event) => {
-              const box = event.currentTarget.getBoundingClientRect()
-              seekTo((event.clientX - box.left) / scale)
-            },
-          },
-            h(Ruler, { scale, durationSec: duration, scrollSec: 0 }),
+          h('div', { style: { flex: 1, position: 'relative' } },
+            h(Ruler, { scale, durationSec: duration, onSeek: seekTo }),
           ),
         ),
         project.tracks.length === 0
@@ -240,12 +321,12 @@ export function Timeline({ root, projectId, project, materials, transport }) {
             track,
             peaksById,
             scale,
-            scrollSec: 0,
             active: track.id === activeTrackId,
-            onSelect: (event, seconds) => {
-              setActiveTrackId(track.id)
-              if (typeof seconds === 'number') seekTo(seconds)
-            },
+            onSelect: () => setActiveTrackId(track.id),
+            drag: { preview: dragPreview },
+            selection,
+            onClipPointerDown: startDrag,
+            onClipSelect: (trackId, itemId) => onSelect?.(trackId, itemId),
           })),
         h('div', {
           style: {
