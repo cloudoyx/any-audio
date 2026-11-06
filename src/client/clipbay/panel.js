@@ -19,6 +19,7 @@ import { usePlayback } from './audio.js'
 import { useAutosave } from './saving.js'
 import { Timeline } from './timeline.js'
 import { ClipProperties } from './properties.js'
+import { buildMention, appendToDraft } from './mention.js'
 import {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits,
@@ -140,13 +141,15 @@ function applyClipEdit(project, track, item, request, playhead, trackId, itemId)
   }
 }
 
-function ProjectShell({ root, projectId, onBack }) {
+function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const { status, error, project, materials, reload, update, undo, redo, canUndo, canRedo, markSaved } = useProject(root, projectId)
   const transport = usePlayback(root, projectId)
   const setTransportProject = transport.setProject
   const [selection, setSelection] = useState(null)
+  const [range, setRange] = useState(null)
   const [editError, setEditError] = useState('')
   const [saveError, setSaveError] = useState('')
+  const [mentionNotice, setMentionNotice] = useState('')
 
   // Debounced write plus a flush on unmount: switching to 对话 destroys this
   // component, and the last few hundred milliseconds must still reach the file.
@@ -165,6 +168,47 @@ function ProjectShell({ root, projectId, onBack }) {
   const selectClip = useCallback((trackId, itemId) => {
     setSelection(itemId ? { trackId, itemId } : null)
   }, [])
+
+  /**
+   * Put the current selection into the chat draft as an `anyaudio://` mention
+   * (spec §9.3 path B).
+   *
+   * The draft is read first and the mention appended, because `setDraft` replaces
+   * the whole document — writing only the mention would delete whatever the person
+   * had already typed. The host expands the mention into structured context when
+   * the message is sent, so nothing else has to happen here.
+   */
+  const addToConversation = useCallback(() => {
+    // A dragged range names its own track and wins over a clip selection: it is
+    // the more recent, more specific gesture, and it is the only one that carries
+    // a time range.
+    const target = range && range.toSec > range.fromSec
+      ? { trackId: range.trackId, fromSec: range.fromSec, toSec: range.toSec }
+      : selection
+        ? { trackId: selection.trackId, itemId: selection.itemId }
+        : null
+    if (!project || !target) {
+      setMentionNotice(t('选中一个片段或一条轨道，再点这里把它放进对话。'))
+      return
+    }
+    const mention = buildMention(project, target)
+    if (!mention) {
+      setMentionNotice(t('选中一个片段或一条轨道，再点这里把它放进对话。'))
+      return
+    }
+    if (!inputActions?.setDraft) {
+      setMentionNotice(t('加入失败：{0}', 'this build of the chat input does not expose setDraft'))
+      return
+    }
+    try {
+      const current = typeof useInput === 'function' ? useInput((state) => state)?.draft : ''
+      inputActions.setDraft(appendToDraft(current, mention.text))
+      inputActions.persistDraft?.()
+      setMentionNotice(t('已加入对话输入框，切到「对话」继续补充要求。'))
+    } catch (caught) {
+      setMentionNotice(t('加入失败：{0}', caught instanceof Error ? caught.message : String(caught)))
+    }
+  }, [project, selection, range, inputActions, useInput])
 
   /**
    * One entry point for every edit. The mutators are pure and return a note for
@@ -244,11 +288,13 @@ function ProjectShell({ root, projectId, onBack }) {
       h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
       h('span', { style: { flex: 1 } }),
+      h(Btn, { onClick: addToConversation, kind: (selection || range) ? 'primary' : undefined, disabled: !selection && !range }, t('添加到对话')),
       h(Btn, { onClick: undo, disabled: !canUndo, title: 'Ctrl+Z' }, t('撤销')),
       h(Btn, { onClick: redo, disabled: !canRedo, title: 'Ctrl+Shift+Z' }, t('重做')),
     ),
     editError ? h(Notice, { tone: 'error' }, editError) : null,
     saveError ? h(Notice, { tone: 'error' }, `${t('保存失败')}：${saveError} ${t('编辑仍在这里，可以重试。')}`) : null,
+    mentionNotice ? h(Notice, null, mentionNotice) : null,
     h(Timeline, {
       root,
       projectId,
@@ -260,6 +306,8 @@ function ProjectShell({ root, projectId, onBack }) {
       onSelect: selectClip,
       onUndo: undo,
       onRedo: redo,
+      range,
+      onRange: setRange,
     }),
     h(ClipProperties, {
       selection,
@@ -270,7 +318,7 @@ function ProjectShell({ root, projectId, onBack }) {
   )
 }
 
-export function ClipBayPanel({ useWorkspaces, useSessions }) {
+export function ClipBayPanel({ useWorkspaces, useSessions, inputActions, useInput }) {
   const workspace = pickWorkspace(useWorkspaces, useSessions)
   const [opened, setOpened] = useState(null)
 
@@ -291,7 +339,13 @@ export function ClipBayPanel({ useWorkspaces, useSessions }) {
     )
   }
   if (opened) {
-    return h(ProjectShell, { root: workspace.path, projectId: opened.id, onBack: () => setOpened(null) })
+    return h(ProjectShell, {
+      root: workspace.path,
+      projectId: opened.id,
+      onBack: () => setOpened(null),
+      inputActions,
+      useInput,
+    })
   }
   return h(ProjectList, { root: workspace.path, onOpen: setOpened })
 }

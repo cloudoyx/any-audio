@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { registerAnyAudioRoutes } from './host/routes.js'
+import { registerTimelineExpansion } from './host/timeline-ref.js'
 import { registerAllTools } from './tools/index.js'
 import { setCredentialResolver } from './tools/tts.js'
 import { setWorkingDirectoryService } from './tools/shared.js'
@@ -13,6 +14,23 @@ const SKILL_DESCRIPTION =
   'Score and mix music for videos: SoundFont instrument rendering from note-level scores, optional arrangement techniques, procedural sound effects, narration ducking and timeline mixing.'
 const SKILL_WHEN_TO_USE =
   'When a task creates or edits a video that needs music, narration or sound effects, or an existing video needs better audio.'
+
+const SKILLS = [
+  {
+    file: 'anyaudio-scoring.md',
+    name: SKILL_NAME,
+    description: SKILL_DESCRIPTION,
+    whenToUse: SKILL_WHEN_TO_USE,
+  },
+  {
+    file: 'anyaudio-clipbay.md',
+    name: 'anyaudio-clipbay',
+    description:
+      'Build and edit a clip bay project: a multi-track timeline a person can open, play, trim and re-render, with one track per stem and every take kept as material.',
+    whenToUse:
+      'When a request needs a multi-track timeline that a person will open and edit — separate stems, several narration lines, effects placed at exact moments — rather than a single mixed-down file.',
+  },
+]
 
 const PROMPT_SECTION = `Video audio: this harness can render real instrumental music and mix it into videos with the anyaudio_* tools.
 - Proactive default: when a request creates or edits a video (animation, explainer, promo, science, concept, interactive clip), treat the audio as part of the deliverable even if the user did not mention it — plan music, add the sound effects the pictures need, synthesise narration when the video needs a voice, and finish with a mix. Do not deliver a silent video unless the user explicitly wants silence or already supplied finished audio.
@@ -39,19 +57,21 @@ async function installSkill(ctx, log) {
     log('skills service unavailable; the anyaudio-scoring skill was not registered')
     return
   }
-  try {
-    const content = await readFile(new URL('./skills/anyaudio-scoring.md', import.meta.url), 'utf8')
-    skills.register({
-      name: SKILL_NAME,
-      description: SKILL_DESCRIPTION,
-      whenToUse: SKILL_WHEN_TO_USE,
-      source: SKILL_SOURCE,
-      content,
-      provider: 'any-audio',
-    })
-    log(`registered skill "${SKILL_NAME}"`)
-  } catch (error) {
-    log(`skill registration failed: ${error instanceof Error ? error.message : String(error)}`)
+  for (const skill of SKILLS) {
+    try {
+      const content = await readFile(new URL(`./skills/${skill.file}`, import.meta.url), 'utf8')
+      skills.register({
+        name: skill.name,
+        description: skill.description,
+        whenToUse: skill.whenToUse,
+        source: SKILL_SOURCE,
+        content,
+        provider: 'any-audio',
+      })
+      log(`registered skill "${skill.name}"`)
+    } catch (error) {
+      log(`skill registration failed for ${skill.name}: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 }
 
@@ -70,7 +90,7 @@ function installPromptSection(ctx, log) {
 }
 
 export function apply(ctx, config = {}) {
-  const options = { tools: true, skill: true, prompt: true, routes: true, ...config }
+  const options = { tools: true, skill: true, prompt: true, routes: true, timeline: true, ...config }
   const log = (message) => {
     try {
       ctx.logger?.info?.(`[any-audio] ${message}`)
@@ -91,6 +111,13 @@ export function apply(ctx, config = {}) {
     if (options.tools) log(`registered tools: ${registerAllTools(ctx, log)}`)
     if (options.skill) void installSkill(ctx, log)
     if (options.prompt) installPromptSection(ctx, log)
+    if (options.timeline) {
+      try {
+        registerTimelineExpansion(ctx, log)
+      } catch (error) {
+        log(`timeline reference hook failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
     if (options.routes) {
       try {
         if (typeof ctx.inject === 'function') {

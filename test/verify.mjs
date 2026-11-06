@@ -521,7 +521,7 @@ await test('muxing keeps the video length when the audio is shorter or longer', 
 })
 
 await test('tool definitions are complete and discoverable', async () => {
-  assert(tools.size === 5, `expected 5 tools, got ${tools.size}: ${[...tools.keys()].join(', ')}`)
+  assert(tools.size === 6, `expected 6 tools, got ${tools.size}: ${[...tools.keys()].join(', ')}`)
   for (const definition of tools.values()) {
     assert(typeof definition.name === 'string' && definition.name.startsWith('anyaudio_'), `bad tool name ${definition.name}`)
     assert(definition.description.length > 80, `${definition.name} needs a descriptive description`)

@@ -254,13 +254,14 @@ function TrackHead({ track, active, onSelect, onEdit }) {
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect }) {
+function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
   const height = active ? TRACK_HEIGHT_ACTIVE : TRACK_HEIGHT
+  const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
     h(TrackHead, { track, active, onSelect, onEdit }),
-    h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' } },
+    h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
         item,
@@ -273,11 +274,34 @@ function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, sel
         onSelect: () => onClipSelect(track.id, item.id),
         onPointerDown: (event) => onClipPointerDown(event, track, item),
       })),
+      // The range the person dragged: drawn behind nothing, on top of the clips,
+      // so it is obvious which stretch 添加到对话 will cite.
+      band
+        ? h('div', {
+          style: {
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: range.fromSec * scale,
+            width: Math.max(1, (range.toSec - range.fromSec) * scale),
+            background: 'rgba(79,124,255,0.22)',
+            borderLeft: `1px solid ${C.accent}`,
+            borderRight: `1px solid ${C.accent}`,
+            pointerEvents: 'none',
+          },
+        })
+        : null,
+      // The empty part of a track is the range-drag surface; clips keep their own
+      // pointer handling above it.
+      h('div', {
+        style: { position: 'absolute', inset: 0, zIndex: -1 },
+        onPointerDown: (event) => onRangeStart(event, track, height),
+      }),
     ),
   )
 }
 
-export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo }) {
+export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const peaksById = usePeaks(root, projectId, materials)
@@ -285,6 +309,58 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const positionSec = transport?.positionSec ?? 0
 
   const dragRef = useRef(null)
+  const rangeRef = useRef(null)
+  const [rangeDrag, setRangeDrag] = useState(false)
+
+  /**
+   * Dragging across an empty stretch of a track selects a time range on that
+   * track — one of the three selections spec §9.3 supports, and the one the
+   * acceptance script uses ("框选鼓组 20–35 秒").
+   *
+   * The band is committed when the pointer is released, as one range, so moving
+   * the pointer does not spam the parent with new state per frame.
+   */
+  const startRange = useCallback((event, track, height) => {
+    const box = event.currentTarget.getBoundingClientRect()
+    const at = Math.max(0, Math.min(duration, (event.clientX - box.left) / scale))
+    rangeRef.current = { trackId: track.id, anchorSec: at, pointerId: event.pointerId }
+    setActiveTrackId(track.id)
+    setRangeDrag(true)
+    onRange?.({ trackId: track.id, fromSec: at, toSec: at })
+  }, [duration, scale, onRange])
+
+  useEffect(() => {
+    if (!rangeDrag) return undefined
+    const move = (event) => {
+      const current = rangeRef.current
+      if (!current || current.pointerId !== event.pointerId) return
+      const target = event.target
+      const box = target?.closest?.('[data-track-body]')?.getBoundingClientRect()
+      if (!box) return
+      const at = Math.max(0, Math.min(duration, (event.clientX - box.left) / scale))
+      onRange?.({
+        trackId: current.trackId,
+        fromSec: Math.min(current.anchorSec, at),
+        toSec: Math.max(current.anchorSec, at),
+      })
+    }
+    const finish = () => {
+      const current = rangeRef.current
+      rangeRef.current = null
+      setRangeDrag(false)
+      if (!current) return
+      // A click without a drag clears the range instead of leaving a zero-width one.
+      if (range && range.toSec - range.fromSec < 0.05) onRange?.(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+  }, [rangeDrag, scale, duration, onRange, range])
 
   const onCommit = useCallback((deltaSec, payload) => {
     onEdit?.({ kind: payload.kind, deltaSec, trackId: payload.trackId, itemId: payload.itemId, edge: payload.edge })
@@ -420,6 +496,8 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             selection,
             onClipPointerDown: startDrag,
             onClipSelect: (trackId, itemId) => onSelect?.(trackId, itemId),
+            range,
+            onRangeStart: startRange,
           })),
         h('div', {
           style: {

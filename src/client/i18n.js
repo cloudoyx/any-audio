@@ -188,6 +188,10 @@ export const EN = {
   '已静音': 'muted',
   '这个工程还没有轨道。': 'This project has no tracks yet.',
   '← 返回': '← Back',
+  '添加到对话': 'Add to conversation',
+  '选中一个片段或一条轨道，再点这里把它放进对话。': 'Select a clip or a track first, then add it to the conversation.',
+  '已加入对话输入框，切到「对话」继续补充要求。': 'Added to the chat draft — switch to 对话 and describe the change.',
+  '加入失败：{0}': 'Could not add it: {0}',
 }
 
 let LANG = 'zh'
