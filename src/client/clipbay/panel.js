@@ -16,6 +16,7 @@ import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
 import { usePlayback } from './audio.js'
+import { useAutosave } from './saving.js'
 import { Timeline } from './timeline.js'
 import { ClipProperties } from './properties.js'
 import {
@@ -140,11 +141,20 @@ function applyClipEdit(project, track, item, request, playhead, trackId, itemId)
 }
 
 function ProjectShell({ root, projectId, onBack }) {
-  const { status, error, project, materials, reload, update } = useProject(root, projectId)
+  const { status, error, project, materials, reload, update, undo, redo, canUndo, canRedo, markSaved } = useProject(root, projectId)
   const transport = usePlayback(root, projectId)
   const setTransportProject = transport.setProject
   const [selection, setSelection] = useState(null)
   const [editError, setEditError] = useState('')
+  const [saveError, setSaveError] = useState('')
+
+  // Debounced write plus a flush on unmount: switching to 对话 destroys this
+  // component, and the last few hundred milliseconds must still reach the file.
+  useAutosave(root, project, {
+    enabled: Boolean(project),
+    onSaved: () => { setSaveError(''); markSaved() },
+    onError: (message) => setSaveError(message),
+  })
 
   // The transport schedules from the project it is handed, so it must see the
   // current arrangement rather than whatever was loaded when it mounted.
@@ -233,8 +243,12 @@ function ProjectShell({ root, projectId, onBack }) {
       h('h2', { style: S.title }, project.name),
       h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
+      h('span', { style: { flex: 1 } }),
+      h(Btn, { onClick: undo, disabled: !canUndo, title: 'Ctrl+Z' }, t('撤销')),
+      h(Btn, { onClick: redo, disabled: !canRedo, title: 'Ctrl+Shift+Z' }, t('重做')),
     ),
     editError ? h(Notice, { tone: 'error' }, editError) : null,
+    saveError ? h(Notice, { tone: 'error' }, `${t('保存失败')}：${saveError} ${t('编辑仍在这里，可以重试。')}`) : null,
     h(Timeline, {
       root,
       projectId,
@@ -244,6 +258,8 @@ function ProjectShell({ root, projectId, onBack }) {
       onEdit: applyEdit,
       selection,
       onSelect: selectClip,
+      onUndo: undo,
+      onRedo: redo,
     }),
     h(ClipProperties, {
       selection,

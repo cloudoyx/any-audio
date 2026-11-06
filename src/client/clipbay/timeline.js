@@ -277,7 +277,7 @@ function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, sel
   )
 }
 
-export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect }) {
+export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const peaksById = usePeaks(root, projectId, materials)
@@ -334,23 +334,30 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
     }
   }, [drag, scale, onCommit])
 
-  // Delete / Ctrl+D / Ctrl+Z act on the selection. Ctrl+Z belongs to M5.6.
+  // Delete / Ctrl+D act on the selection; Ctrl+Z / Ctrl+Shift+Z walk the history.
   useEffect(() => {
     const onKey = (event) => {
       const tag = event.target?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
+      const mod = event.ctrlKey || event.metaKey
+      if (mod && (event.key === 'z' || event.key === 'Z')) {
+        event.preventDefault()
+        if (event.shiftKey) onRedo?.()
+        else onUndo?.()
+        return
+      }
       if (!selection?.itemId) return
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault()
         onEdit?.({ kind: 'delete', trackId: selection.trackId, itemId: selection.itemId })
-      } else if (event.ctrlKey && (event.key === 'd' || event.key === 'D')) {
+      } else if (mod && (event.key === 'd' || event.key === 'D')) {
         event.preventDefault()
         onEdit?.({ kind: 'duplicate', trackId: selection.trackId, itemId: selection.itemId })
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selection, onEdit])
+  }, [selection, onEdit, onUndo, onRedo])
 
   const seekTo = useCallback((seconds) => {
     transport?.seek?.(Math.max(0, Math.min(duration, seconds)))
