@@ -5,13 +5,15 @@
  * the user is currently looking at. M5 added the timeline (waveform, playback,
  * clip and track edits, undo, autosave) and M8 the picture preview and export.
  *
- * The workspace is resolved the same way image-gen and mnemon do it: the session
- * shown in the main view decides, and a session with no workspace falls back to
- * the first one in the registry. The host re-checks the path against its own
- * registry, so a wrong guess here fails closed (403) rather than reading a folder
- * this page has no business reading.
+ * The workspace is resolved from the Session the View is mounted for: the Host
+ * scopes `conversation.view` to one Session and hands `sessionId` to every
+ * entry, so the owning workspace is a lookup, not a guess. A widget folder
+ * belongs to its workspace, and every Session of that workspace may read and
+ * edit it — the Session decides which workspace the page opens on, never which
+ * data exists. The host re-checks the path against its own registry, so a
+ * mismatched root fails closed (403) rather than reading someone else's folder.
  */
-import { h, useState, useEffect, useCallback, S, Btn, Notice, Select, Switch } from '../ui.js'
+import { h, useState, useEffect, useCallback, S, C, Btn, Notice, Select, Switch } from '../ui.js'
 import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
@@ -32,23 +34,19 @@ import {
 export const CLIP_BAY_ID = 'clip-bay'
 
 /**
- * Pick the workspace the page should read.
+ * The workspace that owns a Session.
  *
- * `useWorkspaces` and `useSessions` are standard props of a Conversation View,
- * so they are always present; the defensive reads only guard against a
- * registry that is still loading.
+ * `items` is the `WorkspaceSnapshot.items` array and `sessionId` is the Session
+ * this View is mounted for. There is deliberately no "first workspace" fallback:
+ * the clip bay writes to disk (autosave, export), so picking a folder the user
+ * is not looking at would write into someone else's project. An unmatched id
+ * means the Session has no workspace yet, which the caller shows as an empty
+ * state.
  */
-function pickWorkspace(useWorkspaces, useSessions) {
-  const snapshot = useWorkspaces ? useWorkspaces((value) => value) : undefined
-  const sessionState = useSessions ? useSessions((value) => value) : undefined
-  const items = Array.isArray(snapshot?.items) ? snapshot.items : []
-  if (items.length === 0) return null
-  const currentSessionId = sessionState?.current
-  if (currentSessionId) {
-    const matched = items.find((item) => Array.isArray(item?.sessionIds) && item.sessionIds.includes(currentSessionId))
-    if (matched) return matched
-  }
-  return items[0]
+export function workspaceForSession(items, sessionId) {
+  if (!Array.isArray(items) || items.length === 0) return null
+  if (typeof sessionId !== 'string' || sessionId === '') return null
+  return items.find((item) => Array.isArray(item?.sessionIds) && item.sessionIds.includes(sessionId)) ?? null
 }
 
 /** mm:ss, the same shape the exporter reports. */
@@ -74,18 +72,18 @@ function ProjectList({ root, onOpen }) {
   useEffect(() => { void reload() }, [reload])
 
   if (error) {
-    return h('div', { style: S.page },
+    return h('div', { style: S.workbench },
       h(Notice, { tone: 'error' }, error),
       h('div', null, h(Btn, { onClick: () => void reload() }, t('重试'))),
     )
   }
-  if (!projects) return h('div', { style: S.page }, h('p', { style: S.desc }, t('正在读取工程…')))
+  if (!projects) return h('div', { style: S.workbench }, h('p', { style: S.desc }, t('正在读取工程…')))
   if (projects.length === 0) {
-    return h('div', { style: S.page },
+    return h('div', { style: S.workbench },
       h('p', { style: S.desc }, t('这个工作区还没有工程。在会话里让 Agent 建一个：说「新建一个剪辑台工程」即可。')),
     )
   }
-  return h('div', { style: S.page },
+  return h('div', { style: S.workbench },
     h('div', { style: S.header },
       h('h2', { style: S.title }, t('剪辑台')),
       h('span', { style: S.chip }, `${projects.length} ${t('个工程')}`),
@@ -198,6 +196,17 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   }, [])
 
   /**
+   * Drop both the clip selection and any dragged range.
+   *
+   * Escape and a click on empty track space both land here. Without it the only
+   * ways out of a selection were deleting the clip or reloading the page.
+   */
+  const clearSelection = useCallback(() => {
+    setSelection(null)
+    setRange(null)
+  }, [])
+
+  /**
    * Put the current selection into the chat draft as an `anyaudio://` mention
    * (spec §9.3 path B).
    *
@@ -296,10 +305,10 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // Starting playback needs a resumed AudioContext, which the browser only allows
   // after a gesture; the play button is that gesture.
   if (status === 'loading') {
-    return h('div', { style: S.page }, h('p', { style: S.desc }, t('正在读取工程…')))
+    return h('div', { style: S.workbench }, h('p', { style: S.desc }, t('正在读取工程…')))
   }
   if (status === 'error') {
-    return h('div', { style: S.page },
+    return h('div', { style: S.workbench },
       h(Notice, { tone: 'error' }, error),
       h('div', null, h(Btn, { onClick: () => void reload() }, t('重试'))),
     )
@@ -310,7 +319,24 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const formats = availableFormats(project)
   const chosenFormat = formats.includes(exportFormat) ? exportFormat : formats[0]
 
-  return h('div', { style: S.page },
+  // The panel owns its own height so the header, the preview row and the
+  // transport stay put while only the tracks scroll (improvement plan 01, I-05).
+  //
+  // Getting this number right took two tries and either mistake is worth
+  // knowing about: `height: 100%` does not work, because the slot's container is
+  // content-sized (`conversation.view` reports 0×0 while its children render), so
+  // a percentage resolves against nothing and the panel grows without limit. And
+  // subtracting only the conversation header is not enough either — the message
+  // composer is drawn *over* the bottom of the view, and it grows from ~127px to
+  // ~167px on a narrow window, so a 180px subtraction let the tracks slide under
+  // it at 1366×768.
+  //
+  // Measured: the view starts ~76px down and the composer takes 127–167px, so
+  // 76 + 170 = 246 is the allowance. Verified at 1366×768, 1920×1080, 2400×1080.
+  return h('div', { style: { ...S.workbench, height: 'calc(100vh - 246px)', minHeight: 360, overflow: 'hidden' } },
+    // The header, the notices and the preview row are frozen: only the track
+    // area scrolls, so the picture and the tools never scroll away (improvement
+    // plan 01, I-05 — the "frozen pane" the user asked for).
     h('div', { style: S.header },
       h(Btn, { onClick: onBack }, t('← 返回')),
       h('h2', { style: S.title }, project.name),
@@ -346,7 +372,28 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
     mentionNotice ? h(Notice, null, mentionNotice) : null,
     exporter.error ? h(Notice, { tone: 'error' }, exporter.error) : null,
     exporter.job ? h(Notice, exporter.job.status === 'error' ? { tone: 'error' } : null, describeJob(exporter.job)) : null,
-    h(Preview, { root, projectId, project, transport }),
+    // The preview row: picture on the left, clip properties on the right, the way
+    // 剪映 puts them. The row takes at most 38% of the panel so the tracks keep
+    // the rest.
+    h('div', { style: { display: 'flex', gap: 10, minHeight: 0, flex: '0 0 auto', maxHeight: '38%' } },
+      h('div', { style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex' } },
+        h(Preview, { root, projectId, project, transport }),
+      ),
+      h('div', {
+        style: {
+          flex: '0 0 220px', minWidth: 0, overflow: 'auto',
+          border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px',
+          background: C.softer,
+        },
+      },
+        h(ClipProperties, {
+          selection,
+          track: selectedTrack,
+          item: selectedItem,
+          onEdit: (request) => applyEdit({ ...request, trackId: selection?.trackId, itemId: selection?.itemId }),
+        }),
+      ),
+    ),
     h(Timeline, {
       root,
       projectId,
@@ -360,19 +407,20 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       onRedo: redo,
       range,
       onRange: setRange,
-    }),
-    h(ClipProperties, {
-      selection,
-      track: selectedTrack,
-      item: selectedItem,
-      onEdit: (request) => applyEdit({ ...request, trackId: selection?.trackId, itemId: selection?.itemId }),
+      onClearSelection: clearSelection,
     }),
   )
 }
 
-export function ClipBayPanel({ useWorkspaces, useSessions, inputActions, useInput }) {
-  const workspace = pickWorkspace(useWorkspaces, useSessions)
+export function ClipBayPanel({ useWorkspaces, sessionId, inputActions, useInput }) {
+  const snapshot = useWorkspaces ? useWorkspaces((value) => value) : undefined
+  const workspace = workspaceForSession(snapshot?.items, sessionId)
   const [opened, setOpened] = useState(null)
+
+  // A different Session is a different workspace, and an open project belongs to
+  // the old one — close it rather than let the shell keep writing to a folder the
+  // page no longer points at.
+  useEffect(() => { setOpened(null) }, [workspace?.path])
 
   // The panel has no config of its own; it borrows the settings page's language
   // preference so both halves of the plugin read the same way. Rendering is not
@@ -386,8 +434,8 @@ export function ClipBayPanel({ useWorkspaces, useSessions, inputActions, useInpu
   }, [])
 
   if (!workspace?.path) {
-    return h('div', { style: S.page },
-      h('p', { style: S.desc }, t('还没有打开任何工作区。先在左侧打开一个工作区，再回到剪辑台。')),
+    return h('div', { style: S.workbench },
+      h('p', { style: S.desc }, t('这个会话还没有归属的工作区。先打开一个工作区，再回到剪辑台。')),
     )
   }
   if (opened) {

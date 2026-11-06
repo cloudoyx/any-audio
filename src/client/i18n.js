@@ -156,7 +156,7 @@ export const EN = {
   '剪辑台': 'Clip bay',
   '正在读取工程…': 'Loading projects…',
   '这个工作区还没有工程。在会话里让 Agent 建一个：说「新建一个剪辑台工程」即可。': 'This workspace has no projects yet. Ask the agent in a conversation to create one.',
-  '还没有打开任何工作区。先在左侧打开一个工作区，再回到剪辑台。': 'No workspace is open yet. Open one from the sidebar, then come back to the clip bay.',
+  '这个会话还没有归属的工作区。先打开一个工作区，再回到剪辑台。': 'This session has no workspace yet. Open one, then come back to the clip bay.',
   '时间轴还没做，下一步就有了。': 'The timeline comes in the next step.',
   '含视频': 'Video',
   '个工程': 'projects',
