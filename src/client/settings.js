@@ -495,7 +495,7 @@ function Page() {
   if (!state) return h('div', { style: S.page }, h('p', { style: S.desc }, t('正在读取 AnyAudio 设置…')))
 
   setLanguage(detectLanguage(state.config))
-  if (LANG === 'en') document.documentElement.lang = 'en'
+  if (language() === 'en') document.documentElement.lang = 'en'
 
   async function saveLanguage(value) {
     try {

@@ -17,30 +17,11 @@ import { t, detectLanguage, setLanguage } from '../i18n.js'
 
 export const CLIP_BAY_ID = 'clip-bay'
 
-/** Tab icon. The owner supplies the edge length and whether the tab is active. */
-export function ClipBayIcon({ size = 16, active }) {
-  return h('svg', {
-    width: size,
-    height: size,
-    viewBox: '0 0 16 16',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.3,
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    'aria-hidden': 'true',
-    style: { opacity: active ? 1 : 0.85 },
-  },
-    h('rect', { x: 1.4, y: 3, width: 13.2, height: 10, rx: 1.6 }),
-    h('path', { d: 'M5.2 3v10M10.8 3v10' }),
-  )
-}
-
 /**
  * Pick the workspace the page should read.
  *
- * `useWorkspaces` and `useSessions` are standard props of a root-scoped main
- * panel, so they are always present; the defensive reads only guard against a
+ * `useWorkspaces` and `useSessions` are standard props of a Conversation View,
+ * so they are always present; the defensive reads only guard against a
  * registry that is still loading.
  */
 function pickWorkspace(useWorkspaces, useSessions) {

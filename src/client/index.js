@@ -13,8 +13,8 @@
  */
 import { h } from './ui.js'
 import { Page } from './settings.js'
-import { ClipBayPanel, ClipBayIcon, CLIP_BAY_ID } from './clipbay/panel.js'
-import { detectLanguage } from './i18n.js'
+import { ClipBayPanel, CLIP_BAY_ID } from './clipbay/panel.js'
+import { detectLanguage, t } from './i18n.js'
 import { bytes } from './ui.js'
 
 export const name = 'any-audio'
@@ -32,26 +32,20 @@ function apply(ctx) {
     console.error('[any-audio] settings section failed', error)
   }
 
-  // The tab icon and the panel body are two slots joined by one id: the sidebar
-  // owns the button and dispatches `main` with this same key.
+  // The clip bay is one of the Conversation Views — the same row of tabs as
+  // 对话 / 轨迹 / 画廊 / 上下文 / 编队 / 记忆系统. The row is the session-scoped
+  // `conversation.view` list slot, not `sidebar.panellist` (that one is the left
+  // rail). `id` is the cell address the owner switches on; `label` is what the
+  // tab shows, read on every projection so it follows the locale.
   try {
-    ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-      name: 'sidebar.panellist',
+    ctx.slots.inject('conversation.view', () => ctx.slots.register({
+      name: 'conversation.view',
       id: CLIP_BAY_ID,
       order: 40,
-      label: () => '剪辑台',
-    }, ClipBayIcon))
-  } catch (error) {
-    console.error('[any-audio] clip bay tab failed', error)
-  }
-
-  try {
-    ctx.slots.inject('main', () => ctx.slots.register({
-      name: 'main',
-      key: CLIP_BAY_ID,
+      label: () => t('剪辑台'),
     }, ClipBayPanel))
   } catch (error) {
-    console.error('[any-audio] clip bay panel failed', error)
+    console.error('[any-audio] clip bay view failed', error)
   }
 }
 
