@@ -15,6 +15,7 @@ import { h, useState, useEffect, useCallback, S, Btn, Notice } from '../ui.js'
 import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
+import { Timeline } from './timeline.js'
 
 export const CLIP_BAY_ID = 'clip-bay'
 
@@ -109,8 +110,8 @@ function ProjectShell({ root, projectId, onBack }) {
     )
   }
 
-  // M5.1 loads and serializes the project; the timeline that edits it arrives
-  // with the rest of M5. Until then the shell proves the file round-trips.
+  // M5.1 loads and serializes the project; the timeline draws its waveform now,
+  // and editing arrives with the rest of M5.
   return h('div', { style: S.page },
     h('div', { style: S.header },
       h(Btn, { onClick: onBack }, t('← 返回')),
@@ -119,9 +120,7 @@ function ProjectShell({ root, projectId, onBack }) {
       h('span', { style: S.chip }, formatDuration(project.durationSec)),
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
     ),
-    h('div', { style: { ...S.card, borderStyle: 'dashed', alignItems: 'center', padding: '40px 14px' } },
-      h('p', { style: S.desc }, t('时间轴还没做，下一步就有了。')),
-    ),
+    h(Timeline, { root, projectId, project, materials }),
   )
 }
 

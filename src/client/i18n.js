@@ -162,6 +162,11 @@ export const EN = {
   '个工程': 'projects',
   '轨': 'tracks',
   '个素材': 'materials',
+  '缩放': 'Zoom',
+  '段': 'clips',
+  '已静音': 'muted',
+  '独奏': 'solo',
+  '这个工程还没有轨道。': 'This project has no tracks yet.',
   '← 返回': '← Back',
 }
 
