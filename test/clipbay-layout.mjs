@@ -96,8 +96,11 @@ test('clip properties sit beside the preview, not below the timeline', () => {
   assert.ok(previewAt > 0 && propsAt > 0 && timelineAt > 0, 'all three render')
   assert.ok(propsAt > previewAt, 'the properties come after the preview in document order')
   assert.ok(propsAt < timelineAt, 'and before the timeline, so they share its row')
-  const column = panel.slice(propsAt - 500, propsAt)
-  assert.match(column, /flex: '0 0 220px'/, 'the properties column has a fixed width')
+  const column = panel.slice(propsAt - 700, propsAt)
+  assert.match(column, /flex: '0 1 220px'/, 'the properties column is 220px wide but may shrink')
+  // On a squeezed panel (wide right sidebar on a 16:9 screen) the column has to
+  // give way, otherwise the picture is pushed down to a 124px thumbnail.
+  assert.match(column, /minWidth: 132/, 'and has a floor so the fields stay usable')
 })
 
 test('the timeline is the only scrolling area', () => {

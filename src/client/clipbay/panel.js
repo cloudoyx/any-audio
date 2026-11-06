@@ -327,13 +327,16 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // content-sized (`conversation.view` reports 0×0 while its children render), so
   // a percentage resolves against nothing and the panel grows without limit. And
   // subtracting only the conversation header is not enough either — the message
-  // composer is drawn *over* the bottom of the view, and it grows from ~127px to
-  // ~167px on a narrow window, so a 180px subtraction let the tracks slide under
-  // it at 1366×768.
+  // composer is drawn *over* the bottom of the view.
   //
-  // Measured: the view starts ~76px down and the composer takes 127–167px, so
-  // 76 + 170 = 246 is the allowance. Verified at 1366×768, 1920×1080, 2400×1080.
-  return h('div', { style: { ...S.workbench, height: 'calc(100vh - 246px)', minHeight: 360, overflow: 'hidden' } },
+  // Measured across the widths the panel is used at: the view starts 76px down
+  // (82px once the conversation header wraps) and the composer takes 167px, so
+  // 82 + 167 = 249 is the allowance. Checked at 720×600, 1000×700, 1366×768,
+  // 1920×1020, 1920×1080 and 2867×1200, with the sidebars open, closed and
+  // dragged to several widths; the panel stays clear of the composer each time.
+  // `minHeight` is a floor for absurdly short windows, kept below what a 600px
+  // window leaves so it can never push the panel under the composer.
+  return h('div', { style: { ...S.workbench, height: 'calc(100vh - 250px)', minHeight: 300, overflow: 'hidden' } },
     // The header, the notices and the preview row are frozen: only the track
     // area scrolls, so the picture and the tools never scroll away (improvement
     // plan 01, I-05 — the "frozen pane" the user asked for).
@@ -381,7 +384,16 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       ),
       h('div', {
         style: {
-          flex: '0 0 220px', minWidth: 0, overflow: 'auto',
+          // 220px beside the picture, but it gives way before the picture does.
+          // `flex-shrink` alone does not achieve that: the preview is `flex: 1 1 0`,
+          // so it happily absorbs the leftover space and the row never overflows,
+          // which leaves this column at 220px and the video a 124px thumbnail when
+          // a wide right sidebar squeezes the workstation to ~390px. `maxWidth`
+          // is what actually yields: on a wide panel 45% is far more than 220px so
+          // nothing changes, and on a narrow one the column shrinks to its 132px
+          // floor while the picture keeps the rest.
+          flex: '0 1 220px', minWidth: 132, maxWidth: '45%', boxSizing: 'border-box',
+          overflow: 'auto',
           border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px',
           background: C.softer,
         },
