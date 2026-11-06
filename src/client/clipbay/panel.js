@@ -15,6 +15,7 @@ import { h, useState, useEffect, useCallback, S, Btn, Notice } from '../ui.js'
 import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
+import { usePlayback } from './audio.js'
 import { Timeline } from './timeline.js'
 
 export const CLIP_BAY_ID = 'clip-bay'
@@ -99,7 +100,17 @@ function ProjectList({ root, onOpen }) {
 
 function ProjectShell({ root, projectId, onBack }) {
   const { status, error, project, materials, reload } = useProject(root, projectId)
+  const transport = usePlayback(root, projectId)
+  const setTransportProject = transport.setProject
 
+  // The transport schedules from the project it is handed, so it must see the
+  // current arrangement rather than whatever was loaded when it mounted.
+  useEffect(() => {
+    if (project) setTransportProject(project)
+  }, [project, setTransportProject])
+
+  // Starting playback needs a resumed AudioContext, which the browser only allows
+  // after a gesture; the play button is that gesture.
   if (status === 'loading') {
     return h('div', { style: S.page }, h('p', { style: S.desc }, t('正在读取工程…')))
   }
@@ -110,17 +121,14 @@ function ProjectShell({ root, projectId, onBack }) {
     )
   }
 
-  // M5.1 loads and serializes the project; the timeline draws its waveform now,
-  // and editing arrives with the rest of M5.
   return h('div', { style: S.page },
     h('div', { style: S.header },
       h(Btn, { onClick: onBack }, t('← 返回')),
       h('h2', { style: S.title }, project.name),
       h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
-      h('span', { style: S.chip }, formatDuration(project.durationSec)),
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
     ),
-    h(Timeline, { root, projectId, project, materials }),
+    h(Timeline, { root, projectId, project, materials, transport }),
   )
 }
 

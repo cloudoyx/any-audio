@@ -163,6 +163,8 @@ export const EN = {
   '轨': 'tracks',
   '个素材': 'materials',
   '缩放': 'Zoom',
+  '播放': 'Play',
+  '暂停': 'Pause',
   '段': 'clips',
   '已静音': 'muted',
   '独奏': 'solo',

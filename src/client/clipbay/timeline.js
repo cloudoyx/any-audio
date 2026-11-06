@@ -1,16 +1,17 @@
 /**
- * The timeline surface (plan M5.2).
+ * The timeline surface (plan M5.2–M5.3).
  *
- * This step draws the real waveform of every clip: track heads on the left, a
- * time ruler on top, one canvas per clip. Editing (drag, trim, split) is M5.4, so
- * the pointer handlers are not here yet.
+ * Track heads on the left, a time ruler on top, one canvas per clip, and a
+ * playhead driven by the transport.
  *
- * Geometry: seconds map to pixels through one `scale`. Every clip canvas is
- * positioned with `left = (startSec - scrollSec) * scale` and sized
- * `lengthSec * scale`; zoom only changes `scale`, which is why zooming never
- * re-reads a peak file — the same buckets are aggregated onto a new pixel width.
+ * Geometry: seconds map to pixels through one `scale`. Every clip is positioned
+ * with `left = (startSec - scrollSec) * scale` and sized `lengthSec * scale`;
+ * zoom only changes `scale`, which is why zooming never re-reads a peak file.
+ *
+ * Editing (drag, trim, split) is M5.4 — the pointer handlers below only place the
+ * playhead and select a track.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { h, S, Btn, C } from '../ui.js'
 import { t } from '../i18n.js'
 import { itemLengthSec, contentEndSec } from './serialize.js'
@@ -48,6 +49,14 @@ export function rulerLabel(seconds, step) {
   const rest = total - minutes * 60
   const decimals = step < 1 ? 1 : 0
   return `${minutes}:${rest.toFixed(decimals).padStart(decimals ? 4 : 2, '0')}`
+}
+
+/** m:ss.s for the transport readout. */
+export function clockLabel(seconds) {
+  const total = Math.max(0, Number(seconds) || 0)
+  const minutes = Math.floor(total / 60)
+  const rest = total - minutes * 60
+  return `${minutes}:${rest.toFixed(1).padStart(4, '0')}`
 }
 
 function ClipCanvas({ peaks, inSec, outSec, width, height, color }) {
@@ -95,6 +104,7 @@ function Clip({ item, track, peaks, scale, scrollSec, height }) {
   const color = CATEGORY_COLOR[track.category] || CATEGORY_COLOR.other
   const fadeIn = Math.min(width / 2, (Number(item.fadeInSec) || 0) * scale)
   const fadeOut = Math.min(width / 2, (Number(item.fadeOutSec) || 0) * scale)
+  const dimmed = track.muted || item.muted
 
   return h('div', {
     style: {
@@ -104,13 +114,13 @@ function Clip({ item, track, peaks, scale, scrollSec, height }) {
       width,
       height: height - 4,
       borderRadius: 4,
-      border: `1px solid ${track.muted ? C.border : color}`,
-      background: track.muted || item.muted ? 'rgba(128,128,128,0.10)' : `${color}22`,
+      border: `1px solid ${dimmed ? C.border : color}`,
+      background: dimmed ? 'rgba(128,128,128,0.10)' : `${color}22`,
       overflow: 'hidden',
       opacity: item.muted ? 0.45 : 1,
     },
   },
-    h(ClipCanvas, { peaks, inSec: item.inSec, outSec: item.outSec, width, height: height - 4, color: `${color}` }),
+    h(ClipCanvas, { peaks, inSec: item.inSec, outSec: item.outSec, width, height: height - 4, color }),
     fadeIn > 0
       ? h('div', { style: { position: 'absolute', left: 0, top: 0, width: fadeIn, height: '100%', background: 'linear-gradient(to right, rgba(0,0,0,0.55), transparent)' } })
       : null,
@@ -144,7 +154,13 @@ function TrackRow({ track, peaksById, scale, scrollSec, active, onSelect }) {
       h('span', { style: { ...S.desc, fontSize: 10 } },
         `${track.items.length} ${t('段')} · ${track.volumeDb} dB${track.muted ? ` · ${t('已静音')}` : ''}${track.solo ? ` · ${t('独奏')}` : ''}`),
     ),
-    h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' } },
+    h('div', {
+      style: { position: 'relative', height, flex: 1, overflow: 'hidden' },
+      onClick: (event) => {
+        const box = event.currentTarget.getBoundingClientRect()
+        onSelect(event, (event.clientX - box.left) / scale + scrollSec)
+      },
+    },
       track.items.map((item) => h(Clip, {
         key: item.id,
         item,
@@ -158,32 +174,62 @@ function TrackRow({ track, peaksById, scale, scrollSec, active, onSelect }) {
   )
 }
 
-export function Timeline({ root, projectId, project, materials }) {
+export function Timeline({ root, projectId, project, materials, transport }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const peaksById = usePeaks(root, projectId, materials)
   const duration = Math.max(contentEndSec(project), 1)
+  const positionSec = transport?.positionSec ?? 0
+  const playheadX = positionSec * scale
+
+  const seekTo = useCallback((seconds) => {
+    transport?.seek?.(Math.max(0, Math.min(duration, seconds)))
+  }, [transport, duration])
+
+  // Space toggles playback unless the focus is in a field. Ctrl+Z is M5.6.
+  useEffect(() => {
+    const onKey = (event) => {
+      const tag = event.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
+      if (event.code === 'Space') {
+        event.preventDefault()
+        if (transport?.playing) transport.pause()
+        else transport?.play?.()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [transport])
 
   return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+      h(Btn, { onClick: () => (transport?.playing ? transport.pause() : transport?.play?.()), kind: 'primary' },
+        transport?.playing ? t('暂停') : t('播放')),
+      h('span', { style: { ...S.mono, minWidth: 96 } }, `${clockLabel(positionSec)} / ${clockLabel(duration)}`),
+      h('span', { style: { flex: 1 } }),
       h('span', { style: S.desc }, t('缩放')),
       h(Btn, { onClick: () => setScale((value) => Math.max(10, value / 1.5)) }, '−'),
       h('span', { style: { ...S.mono, minWidth: 56, textAlign: 'center' } }, `${Math.round(scale)} px/s`),
       h(Btn, { onClick: () => setScale((value) => Math.min(600, value * 1.5)) }, '+'),
-      h('span', { style: { flex: 1 } }),
       h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
-      h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
     ),
+    transport?.error ? h('div', { style: S.notice('error') }, transport.error) : null,
     h('div', {
       style: {
         border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'auto',
         maxHeight: '60vh', background: C.softer,
       },
     },
-      h('div', { style: { width: HEAD_WIDTH + duration * scale, minWidth: '100%' } },
+      h('div', { style: { width: HEAD_WIDTH + duration * scale, minWidth: '100%', position: 'relative' } },
         h('div', { style: { display: 'flex' } },
           h('div', { style: { width: HEAD_WIDTH, flex: '0 0 auto', borderRight: `1px solid ${C.border}` } }),
-          h('div', { style: { flex: 1, position: 'relative' } },
+          h('div', {
+            style: { flex: 1, position: 'relative', cursor: 'pointer' },
+            onClick: (event) => {
+              const box = event.currentTarget.getBoundingClientRect()
+              seekTo((event.clientX - box.left) / scale)
+            },
+          },
             h(Ruler, { scale, durationSec: duration, scrollSec: 0 }),
           ),
         ),
@@ -196,8 +242,17 @@ export function Timeline({ root, projectId, project, materials }) {
             scale,
             scrollSec: 0,
             active: track.id === activeTrackId,
-            onSelect: () => setActiveTrackId(track.id),
+            onSelect: (event, seconds) => {
+              setActiveTrackId(track.id)
+              if (typeof seconds === 'number') seekTo(seconds)
+            },
           })),
+        h('div', {
+          style: {
+            position: 'absolute', top: 0, bottom: 0, width: 1,
+            left: HEAD_WIDTH + playheadX, background: C.accent, pointerEvents: 'none',
+          },
+        }),
       ),
     ),
   )
