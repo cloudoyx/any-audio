@@ -201,7 +201,12 @@ export const ttsToolDefinition = finalizeTool({
     if (files.length === 0) {
       throw new Error(warnings.length > 0 ? `no narration was produced: ${warnings.join('; ')}` : 'no narration was produced')
     }
-    return { ok: true, provider, files, warnings }
+    // The top-level `provider` is only the default a batch may override, so the
+    // reported engine is whatever the produced files actually used: one name for
+    // a single-engine batch, the mixed list otherwise. Reporting the configured
+    // default here would say "mimo" for a batch of edge files.
+    const usedProviders = [...new Set(files.map((file) => file.provider))]
+    return { ok: true, provider: usedProviders.length === 1 ? usedProviders[0] : usedProviders.join('+'), files, warnings }
   },
 })
 
