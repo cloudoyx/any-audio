@@ -20,9 +20,9 @@ import { drawClipWaveform } from './waveform.js'
 import { usePeaks } from './peaks.js'
 import { itemLength, itemEnd } from './edit.js'
 
-const TRACK_HEIGHT = 54
-const TRACK_HEIGHT_ACTIVE = 78
-const HEAD_WIDTH = 150
+const TRACK_HEIGHT = 68
+const TRACK_HEIGHT_ACTIVE = 88
+const HEAD_WIDTH = 168
 const RULER_HEIGHT = 22
 const EDGE_GRAB = 6
 
@@ -158,23 +158,108 @@ function Clip({ item, track, peaks, scale, height, selected, preview, onPointerD
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, onSelect, drag, selection, onClipPointerDown, onClipSelect }) {
+function TrackHead({ track, active, onSelect, onEdit }) {
+  const [name, setName] = useState(track.name)
+  const [editing, setEditing] = useState(false)
+
+  useEffect(() => { setName(track.name) }, [track.name])
+
+  const commitName = () => {
+    setEditing(false)
+    const value = name.trim()
+    if (!value || value === track.name) { setName(track.name); return }
+    onEdit({ kind: 'track-name', name: value })
+  }
+
+  return h('div', {
+    onClick: onSelect,
+    style: {
+      width: HEAD_WIDTH, flex: '0 0 auto', padding: '4px 8px 4px 8px', boxSizing: 'border-box',
+      display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'center',
+      borderRight: `1px solid ${C.border}`, background: active ? C.soft : 'transparent', cursor: 'pointer',
+    },
+  },
+    editing
+      ? h('input', {
+        autoFocus: true,
+        value: name,
+        onChange: (event) => setName(event.target.value),
+        onBlur: commitName,
+        onKeyDown: (event) => {
+          if (event.key === 'Enter') commitName()
+          if (event.key === 'Escape') { setName(track.name); setEditing(false) }
+          event.stopPropagation()
+        },
+        onClick: (event) => event.stopPropagation(),
+        style: { ...S.input, fontSize: 12, padding: '1px 4px', width: '100%' },
+      })
+      : h('span', {
+        onDoubleClick: (event) => { event.stopPropagation(); setEditing(true) },
+        title: t('双击改名'),
+        style: { fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }, track.name),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+      h(Btn, {
+        kind: track.muted ? 'primary' : 'plain',
+        onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-mute', muted: !track.muted }) },
+        title: t('静音'),
+        style: { padding: '0 5px', fontSize: 10, minWidth: 18 },
+      }, 'M'),
+      h(Btn, {
+        kind: track.solo ? 'primary' : 'plain',
+        onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-solo', solo: !track.solo }) },
+        title: t('独奏'),
+        style: { padding: '0 5px', fontSize: 10, minWidth: 18 },
+      }, 'S'),
+      h('span', { style: { ...S.desc, fontSize: 10, marginLeft: 2 } }, `${track.items.length} ${t('段')}`),
+      h('span', { style: { flex: 1 } }),
+      h(Btn, {
+        onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-delete' }) },
+        title: t('删除轨道'),
+        style: { padding: '0 4px', fontSize: 9, lineHeight: 1.3 },
+      }, '✕'),
+    ),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 24, color: C.muted } }, t('音量')),
+      h('input', {
+        type: 'range',
+        min: -60,
+        max: 12,
+        step: 0.5,
+        value: track.volumeDb,
+        title: `${t('音量')} ${track.volumeDb} dB`,
+        onChange: (event) => onEdit({ kind: 'track-volume', volumeDb: Number(event.target.value) }),
+        onClick: (event) => event.stopPropagation(),
+        onPointerDown: (event) => event.stopPropagation(),
+        style: { flex: 1, minWidth: 0, height: 11 },
+      }),
+      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 30, textAlign: 'right' } }, `${track.volumeDb}`),
+    ),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 24, color: C.muted } }, t('声像')),
+      h('input', {
+        type: 'range',
+        min: -1,
+        max: 1,
+        step: 0.05,
+        value: track.pan,
+        title: `${t('声像')} ${track.pan}`,
+        onChange: (event) => onEdit({ kind: 'track-pan', pan: Number(event.target.value) }),
+        onClick: (event) => event.stopPropagation(),
+        onPointerDown: (event) => event.stopPropagation(),
+        style: { flex: 1, minWidth: 0, height: 11 },
+      }),
+      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 30, textAlign: 'right' } }, track.pan.toFixed(2)),
+    ),
+  )
+}
+
+function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect }) {
   const height = active ? TRACK_HEIGHT_ACTIVE : TRACK_HEIGHT
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h('div', {
-      onClick: onSelect,
-      style: {
-        width: HEAD_WIDTH, flex: '0 0 auto', padding: '4px 8px', boxSizing: 'border-box',
-        display: 'flex', flexDirection: 'column', gap: 2, justifyContent: 'center',
-        borderRight: `1px solid ${C.border}`, background: active ? C.soft : 'transparent', cursor: 'pointer',
-      },
-    },
-      h('span', { style: { fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, track.name),
-      h('span', { style: { ...S.desc, fontSize: 10 } },
-        `${track.items.length} ${t('段')} · ${track.volumeDb} dB${track.muted ? ` · ${t('已静音')}` : ''}${track.solo ? ` · ${t('独奏')}` : ''}`),
-    ),
+    h(TrackHead, { track, active, onSelect, onEdit }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' } },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -323,6 +408,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             scale,
             active: track.id === activeTrackId,
             onSelect: () => setActiveTrackId(track.id),
+            onEdit: (request) => onEdit?.({ ...request, trackId: track.id }),
             drag: { preview: dragPreview },
             selection,
             onClipPointerDown: startDrag,

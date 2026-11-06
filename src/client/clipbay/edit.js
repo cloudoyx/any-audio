@@ -236,3 +236,78 @@ export function assertWithinLimits(project, { maxDurationSec = 900, maxTracks = 
   }
   return project
 }
+
+/** Rename a track. The head shows this, and nothing else depends on it. */
+export function renameTrack(project, { trackId, name }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  const value = String(name ?? '').trim()
+  if (!value) throw new EditError('a track name cannot be empty')
+  if (value === track.name) return { project: next, note: '' }
+  const before = track.name
+  track.name = value.slice(0, 80)
+  return { project: next, note: `重命名轨道「${before}」为「${track.name}」` }
+}
+
+/** Track fader, shared by every clip on the track. */
+export function setTrackVolume(project, { trackId, volumeDb }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  const value = Number(volumeDb)
+  if (!Number.isFinite(value)) throw new EditError('volume must be a number')
+  if (value < -120 || value > 24) throw new EditError('volume must stay between -120 and +24 dB')
+  if (tidy(value) === tidy(track.volumeDb)) return { project: next, note: '' }
+  track.volumeDb = tidy(value)
+  return { project: next, note: `调整轨道「${track.name}」音量 ${track.volumeDb} dB` }
+}
+
+/** Track pan, summed with each clip's own pan by the renderer. */
+export function setTrackPan(project, { trackId, pan }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  const value = Number(pan)
+  if (!Number.isFinite(value)) throw new EditError('pan must be a number')
+  if (value < -1 || value > 1) throw new EditError('pan must stay between -1 and 1')
+  if (tidy(value) === tidy(track.pan)) return { project: next, note: '' }
+  track.pan = tidy(value)
+  return { project: next, note: `调整轨道「${track.name}」声像 ${track.pan}` }
+}
+
+export function setTrackMuted(project, { trackId, muted }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  const value = Boolean(muted)
+  if (value === track.muted) return { project: next, note: '' }
+  track.muted = value
+  return { project: next, note: `${value ? '静音' : '取消静音'}轨道「${track.name}」` }
+}
+
+/**
+ * Solo is not exclusive: several tracks can be soloed together, and while any is,
+ * everything else is silent. Toggling the last one off restores normal playback.
+ */
+export function setTrackSolo(project, { trackId, solo }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  const value = Boolean(solo)
+  if (value === track.solo) return { project: next, note: '' }
+  track.solo = value
+  return { project: next, note: `${value ? '独奏' : '取消独奏'}轨道「${track.name}」` }
+}
+
+/**
+ * Delete a track and everything on it. Its materials stay: they belong to the
+ * project index, not to the track (spec §6.5).
+ */
+export function deleteTrack(project, { trackId }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  next.tracks = next.tracks.filter((entry) => entry.id !== trackId)
+  const count = track.items.length
+  return {
+    project: next,
+    note: count > 0
+      ? `删除轨道「${track.name}」及其 ${count} 个片段`
+      : `删除轨道「${track.name}」`,
+  }
+}

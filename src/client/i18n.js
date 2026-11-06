@@ -176,9 +176,12 @@ export const EN = {
   '删除': 'Delete',
   '所属轨道': 'Track',
   '声像': 'pan',
+  '双击改名': 'Double-click to rename',
+  '删除轨道': 'Delete track',
+  '静音': 'Mute',
+  '独奏': 'Solo',
   '段': 'clips',
   '已静音': 'muted',
-  '独奏': 'solo',
   '这个工程还没有轨道。': 'This project has no tracks yet.',
   '← 返回': '← Back',
 }

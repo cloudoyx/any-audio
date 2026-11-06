@@ -21,6 +21,8 @@ import { ClipProperties } from './properties.js'
 import {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits,
+  renameTrack, setTrackVolume, setTrackPan, setTrackMuted, setTrackSolo, deleteTrack,
+  EditError,
 } from './edit.js'
 
 export const CLIP_BAY_ID = 'clip-bay'
@@ -103,6 +105,40 @@ function ProjectList({ root, onOpen }) {
   )
 }
 
+/**
+ * The clip half of the edit dispatch. Kept separate from `applyEdit` so the track
+ * operations above stay readable; both end up in the same history and the same
+ * save path.
+ */
+function applyClipEdit(project, track, item, request, playhead, trackId, itemId) {
+  switch (request.kind) {
+    case 'move':
+      return moveClip(project, { trackId, itemId, startSec: item.startSec + request.deltaSec })
+    case 'trim':
+      return trimClip(project, { trackId, itemId, edge: request.edge, deltaSec: request.deltaSec })
+    case 'split':
+      return splitClip(project, { trackId, itemId, atSec: playhead })
+    case 'delete':
+      return deleteClip(project, { trackId, itemId })
+    case 'duplicate':
+      return duplicateClip(project, { trackId, itemId })
+    case 'gain':
+      return setClipGain(project, { trackId, itemId, gainDb: request.gainDb })
+    case 'pan':
+      return setClipPan(project, { trackId, itemId, pan: request.pan })
+    case 'fades':
+      return setClipFades(project, {
+        trackId, itemId,
+        fadeInSec: request.fadeInSec,
+        fadeOutSec: request.fadeOutSec,
+      })
+    case 'mute':
+      return setClipMuted(project, { trackId, itemId, muted: request.muted })
+    default:
+      return null
+  }
+}
+
 function ProjectShell({ root, projectId, onBack }) {
   const { status, error, project, materials, reload, update } = useProject(root, projectId)
   const transport = usePlayback(root, projectId)
@@ -121,56 +157,49 @@ function ProjectShell({ root, projectId, onBack }) {
   }, [])
 
   /**
-   * One entry point for every clip edit. The mutators are pure and return a note
-   * for `history`; an empty note means "nothing changed" and is not recorded,
-   * which is what keeps a drag that lands back where it started out of the log.
+   * One entry point for every edit. The mutators are pure and return a note for
+   * `history`; an empty note means "nothing changed" and is not recorded, which
+   * is what keeps a drag that lands back where it started out of the log.
    */
   const applyEdit = useCallback((request) => {
     if (!project) return
     const trackId = request.trackId ?? selection?.trackId
     const itemId = request.itemId ?? selection?.itemId
-    if (!itemId) return
     const track = project.tracks.find((entry) => entry.id === trackId)
     const item = track?.items.find((entry) => entry.id === itemId)
-    if (!track || !item) return
 
     const playhead = transport.positionSec
     let result
     try {
       switch (request.kind) {
-        case 'move':
-          result = moveClip(project, { trackId, itemId, startSec: item.startSec + request.deltaSec })
+        case 'track-name':
+          if (!track) throw new EditError(`no such track: ${trackId}`)
+          result = renameTrack(project, { trackId, name: request.name })
           break
-        case 'trim':
-          result = trimClip(project, { trackId, itemId, edge: request.edge, deltaSec: request.deltaSec })
+        case 'track-volume':
+          if (!track) throw new EditError(`no such track: ${trackId}`)
+          result = setTrackVolume(project, { trackId, volumeDb: request.volumeDb })
           break
-        case 'split':
-          result = splitClip(project, { trackId, itemId, atSec: playhead })
+        case 'track-pan':
+          if (!track) throw new EditError(`no such track: ${trackId}`)
+          result = setTrackPan(project, { trackId, pan: request.pan })
           break
-        case 'delete':
-          result = deleteClip(project, { trackId, itemId })
+        case 'track-mute':
+          if (!track) throw new EditError(`no such track: ${trackId}`)
+          result = setTrackMuted(project, { trackId, muted: request.muted })
           break
-        case 'duplicate':
-          result = duplicateClip(project, { trackId, itemId })
+        case 'track-solo':
+          if (!track) throw new EditError(`no such track: ${trackId}`)
+          result = setTrackSolo(project, { trackId, solo: request.solo })
           break
-        case 'gain':
-          result = setClipGain(project, { trackId, itemId, gainDb: request.gainDb })
-          break
-        case 'pan':
-          result = setClipPan(project, { trackId, itemId, pan: request.pan })
-          break
-        case 'fades':
-          result = setClipFades(project, {
-            trackId, itemId,
-            fadeInSec: request.fadeInSec,
-            fadeOutSec: request.fadeOutSec,
-          })
-          break
-        case 'mute':
-          result = setClipMuted(project, { trackId, itemId, muted: request.muted })
+        case 'track-delete':
+          if (!track) throw new EditError(`no such track: ${trackId}`)
+          result = deleteTrack(project, { trackId })
           break
         default:
-          return
+          if (!track || !item) return
+          result = applyClipEdit(project, track, item, request, playhead, trackId, itemId)
+          if (!result) return
       }
       assertWithinLimits(result.project)
     } catch (caught) {
@@ -180,7 +209,7 @@ function ProjectShell({ root, projectId, onBack }) {
     setEditError('')
     if (!result.note) return
     update(() => result.project, result.note)
-    if (request.kind === 'delete') setSelection(null)
+    if (request.kind === 'delete' || request.kind === 'track-delete') setSelection(null)
   }, [project, selection, transport.positionSec, update])
 
   // Starting playback needs a resumed AudioContext, which the browser only allows

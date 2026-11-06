@@ -15,6 +15,7 @@ const mod = await import(`data:text/javascript;base64,${Buffer.from(source, 'utf
 const {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits, EditError,
+  renameTrack, setTrackVolume, setTrackPan, setTrackMuted, setTrackSolo, deleteTrack,
   itemLength, itemEnd,
 } = mod
 
@@ -246,6 +247,60 @@ test('assertWithinLimits rejects more than 20 tracks', () => {
   const many = project()
   for (let i = 0; i < 20; i++) many.tracks.push({ ...many.tracks[0], id: `trk_${i}`, items: [] })
   assert.throws(() => assertWithinLimits(many), EditError, '21 tracks is over the limit')
+})
+
+test('renameTrack renames one track and rejects an empty name', () => {
+  const { project: after, note } = renameTrack(project(), { trackId: 'trk_1', name: '鼓组' })
+  assert.equal(after.tracks[0].name, '鼓组')
+  check(/重命名轨道/.test(note), 'the note names the rename')
+  assert.throws(() => renameTrack(project(), { trackId: 'trk_1', name: '   ' }), EditError, 'an empty name')
+  equal(renameTrack(project(), { trackId: 'trk_1', name: 'Drums' }).note, '', 'the same name records nothing')
+})
+
+test('setTrackVolume writes the fader and rejects out-of-range input', () => {
+  const { project: after, note } = setTrackVolume(project(), { trackId: 'trk_1', volumeDb: -12.5 })
+  close(after.tracks[0].volumeDb, -12.5, 'fader applied')
+  check(/音量/.test(note), 'the note names the volume')
+  assert.throws(() => setTrackVolume(project(), { trackId: 'trk_1', volumeDb: 30 }), EditError)
+  assert.throws(() => setTrackVolume(project(), { trackId: 'trk_1', volumeDb: -200 }), EditError)
+})
+
+test('setTrackPan writes the pan and rejects out-of-range input', () => {
+  const { project: after } = setTrackPan(project(), { trackId: 'trk_1', pan: 0.5 })
+  close(after.tracks[0].pan, 0.5, 'pan applied')
+  assert.throws(() => setTrackPan(project(), { trackId: 'trk_1', pan: -3 }), EditError)
+})
+
+test('setTrackMuted and setTrackSolo toggle independently', () => {
+  const muted = setTrackMuted(project(), { trackId: 'trk_1', muted: true })
+  equal(muted.project.tracks[0].muted, true, 'muted')
+  equal(muted.project.tracks[0].solo, false, 'solo untouched')
+  const soloed = setTrackSolo(project(), { trackId: 'trk_1', solo: true })
+  equal(soloed.project.tracks[0].solo, true, 'soloed')
+  equal(soloed.project.tracks[0].muted, false, 'mute untouched')
+})
+
+test('several tracks can be soloed at once', () => {
+  const before = project()
+  before.tracks.push({ ...before.tracks[0], id: 'trk_2', name: 'Second', items: [] })
+  const one = setTrackSolo(before, { trackId: 'trk_1', solo: true }).project
+  const two = setTrackSolo(one, { trackId: 'trk_2', solo: true }).project
+  equal(two.tracks.filter((track) => track.solo).length, 2, 'solo is not exclusive')
+})
+
+test('deleteTrack removes the track and its clips, and names how many', () => {
+  const before = project([item({ id: 'a' }), item({ id: 'b', startSec: 8 })])
+  const { project: after, note } = deleteTrack(before, { trackId: 'trk_1' })
+  assert.equal(after.tracks.length, 0, 'the track is gone')
+  check(/删除轨道「Drums」及其 2 个片段/.test(note), `the note counts the clips, got "${note}"`)
+})
+
+test('deleteTrack leaves the project materials alone', () => {
+  const before = project()
+  before.materials = [{ id: 'mat_1' }, { id: 'mat_2' }]
+  const { project: after } = deleteTrack(before, { trackId: 'trk_1' })
+  equal(after.tracks.length, 0, 'track gone')
+  equal(after.materials, before.materials, 'the material list is untouched')
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)
