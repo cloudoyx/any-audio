@@ -14,6 +14,7 @@
 import { h, useState, useEffect, useCallback, S, Btn, Notice } from '../ui.js'
 import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
+import { useProject } from './state.js'
 
 export const CLIP_BAY_ID = 'clip-bay'
 
@@ -95,13 +96,28 @@ function ProjectList({ root, onOpen }) {
   )
 }
 
-function ProjectShell({ project, onBack }) {
+function ProjectShell({ root, projectId, onBack }) {
+  const { status, error, project, materials, reload } = useProject(root, projectId)
+
+  if (status === 'loading') {
+    return h('div', { style: S.page }, h('p', { style: S.desc }, t('正在读取工程…')))
+  }
+  if (status === 'error') {
+    return h('div', { style: S.page },
+      h(Notice, { tone: 'error' }, error),
+      h('div', null, h(Btn, { onClick: () => void reload() }, t('重试'))),
+    )
+  }
+
+  // M5.1 loads and serializes the project; the timeline that edits it arrives
+  // with the rest of M5. Until then the shell proves the file round-trips.
   return h('div', { style: S.page },
     h('div', { style: S.header },
       h(Btn, { onClick: onBack }, t('← 返回')),
       h('h2', { style: S.title }, project.name),
-      h('span', { style: S.chip }, `${project.trackCount} ${t('轨')}`),
+      h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
       h('span', { style: S.chip }, formatDuration(project.durationSec)),
+      h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
     ),
     h('div', { style: { ...S.card, borderStyle: 'dashed', alignItems: 'center', padding: '40px 14px' } },
       h('p', { style: S.desc }, t('时间轴还没做，下一步就有了。')),
@@ -129,6 +145,8 @@ export function ClipBayPanel({ useWorkspaces, useSessions }) {
       h('p', { style: S.desc }, t('还没有打开任何工作区。先在左侧打开一个工作区，再回到剪辑台。')),
     )
   }
-  if (opened) return h(ProjectShell, { project: opened, onBack: () => setOpened(null) })
+  if (opened) {
+    return h(ProjectShell, { root: workspace.path, projectId: opened.id, onBack: () => setOpened(null) })
+  }
   return h(ProjectList, { root: workspace.path, onOpen: setOpened })
 }

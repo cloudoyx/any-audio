@@ -161,6 +161,7 @@ export const EN = {
   '含视频': 'Video',
   '个工程': 'projects',
   '轨': 'tracks',
+  '个素材': 'materials',
   '← 返回': '← Back',
 }
 
