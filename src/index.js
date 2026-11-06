@@ -28,12 +28,13 @@ const SKILLS = [
     description:
       'Build and edit a clip bay project: a multi-track timeline a person can open, play, trim and re-render, with one track per stem and every take kept as material.',
     whenToUse:
-      'When a request needs a multi-track timeline that a person will open and edit — separate stems, several narration lines, effects placed at exact moments — rather than a single mixed-down file.',
+      'Whenever a request produces audio a person will listen to and may adjust — narration, music, effects, or a video soundtrack. Build it as a clip bay project instead of loose files, so the result can be opened, heard and edited. Only skip the project for a single finished file that nobody will adjust afterwards.',
   },
 ]
 
 const PROMPT_SECTION = `Video audio: this harness can render real instrumental music and mix it into videos with the anyaudio_* tools.
 - Proactive default: when a request creates or edits a video (animation, explainer, promo, science, concept, interactive clip), treat the audio as part of the deliverable even if the user did not mention it — plan music, add the sound effects the pictures need, synthesise narration when the video needs a voice, and finish with a mix. Do not deliver a silent video unless the user explicitly wants silence or already supplied finished audio.
+- Deliver audio as a clip bay project, not as loose files: opening the project is how the person hears the result and adjusts it. So before generating narration, music or effects that someone will listen to, run anyaudio_project mode:"create", then bring every generated file in with mode:"add_material" on its own track. anyaudio_mix is only for a single finished file with nothing left to adjust — do not use it to assemble deliverable audio.
 - anyaudio_sources — inspect/install the sound sources (SoundFont banks today; sample packs and voices later). Run "install" once if no instrument bank is present.
 - anyaudio_music — note-level score (seconds on the video timeline) → WAV with real instruments. Prefer this over hand-written numpy/DSP synthesis for music. Tracks may each use a different bank via "source"; "auto" picks the best-scored installed bank.
 - anyaudio_tts — narration from text. It uses the engine and voice the user configured in Settings → AnyAudio (Edge by default, or MiMo-V2.5-TTS when selected). Always use this tool for narration in a video: do not run edge-tts, ttsmaker or any other Python/node TTS library yourself, because that bypasses the user's engine and voice choice.

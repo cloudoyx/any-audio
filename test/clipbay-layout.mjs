@@ -149,5 +149,17 @@ test('the head is narrow enough to leave the waveform its space', () => {
   assert.ok(head <= 150, `the track head must stay at or under 150px, got ${head}`)
 })
 
+test('the track heads are frozen against horizontal scrolling', () => {
+  // The heads name the track and carry its faders. Scrolled sideways they used
+  // to travel with the audio (measured: left edge 289 → -511 at scrollLeft 800),
+  // which leaves a wall of anonymous waveforms.
+  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 2000)
+  assert.match(head, /position: 'sticky'/, 'the head is sticky')
+  assert.match(head, /left: 0/, 'pinned to the left edge of the scroller')
+  assert.equal(/background: active \? C\.soft : 'transparent'/.test(head), false, 'a transparent head would let the clips show through it')
+  // The ruler's leading corner must stay put on both axes at once.
+  assert.match(timeline, /position: 'sticky', left: 0, zIndex: 3/, 'the ruler corner is frozen sideways too')
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1

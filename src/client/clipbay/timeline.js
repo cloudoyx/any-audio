@@ -183,8 +183,13 @@ function TrackHead({ track, active, height, onSelect, onEdit }) {
       // mixer strip, so it must not be the tallest thing in the row.
       width: HEAD_WIDTH, height, flex: '0 0 auto', padding: '2px 6px', boxSizing: 'border-box',
       display: 'flex', flexDirection: 'column', gap: 1, justifyContent: 'center',
-      borderRight: `1px solid ${C.border}`, background: active ? C.soft : 'transparent', cursor: 'pointer',
+      borderRight: `1px solid ${C.border}`, cursor: 'pointer',
       overflow: 'hidden',
+      // Frozen against horizontal scrolling: the head names the track and holds
+      // its faders, so it has to stay readable however far the timeline is
+      // scrolled. The background must be opaque or the clips slide through it.
+      position: 'sticky', left: 0, zIndex: 2,
+      background: active ? 'rgb(40,40,44)' : 'rgb(28,28,30)',
     },
   },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 } },
@@ -531,7 +536,14 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             background: 'rgb(28,28,30)', borderBottom: `1px solid ${C.border}`,
           },
         },
-          h('div', { style: { width: HEAD_WIDTH, flex: '0 0 auto', borderRight: `1px solid ${C.border}` } }),
+          h('div', {
+            // The ruler's corner stays put on both axes, or the labels would
+            // slide under it when the timeline scrolls sideways.
+            style: {
+              width: HEAD_WIDTH, flex: '0 0 auto', borderRight: `1px solid ${C.border}`,
+              position: 'sticky', left: 0, zIndex: 3, background: 'rgb(28,28,30)',
+            },
+          }),
           h('div', { style: { flex: 1, position: 'relative' } },
             h(Ruler, { scale, durationSec: duration, onSeek: seekTo }),
           ),
