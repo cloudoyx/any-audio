@@ -143,8 +143,18 @@ function applyClipEdit(project, track, item, request, playhead, trackId, itemId)
   }
 }
 
+/**
+ * Stand-in for the conversation's `useInput` hook when the slot does not supply
+ * one. It exists so the hook can be called unconditionally at the top of
+ * ProjectShell: `useInput` is a hook, and calling it from a click handler is an
+ * invalid hook call (React error #321) even though it looks like a getter.
+ */
+function useNoInput() {
+  return null
+}
+
 function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
-  const { status, error, project, materials, reload, update, undo, redo, canUndo, canRedo, markSaved } = useProject(root, projectId)
+  const { status, error, project, materials, dirty, reload, update, undo, redo, canUndo, canRedo, markSaved } = useProject(root, projectId)
   const transport = usePlayback(root, projectId)
   const setTransportProject = transport.setProject
   const [selection, setSelection] = useState(null)
@@ -156,11 +166,19 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // one export, and spec §6.8 keeps one-off UI state out of the project.
   const [exportFormat, setExportFormat] = useState('')
   const [exportNormalize, setExportNormalize] = useState(false)
+  // Read the draft here, at the top level, so 添加到对话 only has to append to a
+  // value it already has. Both the hook and its state are stable, so the read
+  // does not make the click handler stale.
+  const useInputState = typeof useInput === 'function' ? useInput : useNoInput
+  const draft = useInputState((state) => state)?.draft ?? ''
 
   // Debounced write plus a flush on unmount: switching to 对话 destroys this
   // component, and the last few hundred milliseconds must still reach the file.
+  // Autosave is gated on `dirty` rather than on "a project is loaded": mounting
+  // the panel must not write a file the person has not changed, because that
+  // write would put this panel's copy over whatever the Agent just wrote.
   const { flush } = useAutosave(root, project, {
-    enabled: Boolean(project),
+    enabled: Boolean(project) && dirty,
     onSaved: () => { setSaveError(''); markSaved() },
     onError: (message) => setSaveError(message),
   })
@@ -211,14 +229,13 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       return
     }
     try {
-      const current = typeof useInput === 'function' ? useInput((state) => state)?.draft : ''
-      inputActions.setDraft(appendToDraft(current, mention.text))
+      inputActions.setDraft(appendToDraft(draft, mention.text))
       inputActions.persistDraft?.()
       setMentionNotice(t('已加入对话输入框，切到「对话」继续补充要求。'))
     } catch (caught) {
       setMentionNotice(t('加入失败：{0}', caught instanceof Error ? caught.message : String(caught)))
     }
-  }, [project, selection, range, inputActions, useInput])
+  }, [project, selection, range, inputActions, draft])
 
   /**
    * One entry point for every edit. The mutators are pure and return a note for

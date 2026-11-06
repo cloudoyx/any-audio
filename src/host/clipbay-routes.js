@@ -146,6 +146,10 @@ function startRenderJob({ workspaceRoot, project, format, outputPath, normalize 
     outputPath,
     format,
     normalize,
+    // The first render of a draft measures the mix once and writes the number
+    // into project.json; every later render reuses it (spec §10.2). The route
+    // reads the project from disk, so writing it back here is safe.
+    freezeNormalize: true,
     signal: job.abort.signal,
     onProgress: (progress) => {
       job.phase = progress.phase

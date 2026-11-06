@@ -295,7 +295,7 @@ function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, sel
       // pointer handling above it.
       h('div', {
         style: { position: 'absolute', inset: 0, zIndex: -1 },
-        onPointerDown: (event) => onRangeStart(event, track, height),
+        onPointerDown: (event) => onRangeStart(event, track),
       }),
     ),
   )
@@ -313,15 +313,22 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const [rangeDrag, setRangeDrag] = useState(false)
 
   /**
-   * Dragging across an empty stretch of a track selects a time range on that
-   * track — one of the three selections spec §9.3 supports, and the one the
-   * acceptance script uses ("框选鼓组 20–35 秒").
+   * Dragging across a track selects a time range on that track — one of the three
+   * selections spec §9.3 supports, and the one the acceptance script uses
+   * ("框选鼓组 20–35 秒").
+   *
+   * The gesture is reachable two ways: pressing on an empty stretch of the track,
+   * or Shift/Alt-dragging a clip, which is the only option when one clip covers
+   * the whole track. Both resolve the coordinates against the track body, so the
+   * range means the same thing either way.
    *
    * The band is committed when the pointer is released, as one range, so moving
    * the pointer does not spam the parent with new state per frame.
    */
-  const startRange = useCallback((event, track, height) => {
-    const box = event.currentTarget.getBoundingClientRect()
+  const startRange = useCallback((event, track) => {
+    const box = event.target?.closest?.('[data-track-body]')?.getBoundingClientRect()
+      ?? event.currentTarget?.getBoundingClientRect?.()
+    if (!box) return
     const at = Math.max(0, Math.min(duration, (event.clientX - box.left) / scale))
     rangeRef.current = { trackId: track.id, anchorSec: at, pointerId: event.pointerId }
     setActiveTrackId(track.id)
@@ -369,6 +376,13 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const startDrag = useCallback((event, track, item) => {
     event.preventDefault()
     event.stopPropagation()
+    // Shift or Alt turns the same gesture into a range selection. A track that is
+    // covered by one long clip has no empty stretch to press on, so the modifier
+    // is the only way to cite a range there (spec §8.1, §15 step 6).
+    if (event.shiftKey || event.altKey) {
+      startRange(event, track)
+      return
+    }
     onSelect?.(track.id, item.id)
     const edge = event.target?.dataset?.edge
     dragRef.current = {
@@ -377,7 +391,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
       payload: { kind: edge ? 'trim' : 'move', trackId: track.id, itemId: item.id, edge },
     }
     setDrag({ kind: edge ? 'trim' : 'move', trackId: track.id, itemId: item.id, edge, deltaSec: 0 })
-  }, [onSelect])
+  }, [onSelect, startRange])
 
   const [drag, setDrag] = useState(null)
 

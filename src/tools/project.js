@@ -271,6 +271,9 @@ async function runRender(workspaceRoot, args, exec) {
     outputPath,
     format,
     signal: exec?.signal,
+    // The first export of a draft measures the mix once and writes the number
+    // into project.json; later exports reuse it (spec §10.2).
+    freezeNormalize: true,
   })
   return {
     ok: true,

@@ -19,7 +19,7 @@ import { muxVideo, probeDuration } from '../tools/mix.js'
 import { contentEndSec, validateProject } from './schema.js'
 import { projectDir, resolveInside } from './paths.js'
 import { findMaterial } from './materials.js'
-import { readMaterialIndex } from './store.js'
+import { readMaterialIndex, saveProject } from './store.js'
 
 /** Where an explicit export-time normalisation peaks (spec §10.2). */
 export const EXPORT_NORMALIZE_PEAK_DB = -1.5
@@ -190,6 +190,43 @@ export async function transcodeMp3(wavPath, mp3Path, { signal } = {}) {
 }
 
 /**
+ * Measure the mix once and write the compensation into `normalizeGainDb`
+ * (spec §10.2: "初稿时算一次，此后固定").
+ *
+ * The number is derived from the raw mix — `peakBeforeGainDb` is taken before
+ * either gain is applied — so `normalizeGainDb + masterFaderDb` stays a single
+ * sum and moving the master fader still moves the output.
+ *
+ * It runs only while the field is still zero. Once frozen, this returns null and
+ * every later export reuses the stored value, which is what keeps a fader change
+ * from being re-normalised away at the next export.
+ */
+async function freezeNormalizeGain(project, workspaceRoot, rendered, signal) {
+  if (Number(project.normalizeGainDb) !== 0) return null
+  if (!(rendered.peakBeforeGainDb > -Infinity)) return null
+  const normalizeGainDb = Number((EXPORT_NORMALIZE_PEAK_DB - rendered.peakBeforeGainDb).toFixed(2))
+  if (!Number.isFinite(normalizeGainDb)) return null
+
+  // Apply the newly measured gain to what is already rendered rather than
+  // rendering a second time: the only difference is this one scalar.
+  const gain = fromDb(normalizeGainDb)
+  for (const channel of rendered.channels) {
+    for (let i = 0; i < channel.length; i++) channel[i] *= gain
+  }
+
+  throwIfAborted(signal)
+  const next = { ...project, normalizeGainDb }
+  // An empty note: this is calibration, not an edit, so it must not appear in the
+  // history the person reads (spec §6.7).
+  await saveProject(workspaceRoot, next, { by: 'agent', note: '' })
+  return {
+    normalizeGainDb,
+    peakDb: Number(toDb(peakOf(rendered.channels)).toFixed(2)),
+    rmsDb: Number(toDb(rmsOf(rendered.channels)).toFixed(2)),
+  }
+}
+
+/**
  * Full export: render, then write WAV, MP3 or MP4.
  *
  * `normalize: true` re-peaks the mix at export time. It is OFF by default and
@@ -200,8 +237,24 @@ export async function transcodeMp3(wavPath, mp3Path, { signal } = {}) {
  * For MP4 the picture is copied and the render replaces its audio, keeping the
  * video's own length even when the project is shorter (plan M3). A cancellation
  * removes every partial file, including the intermediate WAV.
+ *
+ * `freezeNormalize` is the "算一次，此后固定" half of spec §10.2. A project that
+ * still has `normalizeGainDb === 0` gets it measured here, written back, and
+ * every later export reuses that number — so pulling a fader stays a real
+ * change instead of being cancelled by a fresh normalisation. Only the caller
+ * that can write the project (the tool) passes it; the UI export route leaves
+ * it off and renders with whatever is already frozen.
  */
-export async function exportProject({ project, workspaceRoot, outputPath, format = 'wav', signal, onProgress, normalize = false } = {}) {
+export async function exportProject({
+  project,
+  workspaceRoot,
+  outputPath,
+  format = 'wav',
+  signal,
+  onProgress,
+  normalize = false,
+  freezeNormalize = false,
+} = {}) {
   const target = String(format).toLowerCase()
   if (!['wav', 'mp3', 'mp4'].includes(target)) {
     throw new RenderError(`unknown export format "${format}"; use wav, mp3 or mp4`)
@@ -210,6 +263,14 @@ export async function exportProject({ project, workspaceRoot, outputPath, format
     throw new RenderError('this project has no video; export MP4 only for projects with a picture')
   }
   const rendered = await renderProject({ project, workspaceRoot, signal, onProgress })
+  const frozen = freezeNormalize ? await freezeNormalizeGain(project, workspaceRoot, rendered, signal) : null
+  if (frozen) {
+    // The measured gain is part of the render now, so the result reports it.
+    rendered.normalizeGainDb = frozen.normalizeGainDb
+    rendered.appliedGainDb = Number((frozen.normalizeGainDb + (Number(project.masterFaderDb) || 0)).toFixed(2))
+    rendered.peakDb = frozen.peakDb
+    rendered.rmsDb = frozen.rmsDb
+  }
   if (normalize) {
     throwIfAborted(signal)
     const peak = peakOf(rendered.channels)
