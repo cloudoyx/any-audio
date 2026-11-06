@@ -2,8 +2,8 @@
  * Clip bay — the multichannel editing surface.
  *
  * Plan M4: the tab exists, it opens, and it lists the projects of the workspace
- * the user is currently looking at. Editing arrives in M5, so opening a project
- * shows a shell that names it rather than pretending to have a timeline.
+ * the user is currently looking at. M5 added the timeline (waveform, playback,
+ * clip and track edits, undo, autosave) and M8 the picture preview and export.
  *
  * The workspace is resolved the same way image-gen and mnemon do it: the session
  * shown in the main view decides, and a session with no workspace falls back to
@@ -17,7 +17,9 @@ import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
 import { usePlayback } from './audio.js'
 import { useAutosave } from './saving.js'
+import { useExport, availableFormats, describeJob } from './exporter.js'
 import { Timeline } from './timeline.js'
+import { Preview } from './preview.js'
 import { ClipProperties } from './properties.js'
 import { buildMention, appendToDraft } from './mention.js'
 import {
@@ -153,11 +155,15 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
 
   // Debounced write plus a flush on unmount: switching to 对话 destroys this
   // component, and the last few hundred milliseconds must still reach the file.
-  useAutosave(root, project, {
+  const { flush } = useAutosave(root, project, {
     enabled: Boolean(project),
     onSaved: () => { setSaveError(''); markSaved() },
     onError: (message) => setSaveError(message),
   })
+
+  // An export renders from project.json on disk, so anything still inside the
+  // debounce window has to be written before the job starts.
+  const exporter = useExport(root, projectId, { name: project?.name, beforeStart: async () => { flush() } })
 
   // The transport schedules from the project it is handed, so it must see the
   // current arrangement rather than whatever was loaded when it mounted.
@@ -291,10 +297,20 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       h(Btn, { onClick: addToConversation, kind: (selection || range) ? 'primary' : undefined, disabled: !selection && !range }, t('添加到对话')),
       h(Btn, { onClick: undo, disabled: !canUndo, title: 'Ctrl+Z' }, t('撤销')),
       h(Btn, { onClick: redo, disabled: !canRedo, title: 'Ctrl+Shift+Z' }, t('重做')),
+      h('span', { style: { width: 8 } }),
+      exporter.running
+        ? h(Btn, { onClick: () => void exporter.cancel() }, t('取消导出'))
+        : h(Btn, {
+          onClick: () => void exporter.start(availableFormats(project)[0]),
+          kind: 'primary',
+        }, t('导出')),
     ),
     editError ? h(Notice, { tone: 'error' }, editError) : null,
     saveError ? h(Notice, { tone: 'error' }, `${t('保存失败')}：${saveError} ${t('编辑仍在这里，可以重试。')}`) : null,
     mentionNotice ? h(Notice, null, mentionNotice) : null,
+    exporter.error ? h(Notice, { tone: 'error' }, exporter.error) : null,
+    exporter.job ? h(Notice, exporter.job.status === 'error' ? { tone: 'error' } : null, describeJob(exporter.job)) : null,
+    h(Preview, { root, projectId, project, transport }),
     h(Timeline, {
       root,
       projectId,

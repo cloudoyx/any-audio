@@ -21,6 +21,9 @@ import { projectDir, resolveInside } from './paths.js'
 import { findMaterial } from './materials.js'
 import { readMaterialIndex } from './store.js'
 
+/** Where an explicit export-time normalisation peaks (spec §10.2). */
+export const EXPORT_NORMALIZE_PEAK_DB = -1.5
+
 export class RenderError extends Error {
   constructor(message) {
     super(message)
@@ -189,11 +192,16 @@ export async function transcodeMp3(wavPath, mp3Path, { signal } = {}) {
 /**
  * Full export: render, then write WAV, MP3 or MP4.
  *
+ * `normalize: true` re-peaks the mix at export time. It is OFF by default and
+ * must stay that way: the fix gain already lives in `normalizeGainDb`, so
+ * re-normalising on every export would silently undo the volume changes the
+ * person made (spec §10.2).
+ *
  * For MP4 the picture is copied and the render replaces its audio, keeping the
  * video's own length even when the project is shorter (plan M3). A cancellation
  * removes every partial file, including the intermediate WAV.
  */
-export async function exportProject({ project, workspaceRoot, outputPath, format = 'wav', signal, onProgress } = {}) {
+export async function exportProject({ project, workspaceRoot, outputPath, format = 'wav', signal, onProgress, normalize = false } = {}) {
   const target = String(format).toLowerCase()
   if (!['wav', 'mp3', 'mp4'].includes(target)) {
     throw new RenderError(`unknown export format "${format}"; use wav, mp3 or mp4`)
@@ -202,6 +210,19 @@ export async function exportProject({ project, workspaceRoot, outputPath, format
     throw new RenderError('this project has no video; export MP4 only for projects with a picture')
   }
   const rendered = await renderProject({ project, workspaceRoot, signal, onProgress })
+  if (normalize) {
+    throwIfAborted(signal)
+    const peak = peakOf(rendered.channels)
+    if (peak > 0) {
+      const gain = fromDb(EXPORT_NORMALIZE_PEAK_DB) / peak
+      for (const channel of rendered.channels) {
+        for (let i = 0; i < channel.length; i++) channel[i] *= gain
+      }
+      rendered.normalizedPeakDb = EXPORT_NORMALIZE_PEAK_DB
+      rendered.peakDb = Number(toDb(peakOf(rendered.channels)).toFixed(2))
+      rendered.rmsDb = Number(toDb(rmsOf(rendered.channels)).toFixed(2))
+    }
+  }
   const wavPath = target === 'wav' ? outputPath : `${outputPath}.render.wav`
   try {
     await writeRenderWav(rendered, wavPath, { signal })

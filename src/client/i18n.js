@@ -192,6 +192,16 @@ export const EN = {
   '选中一个片段或一条轨道，再点这里把它放进对话。': 'Select a clip or a track first, then add it to the conversation.',
   '已加入对话输入框，切到「对话」继续补充要求。': 'Added to the chat draft — switch to 对话 and describe the change.',
   '加入失败：{0}': 'Could not add it: {0}',
+  '这个工程只有音频，没有画面。': 'This project is audio only — there is no picture.',
+  '读不出这个工程的视频，时间轴还能用。': 'The video could not be read; the timeline still works.',
+  '导出': 'Export',
+  '取消导出': 'Cancel export',
+  '正在渲染…': 'Rendering…',
+  '正在渲染第 {0} / {1} 轨…': 'Rendering track {0} of {1}…',
+  '正在编码 {0}…': 'Encoding {0}…',
+  '导出完成：{0}': 'Export finished: {0}',
+  '导出失败': 'Export failed',
+  '已取消。': 'Cancelled.',
 }
 
 let LANG = 'zh'

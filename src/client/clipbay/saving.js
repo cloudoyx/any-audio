@@ -53,13 +53,15 @@ export function useAutosave(root, project, { enabled = true, onSaved, onError } 
 
   const flush = useCallback(() => {
     const queued = pendingRef.current
-    if (!queued) return
+    if (!queued) return Promise.resolve()
     pendingRef.current = null
     if (timerRef.current) {
       clearTimeout(timerRef.current)
       timerRef.current = 0
     }
-    saveProject(root, queued)
+    // The returned promise matters to callers that need the file on disk before
+    // doing something else — an export renders from project.json, not from memory.
+    return saveProject(root, queued)
       .then(() => { if (mountedRef.current) onSaved?.() })
       .catch((caught) => { if (mountedRef.current) onError?.(caught.message) })
   }, [root, onSaved, onError])

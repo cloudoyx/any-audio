@@ -463,6 +463,30 @@ await step('MP4 export without a video is refused', async () => {
   assert(/no video/.test(message), `expected a "no video" error, got "${message}"`)
 })
 
+await step('export does not re-normalise the mix unless asked', async () => {
+  // spec §10.2 / §15 step 9: the gain the person dialled in has to survive the
+  // export. Without the explicit switch a quiet mix stays quiet.
+  const material = constantTone(1, 0.5)
+  const track = { ...defaultTrack('trk_a', 'A'), items: [{ ...defaultItem('itm_a', 'mat_tone'), inSec: 0, outSec: 1 }] }
+  const { project } = await makeProject({
+    id: 'prj_normalize',
+    materials: { mat_tone: material },
+    tracks: [track],
+    masterFaderDb: -12,
+  })
+  const plain = join(scratch, 'out', 'plain.wav')
+  const plainResult = await exportProject({ project, workspaceRoot, outputPath: plain, format: 'wav' })
+  const plainWav = parseWav(await readFile(plain))
+  near(toDb(peakOf(plainWav.channels)), plainResult.peakDb, 0.1, 'the reported peak should match the file')
+  assert(toDb(peakOf(plainWav.channels)) < -10, `the -12 dB fader must not be pulled back up (peak ${toDb(peakOf(plainWav.channels))} dB)`)
+
+  const loud = join(scratch, 'out', 'loud.wav')
+  const loudResult = await exportProject({ project, workspaceRoot, outputPath: loud, format: 'wav', normalize: true })
+  const loudWav = parseWav(await readFile(loud))
+  near(toDb(peakOf(loudWav.channels)), -1.5, 0.2, 'optionally normalised exports peak at -1.5 dBFS')
+  near(loudResult.peakDb, -1.5, 0.2, 'the reported peak should follow the normalisation')
+})
+
 await step('an unknown export format is refused', async () => {
   const material = constantTone(1, 0.5)
   const track = { ...defaultTrack('trk_a', 'A'), items: [{ ...defaultItem('itm_a', 'mat_tone'), inSec: 0, outSec: 1 }] }

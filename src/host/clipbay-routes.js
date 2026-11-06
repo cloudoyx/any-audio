@@ -9,6 +9,9 @@
  *   GET  /clipbay/media?root=&project=&id=  material audio, Range supported
  *   GET  /clipbay/video?root=&project=      project video, Range supported
  *   GET  /clipbay/peaks?root=&project=&id=  waveform peaks
+ *   POST /clipbay/render?root=&project=     start an export job
+ *   GET  /clipbay/render?root=&project=&job= job status
+ *   POST /clipbay/render/cancel             cancel a running export
  *
  * The media routes must skip the custom client header: `<audio>` / `<video>`
  * cannot send one. Their only protection is the same `sec-fetch-site`
@@ -17,11 +20,13 @@
  * `root` is not trusted: it must be one of the workspaces DSH has registered,
  * which is what keeps a crafted request from reading any folder on the disk.
  */
-import { resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { ProjectPathError, MATERIALS_DIR, projectDir, projectFile, resolveInside } from '../project/paths.js'
 import { MaterialError, findMaterial, materialPath } from '../project/materials.js'
 import { ProjectSchemaError } from '../project/schema.js'
+import { exportProject } from '../project/render.js'
 import { listProjects, projectExists, readMaterialIndex, readProject, saveProject } from '../project/store.js'
+import { outputDir } from '../tools/shared.js'
 import { describeError, json, readJsonBody, serveFile } from './http.js'
 
 /** Host service keys for the workspace registry, newest first (matches mnemon / agent-teams). */
@@ -97,6 +102,74 @@ async function requireProject(workspaceRoot, projectId) {
   return readProject(workspaceRoot, projectId)
 }
 
+/**
+ * Export jobs (plan M3, spec §10.3).
+ *
+ * A render is minutes of CPU and must be cancellable, so it runs as a job like
+ * the font installs do: POST starts one, GET polls it, POST .../cancel aborts it.
+ * The abort signal is the one `renderProject` threads all the way into ffmpeg —
+ * cancellation that only stops the renderer waiting is exactly what the spec
+ * forbids.
+ */
+const renderJobs = new Map()
+
+function publicRenderJob(job) {
+  return {
+    id: job.id,
+    projectId: job.projectId,
+    status: job.status,
+    phase: job.phase,
+    track: job.track ?? null,
+    tracks: job.tracks ?? null,
+    message: job.message,
+    error: job.error ?? null,
+    file: job.file ?? null,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt ?? null,
+  }
+}
+
+function startRenderJob({ workspaceRoot, project, format, outputPath, normalize = false }) {
+  const job = {
+    id: `rnd_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    projectId: project.id,
+    status: 'running',
+    phase: 'render',
+    message: '',
+    startedAt: Date.now(),
+    abort: new AbortController(),
+  }
+  renderJobs.set(job.id, job)
+  exportProject({
+    project,
+    workspaceRoot,
+    outputPath,
+    format,
+    normalize,
+    signal: job.abort.signal,
+    onProgress: (progress) => {
+      job.phase = progress.phase
+      if (progress.track) job.track = progress.track
+      if (progress.tracks) job.tracks = progress.tracks
+      if (progress.phase === 'encode') job.message = `encoding ${progress.format}`
+    },
+  })
+    .then((result) => {
+      if (job.status === 'cancelled') return
+      job.status = 'done'
+      job.phase = 'done'
+      job.file = result.file
+      job.finishedAt = Date.now()
+    })
+    .catch((error) => {
+      if (job.status === 'cancelled') return
+      job.status = error?.name === 'AbortError' ? 'cancelled' : 'error'
+      job.error = describeError(error)
+      job.finishedAt = Date.now()
+    })
+  return job
+}
+
 /** Translate domain errors into status codes instead of leaking a 500. */
 function statusOf(error) {
   if (error instanceof RouteError) return error.status
@@ -170,12 +243,58 @@ async function handle(req, res, { url, method, path, ctx }) {
     return serveFile(req, res, file, { contentType: 'application/json; charset=utf-8' })
   }
 
+  if (path === '/clipbay/render') {
+    const root = workspaceRootOf(ctx, url)
+    if (method === 'GET') {
+      const jobId = String(url.searchParams.get('job') ?? '').trim()
+      if (!jobId) throw new RouteError(400, 'job id is required (job=)')
+      const job = renderJobs.get(jobId)
+      if (!job) throw new RouteError(404, `no such render job: ${jobId}`)
+      return json(res, 200, { ok: true, job: publicRenderJob(job) })
+    }
+    if (method !== 'POST') throw new RouteError(405, 'method not allowed')
+    const body = await readJsonBody(req)
+    const projectId = projectIdOf(url, 'project')
+    const project = await requireProject(root, projectId)
+    const format = String(body?.format ?? (project.video ? 'mp4' : 'wav')).toLowerCase()
+    if (!['wav', 'mp3', 'mp4'].includes(format)) {
+      throw new RouteError(400, `unknown export format "${format}"; use wav, mp3 or mp4`)
+    }
+    const outputName = String(body?.output ?? '').trim()
+    if (!outputName) throw new RouteError(400, 'output file name is required')
+    // Only the file name is honoured: an export always lands in the workspace's
+    // own output folder, so a crafted body cannot choose a path on the disk.
+    const job = startRenderJob({
+      workspaceRoot: root,
+      project,
+      format,
+      outputPath: join(outputDir(root), basename(outputName)),
+      // Off unless the caller asks: re-normalising on every export would undo the
+      // volume changes the person made (spec §10.2).
+      normalize: body?.normalize === true,
+    })
+    return json(res, 200, { ok: true, job: publicRenderJob(job) })
+  }
+
+  if (path === '/clipbay/render/cancel') {
+    if (method !== 'POST') throw new RouteError(405, 'method not allowed')
+    const body = await readJsonBody(req)
+    const job = renderJobs.get(String(body?.jobId ?? '').trim())
+    if (!job) throw new RouteError(404, 'no such render job')
+    if (job.status === 'running') {
+      job.status = 'cancelled'
+      job.finishedAt = Date.now()
+      job.abort.abort()
+    }
+    return json(res, 200, { ok: true, job: publicRenderJob(job) })
+  }
+
   throw new RouteError(404, `unknown clip bay route ${path}`)
 }
 
 /** Only project read/write needs the page header; media elements cannot send one. */
 export function needsClientHeader(path) {
-  return path === '/clipbay/projects' || path === '/clipbay/project'
+  return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/render' || path === '/clipbay/render/cancel'
 }
 
 /**

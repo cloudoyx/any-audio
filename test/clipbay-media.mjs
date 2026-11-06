@@ -9,9 +9,10 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { registerAnyAudioRoutes } from '../src/host/routes.js'
-import { createProject, readProject, writeMaterialIndex } from '../src/project/store.js'
+import { createProject, readMaterialIndex, readProject, writeMaterialIndex } from '../src/project/store.js'
 import { materialsDir, projectDir, videoDir } from '../src/project/paths.js'
 import { encodeWav } from '../src/audio/wav.js'
+import { outputDir } from '../src/tools/shared.js'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const scratch = join(root, '.anyaudio', 'test-tmp-media')
@@ -89,6 +90,26 @@ await mkdir(videoDir(workspaceRoot, projectId), { recursive: true })
 await writeFile(join(videoDir(workspaceRoot, projectId), 'clip.mp4'), videoBytes)
 project.video = { path: 'video/clip.mp4', durationSec: 2, locked: true }
 await writeFile(join(projectDir(workspaceRoot, projectId), 'project.json'), JSON.stringify({ ...project }))
+
+// The render tests need their own project with a real material in it; the same
+// tone file is copied so the export has something to mix.
+const materialsForRender = [{
+  id: 'mat_tones',
+  file: 'materials/mat_tones.wav',
+  durationSec: 1,
+  sampleRate,
+  channels: 2,
+  kind: 'foley',
+  bytes: wavBytes.length,
+  source: { kind: 'imported', originalName: 'tones.wav', originalFormat: 'wav', importedAt: '2026-11-06T00:00:00Z' },
+}]
+
+/** Give the renderable project its own copy of the tone material. */
+async function seedRenderableMaterials(id) {
+  await mkdir(materialsDir(workspaceRoot, id), { recursive: true })
+  await writeFile(join(materialsDir(workspaceRoot, id), 'mat_tones.wav'), wavBytes)
+  await writeMaterialIndex(workspaceRoot, id, { materials: materialsForRender })
+}
 
 // --- run --------------------------------------------------------------------
 
@@ -305,6 +326,64 @@ server.listen(0, '127.0.0.1', async () => {
     const response = await fetch(query(`/clipbay/nothing?root=${rootParam}`), { headers: client })
     assert(response.status === 404, `expected 404, got ${response.status}`)
     await response.arrayBuffer()
+  })
+
+  // --- export jobs (spec §10.3) ---------------------------------------------
+
+  await step('a render job starts, reports its state and finishes with a file', async () => {
+    const made = await createProject(workspaceRoot, { id: 'prj_renderable', name: 'Renderable', by: 'user', note: 'fixture' })
+    made.tracks = [{
+      id: 'trk_a', name: '音效', category: 'foley', volumeDb: 0, pan: 0, muted: false, solo: false,
+      items: [{
+        id: 'itm_a', material: 'mat_tones', startSec: 0, inSec: 0, outSec: 1,
+        gainDb: 0, pan: 0, fadeInSec: 0, fadeOutSec: 0, muted: false, label: 'tones',
+      }],
+    }]
+    await writeFile(join(projectDir(workspaceRoot, 'prj_renderable'), 'project.json'), JSON.stringify(made))
+    await seedRenderableMaterials('prj_renderable')
+    const started = await postJson(`/clipbay/render?root=${rootParam}&project=prj_renderable`, {
+      format: 'wav',
+      output: 'export-test.wav',
+    })
+    assert(started.ok, `render start failed: ${JSON.stringify(started)}`)
+    let job = started.job
+    for (let attempt = 0; attempt < 200 && job.status === 'running'; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      job = (await getJson(`/clipbay/render?root=${rootParam}&project=prj_renderable&job=${job.id}`)).job
+    }
+    assert(job.status === 'done', `render did not finish: ${JSON.stringify(job)}`)
+    assert(typeof job.file === 'string' && job.file.endsWith('export-test.wav'), `unexpected file ${job.file}`)
+    const info = await stat(job.file)
+    assert(info.size > 1000, `the exported file is suspiciously small: ${info.size}`)
+  })
+
+  await step('a cancelled render job leaves no partial file', async () => {
+    const started = await postJson(`/clipbay/render?root=${rootParam}&project=prj_renderable`, {
+      format: 'wav',
+      output: 'cancel-test.wav',
+    })
+    assert(started.ok, `render start failed: ${JSON.stringify(started)}`)
+    // Abort immediately: whichever phase it has reached, the abort signal must
+    // reach it and the promise must not leave a half-written file behind.
+    const cancelled = await postJson('/clipbay/render/cancel', { jobId: started.job.id })
+    assert(cancelled.ok, `cancel failed: ${JSON.stringify(cancelled)}`)
+    assert(cancelled.job.status === 'cancelled', `expected cancelled, got ${cancelled.job.status}`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const leftover = await stat(join(outputDir(workspaceRoot), 'cancel-test.wav')).catch(() => null)
+    assert(!leftover, 'a cancelled export must not leave a file behind')
+  })
+
+  await step('render without the page header is refused', async () => {
+    const response = await fetch(query(`/clipbay/render?root=${rootParam}&project=${projectId}`), { method: 'POST' })
+    assert(response.status === 403, `expected 403, got ${response.status}`)
+    await response.arrayBuffer()
+  })
+
+  await step('render rejects an unknown format and a missing output name', async () => {
+    const badFormat = await postJson(`/clipbay/render?root=${rootParam}&project=prj_renderable`, { format: 'flac', output: 'x.flac' })
+    assert(badFormat.ok === false && /unknown export format/.test(badFormat.error), `unexpected: ${JSON.stringify(badFormat)}`)
+    const noOutput = await postJson(`/clipbay/render?root=${rootParam}&project=prj_renderable`, { format: 'wav' })
+    assert(noOutput.ok === false && /output file name is required/.test(noOutput.error), `unexpected: ${JSON.stringify(noOutput)}`)
   })
 
   await step('the settings routes still require the page header', async () => {
