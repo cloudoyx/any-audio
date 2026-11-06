@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { encodeWav, parseWav, peakOf, toDb, fromDb } from '../src/audio/wav.js'
 import { findFfmpeg } from '../src/tools/shared.js'
 import { renderProject, exportProject } from '../src/project/render.js'
-import { writeMaterialIndex, saveProject } from '../src/project/store.js'
+import { writeMaterialIndex, saveProject, readProject as readProjectFileOnDisk } from '../src/project/store.js'
 import { materialsDir, projectDir, videoDir } from '../src/project/paths.js'
 import { emptyProject, defaultTrack, defaultItem, contentEndSec } from '../src/project/schema.js'
 
@@ -487,6 +487,36 @@ await step('export does not re-normalise the mix unless asked', async () => {
   near(loudResult.peakDb, -1.5, 0.2, 'the reported peak should follow the normalisation')
 })
 
+await step('the first export freezes normalizeGainDb and later exports reuse it', async () => {
+  // spec §10.2: the compensation is measured once and then fixed, so pulling a
+  // fader afterwards stays a real change instead of being normalised away.
+  const material = constantTone(1, 0.5)
+  const track = { ...defaultTrack('trk_a', 'A'), items: [{ ...defaultItem('itm_a', 'mat_tone'), inSec: 0, outSec: 1 }] }
+  const { project } = await makeProject({ id: 'prj_freeze', materials: { mat_tone: material }, tracks: [track] })
+  assert(project.normalizeGainDb === 0, 'the fixture starts unfrozen')
+
+  const first = join(scratch, 'out', 'freeze-1.wav')
+  const firstResult = await exportProject({ project, workspaceRoot, outputPath: first, format: 'wav', freezeNormalize: true })
+  near(firstResult.peakDb, -1.5, 0.2, 'the freezing export peaks at -1.5 dBFS')
+  const frozen = await readProjectFileOnDisk(workspaceRoot, project.id)
+  near(frozen.normalizeGainDb, -1.5 - firstResult.peakBeforeGainDb, 0.2, 'the measured gain is written to the file')
+  assert(frozen.history.length === project.history.length, 'calibration must not append a history entry')
+
+  // A second export with the same project object keeps the frozen number, so the
+  // peak stays put instead of being re-measured.
+  const second = join(scratch, 'out', 'freeze-2.wav')
+  const secondResult = await exportProject({ project: frozen, workspaceRoot, outputPath: second, format: 'wav', freezeNormalize: true })
+  near(secondResult.peakDb, -1.5, 0.2, 'the frozen gain reproduces the same peak')
+  const stillFrozen = await readProjectFileOnDisk(workspaceRoot, project.id)
+  near(stillFrozen.normalizeGainDb, frozen.normalizeGainDb, 0.001, 'the second export must not re-measure')
+
+  // Now pull the fader: it has to move the output by exactly that much.
+  const faderProject = { ...stillFrozen, masterFaderDb: -3 }
+  const quiet = join(scratch, 'out', 'freeze-3.wav')
+  const quietResult = await exportProject({ project: faderProject, workspaceRoot, outputPath: quiet, format: 'wav', freezeNormalize: true })
+  near(quietResult.peakDb, secondResult.peakDb - 3, 0.2, 'the fader is applied on top of the frozen gain')
+})
+
 await step('an unknown export format is refused', async () => {
   const material = constantTone(1, 0.5)
   const track = { ...defaultTrack('trk_a', 'A'), items: [{ ...defaultItem('itm_a', 'mat_tone'), inSec: 0, outSec: 1 }] }
@@ -501,6 +531,8 @@ await step('an unknown export format is refused', async () => {
 })
 
 await step('the project file on disk is not modified by rendering', async () => {
+  // `renderProject` stays pure; only `exportProject` with `freezeNormalize` writes
+  // the measured gain back, and the step above covers that side.
   const material = constantTone(1, 0.5)
   const track = { ...defaultTrack('trk_a', 'A'), items: [{ ...defaultItem('itm_a', 'mat_tone'), inSec: 0, outSec: 1 }] }
   const { project, dir } = await makeProject({ id: 'prj_pure', materials: { mat_tone: material }, tracks: [track] })

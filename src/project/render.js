@@ -6,6 +6,11 @@
  *  - export gain is `normalizeGainDb + masterFaderDb` and is never re-normalised
  *    (spec §10.2), or a move of the master fader would silently be undone on export.
  *
+ * The one exception to "pure" is `freezeNormalize`, which measures that fixed
+ * gain the first time a draft is exported and writes it back. It lives on
+ * `exportProject`, not on `renderProject`, so rendering a project still never
+ * touches the file.
+ *
  * Tracks are streamed one at a time and summed in place into a single
  * accumulator; a full-length buffer per track would be 20 allocations of the
  * whole timeline (plan M3).
