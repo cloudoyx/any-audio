@@ -11,7 +11,7 @@
  * registry, so a wrong guess here fails closed (403) rather than reading a folder
  * this page has no business reading.
  */
-import { h, useState, useEffect, useCallback, S, Btn, Notice } from '../ui.js'
+import { h, useState, useEffect, useCallback, S, Btn, Notice, Select, Switch } from '../ui.js'
 import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
@@ -152,6 +152,10 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const [editError, setEditError] = useState('')
   const [saveError, setSaveError] = useState('')
   const [mentionNotice, setMentionNotice] = useState('')
+  // Export settings live in the panel, not in project.json: they describe this
+  // one export, and spec §6.8 keeps one-off UI state out of the project.
+  const [exportFormat, setExportFormat] = useState('')
+  const [exportNormalize, setExportNormalize] = useState(false)
 
   // Debounced write plus a flush on unmount: switching to 对话 destroys this
   // component, and the last few hundred milliseconds must still reach the file.
@@ -286,6 +290,8 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
 
   const selectedTrack = selection ? project.tracks.find((entry) => entry.id === selection.trackId) : null
   const selectedItem = selectedTrack?.items.find((entry) => entry.id === selection.itemId) ?? null
+  const formats = availableFormats(project)
+  const chosenFormat = formats.includes(exportFormat) ? exportFormat : formats[0]
 
   return h('div', { style: S.page },
     h('div', { style: S.header },
@@ -300,10 +306,23 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       h('span', { style: { width: 8 } }),
       exporter.running
         ? h(Btn, { onClick: () => void exporter.cancel() }, t('取消导出'))
-        : h(Btn, {
-          onClick: () => void exporter.start(availableFormats(project)[0]),
-          kind: 'primary',
-        }, t('导出')),
+        : h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('div', { style: { width: 92 } },
+            h(Select, {
+              value: chosenFormat,
+              onChange: setExportFormat,
+              options: formats.map((format) => ({ value: format, label: format.toUpperCase() })),
+            })),
+          h(Switch, {
+            checked: exportNormalize,
+            onChange: setExportNormalize,
+            label: t('导出时归一化'),
+          }),
+          h(Btn, {
+            onClick: () => void exporter.start(chosenFormat, { normalize: exportNormalize }),
+            kind: 'primary',
+          }, t('导出')),
+        ),
     ),
     editError ? h(Notice, { tone: 'error' }, editError) : null,
     saveError ? h(Notice, { tone: 'error' }, `${t('保存失败')}：${saveError} ${t('编辑仍在这里，可以重试。')}`) : null,

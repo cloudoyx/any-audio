@@ -196,6 +196,7 @@ export const EN = {
   '读不出这个工程的视频，时间轴还能用。': 'The video could not be read; the timeline still works.',
   '导出': 'Export',
   '取消导出': 'Cancel export',
+  '导出时归一化': 'Normalise on export',
   '正在渲染…': 'Rendering…',
   '正在渲染第 {0} / {1} 轨…': 'Rendering track {0} of {1}…',
   '正在编码 {0}…': 'Encoding {0}…',
