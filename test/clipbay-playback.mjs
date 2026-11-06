@@ -15,7 +15,7 @@ const source = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 
   // The hooks import react, which is not needed for the pure helpers.
   .replace(/^import .*$/gm, '')
   .replace(/export function usePlayback[\s\S]*$/m, '')
-const { scheduleClips, audibleTracks, dbToGain, scheduledLength } = await import(
+const { scheduleClips, audibleTracks, dbToGain, scheduledLength, mixedGain, resolveTrackGain } = await import(
   `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`
 )
 
@@ -97,11 +97,25 @@ test('scheduleClips sums clip and track pan, clamped', () => {
   close(scheduleClips(over, 0)[0].pan, 1, 'the sum is clamped to +1')
 })
 
-test('scheduleClips skips muted clips and muted tracks', () => {
+test('a muted clip or track is scheduled silent, not dropped', () => {
+  // Deliberate: an unmute or a solo while the transport runs has to be heard at
+  // once, and a clip that was never scheduled has no node to turn back up. The
+  // mute therefore lives in the gain, not in whether the clip exists.
   const mutedItem = { tracks: [track({ items: [item({ muted: true })] })] }
-  assert.equal(scheduleClips(mutedItem, 0).length, 0, 'a muted clip does not play')
+  const itemEntries = scheduleClips(mutedItem, 0)
+  assert.equal(itemEntries.length, 1, 'a muted clip still gets a node')
+  assert.equal(itemEntries[0].gain, 0, 'but it is silent')
+
   const mutedTrack = { tracks: [track({ muted: true, items: [item()] })] }
-  assert.equal(scheduleClips(mutedTrack, 0).length, 0, 'a muted track does not play')
+  const trackEntries = scheduleClips(mutedTrack, 0)
+  assert.equal(trackEntries.length, 1, 'a muted track keeps its nodes')
+  assert.equal(trackEntries[0].gain, 0, 'and every clip on it is silent')
+
+  const soloed = { tracks: [track({ id: 'a', items: [item({ id: 'i1' })] }), track({ id: 'b', solo: true, items: [item({ id: 'i2' })] })] }
+  const soloEntries = scheduleClips(soloed, 0)
+  assert.equal(soloEntries.length, 2, 'solo keeps the other tracks scheduled too')
+  assert.equal(soloEntries.find((entry) => entry.trackId === 'a').gain, 0, 'the non-soloed track is silent')
+  assert.ok(soloEntries.find((entry) => entry.trackId === 'b').gain > 0, 'the soloed one still sounds')
 })
 
 test('scheduleClips drops clips that already ended before the playhead', () => {
@@ -181,6 +195,75 @@ test('scheduleClips agrees with a hand-computed renderer mix', () => {
   close(a.gain, dbToGain(-7), 'a carries -7 dB total')
   close(b.when, 1, 'b starts at 1')
   close(b.pan, -1, 'b is hard left')
+})
+
+test('mixedGain reads the live project, which is what makes a fader audible', () => {
+  // Improvement plan 01, I-06. The value the graph is pushed must be computed
+  // from the current project, not from what was true when playback started.
+  const project = {
+    tracks: [
+      track({ id: 'a', volumeDb: 0, items: [item({ id: 'a1', gainDb: 0 })] }),
+      track({ id: 'b', volumeDb: -6, items: [item({ id: 'b1', gainDb: -3 })] }),
+    ],
+  }
+  close(mixedGain(project, 'a', 'a1'), 1, 'unity stays exactly 1')
+  close(mixedGain(project, 'b', 'b1'), dbToGain(-9), 'track and clip gain multiply')
+
+  project.tracks[1].volumeDb = -20
+  close(mixedGain(project, 'b', 'b1'), dbToGain(-23), 'a fader move is picked up at once')
+
+  project.tracks[0].muted = true
+  assert.equal(mixedGain(project, 'a', 'a1'), 0, 'muting the track silences its clips')
+  assert.ok(mixedGain(project, 'b', 'b1') > 0, 'and leaves the others alone')
+
+  project.tracks[0].muted = false
+  close(mixedGain(project, 'a', 'a1'), 1, 'unmuting restores the level')
+
+  project.tracks[0].items[0].muted = true
+  assert.equal(mixedGain(project, 'a', 'a1'), 0, 'a muted clip is silent too')
+
+  project.tracks[0].items[0].muted = false
+  project.tracks[1].solo = true
+  assert.equal(mixedGain(project, 'a', 'a1'), 0, 'solo silences the other tracks')
+  close(mixedGain(project, 'b', 'b1'), dbToGain(-23), 'the soloed track keeps its level')
+
+  project.tracks[1].solo = false
+  close(mixedGain(project, 'a', 'a1'), 1, 'cancelling solo brings the others back')
+
+  assert.equal(mixedGain(project, 'nope', 'a1'), 0, 'an unknown track is silent')
+  assert.equal(mixedGain(project, 'a', 'nope'), 0, 'an unknown clip is silent')
+})
+
+test('resolveTrackGain puts mute above solo', () => {
+  assert.equal(resolveTrackGain({ volumeDb: 0 }, false), 1)
+  assert.equal(resolveTrackGain({ volumeDb: -6 }, false), dbToGain(-6))
+  assert.equal(resolveTrackGain({ volumeDb: 0, muted: true }, false), 0, 'mute wins')
+  assert.equal(resolveTrackGain({ volumeDb: 0, solo: false }, true), 0, 'someone else soloed')
+  assert.equal(resolveTrackGain({ volumeDb: 0, solo: true }, true), 1, 'this one is soloed')
+  assert.equal(resolveTrackGain({ volumeDb: 0, solo: true, muted: true }, true), 0, 'muted solo is still silent')
+})
+
+test('scheduleClips splits the two gain factors so the graph can update them apart', () => {
+  // The graph applies trackGain and itemGain on separate nodes; `gain` stays as
+  // their product for anyone reading the schedule alone.
+  const project = {
+    tracks: [track({ id: 'a', volumeDb: -6, items: [item({ id: 'a1', gainDb: -3 })] })],
+  }
+  const entry = scheduleClips(project, 0)[0]
+  close(entry.trackGain, dbToGain(-6), 'track factor')
+  close(entry.itemGain, dbToGain(-3), 'clip factor')
+  close(entry.gain, dbToGain(-9), 'and their product')
+})
+
+test('the transport pushes the mix when the project changes', () => {
+  // A structural check: the hook must expose applyMix and setProject must call
+  // it, otherwise a fader move during playback is never heard.
+  const raw = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
+  assert.match(raw, /applyMix/, 'the hook exposes applyMix')
+  assert.match(raw, /return \{[^}]*applyMix[^}]*\}/, 'applyMix is part of the returned transport')
+  assert.match(raw, /setTargetAtTime/, 'live moves ramp instead of jumping (no click)')
+  const setProjectBody = raw.slice(raw.indexOf('const setProject = useCallback'))
+  assert.match(setProjectBody.slice(0, 400), /applyMix\(project\)/, 'setProject pushes the mix')
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

@@ -29,6 +29,37 @@ export function dbToGain(db) {
   return value === 0 ? 1 : 10 ** (value / 20)
 }
 
+/** Time constant for a live gain move: short enough to feel immediate, long
+ * enough that a step does not click. `setTargetAtTime` reaches ~95% in 3τ. */
+export const TARGET_TAU_SEC = 0.01
+
+/**
+ * The gain of one track, as the renderer computes it.
+ *
+ * Mute wins over solo, and while anything is soloed every other track is silent.
+ * Returned as a number (not a boolean) so the same expression can drive both the
+ * scheduled graph and a live update — preview and export must agree (plan M5).
+ */
+export function resolveTrackGain(track, anySolo) {
+  if (!track || track.muted) return 0
+  if (anySolo && !track.solo) return 0
+  return dbToGain(track.volumeDb)
+}
+
+/**
+ * The gain of one clip right now: track gain times clip gain, or zero when the
+ * clip or its track is muted. Reading it from the live project is what makes a
+ * fader move audible without restarting playback.
+ */
+export function mixedGain(project, trackId, itemId) {
+  const tracks = project?.tracks ?? []
+  const anySolo = tracks.some((track) => track.solo)
+  const track = tracks.find((entry) => entry.id === trackId)
+  const item = track?.items?.find((entry) => entry.id === itemId)
+  if (!track || !item || item.muted) return 0
+  return resolveTrackGain(track, anySolo) * dbToGain(item.gainDb)
+}
+
 /**
  * Build the clips to schedule. Pure, so the numbers can be checked without an
  * AudioContext.
@@ -36,14 +67,19 @@ export function dbToGain(db) {
  * `fromSec` is where playback begins; a clip that already ended is dropped, and
  * one that started earlier is entered mid-way (its in-point advances) so a
  * playhead landing inside a clip sounds correct.
+ *
+ * A silent clip is still scheduled, with a gain of zero. That is deliberate:
+ * muting or un-soloing a track while it plays has to become audible immediately,
+ * and a clip that was never scheduled has no node to turn back up.
  */
 export function scheduleClips(project, fromSec = 0) {
   const start = Math.max(0, Number(fromSec) || 0)
+  const tracks = project?.tracks ?? []
+  const anySolo = tracks.some((track) => track.solo)
   const out = []
-  for (const track of audibleTracks(project?.tracks)) {
-    const trackGain = dbToGain(track.volumeDb)
+  for (const track of tracks) {
+    const trackGain = resolveTrackGain(track, anySolo)
     for (const item of track.items ?? []) {
-      if (item.muted) continue
       const length = Math.max(0, Number(item.outSec) - Number(item.inSec))
       if (!(length > 0)) continue
       const clipStart = Number(item.startSec) || 0
@@ -53,6 +89,7 @@ export function scheduleClips(project, fromSec = 0) {
       const duration = length - skipped
       if (!(duration > 0)) continue
 
+      const itemGain = item.muted ? 0 : dbToGain(item.gainDb)
       out.push({
         itemId: item.id,
         trackId: track.id,
@@ -60,7 +97,11 @@ export function scheduleClips(project, fromSec = 0) {
         when: Math.max(0, clipStart - start),
         duration,
         inSec: (Number(item.inSec) || 0) + skipped,
-        gain: trackGain * dbToGain(item.gainDb),
+        // The two factors are kept apart as well as multiplied: the graph applies
+        // them on separate nodes so a track fader never overwrites a clip fade.
+        trackGain,
+        itemGain,
+        gain: trackGain * itemGain,
         pan: Math.max(-1, Math.min(1, (Number(item.pan) || 0) + (Number(track.pan) || 0))),
         // Fades are relative to the clip, so a clip entered mid-way keeps only
         // the part of its fade the playhead has not passed yet.
@@ -148,9 +189,9 @@ export function usePlayback(root, projectId) {
   const stopSources = useCallback(() => {
     for (const node of sourcesRef.current) {
       try { node.source.stop() } catch { /* already ended */ }
-      node.source.disconnect()
-      node.level.disconnect()
-      if (node.panner) node.panner.disconnect()
+      for (const key of ['source', 'fade', 'itemLevel', 'trackLevel', 'panner']) {
+        try { node[key]?.disconnect() } catch { /* already gone */ }
+      }
     }
     sourcesRef.current = []
     if (frameRef.current) {
@@ -226,35 +267,44 @@ export function usePlayback(root, projectId) {
 
       const source = context.createBufferSource()
       source.buffer = buffer
-      const level = context.createGain()
-      const peak = entry.gain
-      level.gain.value = peak
+
+      // Three stages, so a live fader move and a running fade cannot overwrite
+      // each other: the fade shapes `fade`, the clip gain sits on `itemLevel`,
+      // and the track fader (mute/solo included) sits on `trackLevel`.
+      const fade = context.createGain()
+      const itemLevel = context.createGain()
+      const trackLevel = context.createGain()
+      itemLevel.gain.value = entry.itemGain
+      trackLevel.gain.value = entry.trackGain
 
       const when = startedAtRef.current + entry.when
       const offset = Math.max(0, entry.inSec)
       const duration = Math.max(0, Math.min(entry.duration, buffer.duration - offset))
       if (!(duration > 0)) continue
 
+      fade.gain.setValueAtTime(1, when)
       if (entry.fadeInSec > 0) {
-        level.gain.setValueAtTime(0, when)
-        level.gain.linearRampToValueAtTime(peak, when + entry.fadeInSec)
+        fade.gain.setValueAtTime(0, when)
+        fade.gain.linearRampToValueAtTime(1, when + entry.fadeInSec)
       }
       if (entry.fadeOutSec > 0) {
-        level.gain.setValueAtTime(peak, when + duration - entry.fadeOutSec)
-        level.gain.linearRampToValueAtTime(0, when + duration)
+        fade.gain.setValueAtTime(1, when + duration - entry.fadeOutSec)
+        fade.gain.linearRampToValueAtTime(0, when + duration)
       }
 
       const panner = context.createStereoPanner ? context.createStereoPanner() : null
-      source.connect(level)
+      source.connect(fade)
+      fade.connect(itemLevel)
+      itemLevel.connect(trackLevel)
       if (panner) {
         panner.pan.value = entry.pan
-        level.connect(panner)
+        trackLevel.connect(panner)
         panner.connect(master)
       } else {
-        level.connect(master)
+        trackLevel.connect(master)
       }
       source.start(when, offset, duration)
-      nodes.push({ source, level, panner })
+      nodes.push({ source, fade, itemLevel, trackLevel, panner, trackId: entry.trackId, itemId: entry.itemId })
     }
 
     sourcesRef.current = nodes
@@ -284,9 +334,35 @@ export function usePlayback(root, projectId) {
     frameRef.current = requestAnimationFrame(tick)
   }, [ensureContext, setPositionEverywhere, stopSources])
 
+  /**
+   * Push the current mix onto the live graph.
+   *
+   * Called whenever the project changes, so dragging a fader or pressing mute
+   * while the transport runs is heard at once instead of on the next play. The
+   * ramp is short (about 30 ms) because a step change in gain clicks.
+   *
+   * Only the two gain stages are touched: the fade stage keeps whatever ramp it
+   * is in the middle of, so a live fader move cannot cancel a fade.
+   */
+  const applyMix = useCallback((project) => {
+    const context = contextRef.current
+    if (!context || sourcesRef.current.length === 0) return
+    const now = context.currentTime
+    const tracks = project?.tracks ?? []
+    const anySolo = tracks.some((entry) => entry.solo)
+    for (const node of sourcesRef.current) {
+      const track = tracks.find((entry) => entry.id === node.trackId)
+      const item = track?.items?.find((entry) => entry.id === node.itemId)
+      node.trackLevel?.gain.setTargetAtTime(resolveTrackGain(track, anySolo), now, TARGET_TAU_SEC)
+      node.itemLevel?.gain.setTargetAtTime(item && !item.muted ? dbToGain(item.gainDb) : 0, now, TARGET_TAU_SEC)
+    }
+  }, [])
+
   const setProject = useCallback((project) => {
     projectRef.current = project
-  }, [])
+    // A live edit must be heard without a restart; a silent graph costs nothing.
+    applyMix(project)
+  }, [applyMix])
 
   useEffect(() => () => {
     tokenRef.current++
@@ -298,5 +374,5 @@ export function usePlayback(root, projectId) {
     cacheRef.current = null
   }, [stopSources])
 
-  return { playing, positionSec, error, play, pause, seek, setProject }
+  return { playing, positionSec, error, play, pause, seek, setProject, applyMix }
 }
