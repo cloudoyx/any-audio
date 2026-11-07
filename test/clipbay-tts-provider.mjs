@@ -19,6 +19,7 @@ process.env.ANYAUDIO_STATE = `${root}/.anyaudio/test-tmp-tts/state.json`
 process.env.ANYAUDIO_FONT_DIR = `${root}/.anyaudio/test-tmp-tts/fonts`
 
 const { resolveProviders } = await import(new URL('../src/tools/tts.js', import.meta.url).href)
+const { providerForVoice, resolveVoice } = await import(new URL('../src/audio/tts-providers.js', import.meta.url).href)
 
 let passed = 0
 let failed = 0
@@ -80,6 +81,86 @@ test('the top-level provider is still validated when an item overrides it', () =
     () => resolveProviders([{ text: 'a' }], 'nope'),
     /unknown TTS provider "nope"/,
   )
+})
+
+// --- voice names are per engine -------------------------------------------
+//
+// A voice name belongs to exactly one engine. Sending an Edge name to MiMo
+// answers HTTP 400 "Param Incorrect", and the old error blamed the network for
+// it. None of these tests touch the network.
+
+test('a voice identifies the engine that owns it', () => {
+  assert.equal(providerForVoice('zh-CN-XiaoxiaoNeural'), 'edge')
+  assert.equal(providerForVoice('冰糖'), 'mimo')
+})
+
+test('a voice no engine claims is left alone', () => {
+  // Cloned and custom voice ids are legitimate, so an unknown name must not be
+  // refused here — whether it exists is the service's call, not ours.
+  assert.equal(providerForVoice('my-cloned-voice-01'), null)
+  assert.equal(providerForVoice(''), null)
+})
+
+test('an unnamed voice falls back to the engine default', () => {
+  const result = resolveVoice({ provider: 'edge', voice: undefined, fallbackVoice: 'zh-CN-YunjianNeural' })
+  assert.deepEqual(result, { provider: 'edge', voice: 'zh-CN-YunjianNeural', switched: false })
+})
+
+test('a voice beats a configured engine but never an explicitly named one', () => {
+  // A configured default is only a default, so the voice — the more specific
+  // signal — wins, and the switch is reported back.
+  const switched = resolveVoice({ provider: 'mimo', voice: 'zh-CN-XiaoxiaoNeural', explicitProvider: false })
+  assert.deepEqual(switched, { provider: 'edge', voice: 'zh-CN-XiaoxiaoNeural', switched: true })
+  // An engine the caller named is a decision, so a mismatch is an error.
+  assert.throws(
+    () => resolveVoice({ provider: 'mimo', voice: 'zh-CN-XiaoxiaoNeural', explicitProvider: true }),
+    /belongs to Edge TTS, not MiMo/,
+  )
+})
+
+test('resolveProviders switches the engine and reports it', () => {
+  const { items, switches, needsMimoKey } = resolveProviders(
+    [{ text: 'a', voice: 'zh-CN-XiaoxiaoNeural', label: 'item #1' }],
+    'mimo',
+    { explicitFallback: false },
+  )
+  assert.deepEqual(items.map((item) => item.provider), ['edge'])
+  assert.equal(switches.length, 1)
+  assert.equal(switches[0].from, 'mimo')
+  assert.equal(switches[0].to, 'edge')
+  // The item is an Edge line now, so it must not demand a MiMo key.
+  assert.equal(needsMimoKey, false)
+})
+
+test('resolveProviders refuses a voice that contradicts a named engine', () => {
+  assert.throws(
+    () => resolveProviders(
+      [{ text: 'a', provider: 'mimo', voice: 'zh-CN-XiaoxiaoNeural', label: 'item #1' }],
+      'mimo',
+      { explicitFallback: true },
+    ),
+    /Voice "zh-CN-XiaoxiaoNeural" belongs to Edge TTS, not MiMo/,
+  )
+})
+
+test('a mismatched voice does not drag unrelated items across engines', () => {
+  const { items, switches } = resolveProviders(
+    [{ text: 'a', provider: 'edge', label: 'item #1' }, { text: 'b', voice: 'zh-CN-YunxiNeural', label: 'item #2' }],
+    'mimo',
+    { explicitFallback: false },
+  )
+  assert.deepEqual(items.map((item) => item.provider), ['edge', 'edge'])
+  assert.equal(switches.length, 1, 'only the item that named an Edge voice switches')
+})
+
+test('an unknown voice keeps the engine it was given', () => {
+  const { items, switches } = resolveProviders(
+    [{ text: 'a', voice: 'my-cloned-voice-01', label: 'item #1' }],
+    'mimo',
+    { explicitFallback: false },
+  )
+  assert.deepEqual(items.map((item) => item.provider), ['mimo'])
+  assert.equal(switches.length, 0)
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

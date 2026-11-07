@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { readConfig } from '../config.js'
-import { EDGE_VOICES, MIMO_VOICES, TTS_PROVIDERS, providerInfo, synthesizeSpeech } from '../audio/tts-providers.js'
+import { EDGE_VOICES, MIMO_VOICES, TTS_PROVIDERS, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { attachMaterialFile } from '../project/attach.js'
 import { deliverCopy, deliveryPath, finalizeTool, nowStamp, relativeToWorkspace, requireProjectId, stagePath, textRenderer, workspaceRootOf } from './shared.js'
@@ -55,15 +55,31 @@ function styleFromLegacy({ rate, pitch }) {
  *   will actually need a MiMo key
  * @throws when an item names an engine this plugin does not implement
  */
-export function resolveProviders(items, fallbackProvider) {
+export function resolveProviders(items, fallbackProvider, { explicitFallback = false } = {}) {
+  const switches = []
   for (const item of items) {
-    const chosen = String(item.provider ?? fallbackProvider)
+    const named = item.provider !== undefined && item.provider !== null && String(item.provider).trim() !== ''
+    const chosen = String(named ? item.provider : fallbackProvider)
     if (!providerInfo(chosen)) {
       throw new Error(`unknown TTS provider "${chosen}"; use ${Object.keys(TTS_PROVIDERS).join(' or ')}`)
     }
     item.provider = chosen
+    const wanted = typeof item.voice === 'string' ? item.voice.trim() : ''
+    if (!wanted) continue
+    // A voice name identifies its engine, so a voice from another engine is
+    // evidence about which one the caller meant. That is only allowed to
+    // override a configured default — never an engine the caller named.
+    const resolved = resolveVoice({
+      provider: chosen,
+      voice: wanted,
+      explicitProvider: named || explicitFallback,
+    })
+    if (resolved.switched) {
+      item.provider = resolved.provider
+      switches.push({ voice: wanted, from: chosen, to: resolved.provider, label: item.label })
+    }
   }
-  return { items, needsMimoKey: items.some((item) => item.provider === 'mimo' && item.text) }
+  return { items, switches, needsMimoKey: items.some((item) => item.provider === 'mimo' && item.text) }
 }
 
 export const ttsToolDefinition = finalizeTool({
@@ -73,7 +89,8 @@ export const ttsToolDefinition = finalizeTool({
     'This is the only supported way to make narration for a video: it honours the engine and voice the user picked in Settings → AnyAudio, so do not shell out to edge-tts or any other TTS library. ' +
     'Pass projectId: the lines are placed on its narration track one after another, and a copy of each WAV is kept under the project folder — that copy is what the project plays, the "output" path is only an extra deliverable. ' +
     'Two providers: "edge" (no key, unofficial Microsoft Edge service, MP3 → WAV via ffmpeg) and "mimo" (MiMo-V2.5-TTS, needs a normal Open Platform API key saved in Settings → AnyAudio). ' +
-    `When "provider" is omitted the configured default is used. Edge voices include ${EDGE_VOICES.join(', ')} (default zh-CN-YunjianNeural). MiMo voices include ${MIMO_VOICES.join(', ')}; "${MIMO_VOICES[0]}" is resolved by the server cluster and may differ between clusters. ` +
+    `When "provider" is omitted the configured default is used. A voice name belongs to one engine and never works on another; the tool is told which engine owns a name, and settles it for you when the engine came from configuration alone — pass "provider" explicitly to override that. ` +
+    `Edge voices: ${EDGE_VOICES.join(', ')}. MiMo voices: ${MIMO_VOICES.join(', ')} ("${MIMO_VOICES[0]}" is resolved by the server cluster and may differ between clusters). ` +
     'rate/pitch/volume apply to Edge ("-12%", "-3Hz"); for MiMo they are folded into a style instruction. ' +
     'Pass "style" to steer MiMo delivery, "text" for one clip, or "items" for several. ' +
     'Failures are explicit: missing key, network errors and service errors all throw instead of producing silence.',
@@ -90,7 +107,7 @@ export const ttsToolDefinition = finalizeTool({
       trackName: { type: 'string', description: 'Track the narration goes on, default 旁白. Lines land one after another on that track; give each speaker its own name so different voices never share a track. An item may override it with its own trackName.' },
       startSec: { type: 'number', description: 'Where the first line starts on the project timeline. Later lines follow the previous one; an item may set its own startSec.' },
       provider: { type: 'string', enum: ['edge', 'mimo'], description: 'TTS engine. Defaults to the value in Settings → AnyAudio (edge).' },
-      voice: { type: 'string', description: 'Voice name for the selected provider. Defaults to Settings → AnyAudio.' },
+      voice: { type: 'string', description: 'Voice name. Each name belongs to one engine — pick one from the list for the engine you are using. Defaults to Settings → AnyAudio.' },
       rate: { type: 'string', description: 'Edge speaking rate, e.g. "-12%".' },
       pitch: { type: 'string', description: 'Edge pitch shift, e.g. "-3Hz".' },
       volume: { type: 'string', description: 'Edge volume, e.g. "+0%".' },
@@ -139,8 +156,14 @@ export const ttsToolDefinition = finalizeTool({
       : [{ text: String(args.text ?? '').trim(), output: args.output, label: 'text' }]
     if (items.length === 1 && !items[0].text) throw new Error('anyaudio_tts needs "text" or a non-empty "items" array')
 
-    const { needsMimoKey } = resolveProviders(items, provider)
+    const { switches } = resolveProviders(items, provider, { explicitFallback: args.provider !== undefined && args.provider !== null })
+    const needsMimoKey = items.some((item) => item.provider === 'mimo' && item.text)
     const mimoKey = needsMimoKey ? await resolveMimoKey() : null
+    for (const change of switches) {
+      warnings.push(
+        `${change.label}: voice "${change.voice}" belongs to ${providerInfo(change.to).label}, so it is synthesised with ${providerInfo(change.to).label} instead of the configured ${providerInfo(change.from).label}. Pass "provider": "${change.from}" to force the other engine.`,
+      )
+    }
 
     const stamp = nowStamp()
     const files = []
@@ -160,7 +183,11 @@ export const ttsToolDefinition = finalizeTool({
         continue
       }
       if (item.text.length > 4000) warnings.push(`${label}: ${item.text.length} characters — the service may truncate long input`)
-      const voice = String(item.voice ?? (itemProvider === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice))
+      // `resolveProviders` already settled the engine from the voice, so this
+      // only has to fill in the configured voice when none was named.
+      const voice = typeof item.voice === 'string' && item.voice.trim()
+        ? item.voice.trim()
+        : (itemProvider === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice)
       // Rate/pitch/volume are Edge-only fields; MiMo gets its delivery from `style`.
       const edgeRate = item.rate ?? config.tts.edge.rate
       const edgePitch = item.pitch ?? config.tts.edge.pitch

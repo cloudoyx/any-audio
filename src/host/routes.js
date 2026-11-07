@@ -19,7 +19,7 @@ import { resolveConfiguredDefault } from '../audio/banks.js'
 import { categoryOfProgram } from '../audio/scoring.js'
 import { compileScore } from '../audio/score.js'
 import { loadSoundBank, renderCompiled, listPresets } from '../audio/synth.js'
-import { EDGE_VOICES, MIMO_VOICES, providerInfo, synthesizeSpeech } from '../audio/tts-providers.js'
+import { EDGE_VOICES, MIMO_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
@@ -360,9 +360,21 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
 
   async function previewTts(body) {
     const { config } = await readConfig()
-    const provider = String(body.provider ?? config.tts.provider)
-    const info = providerInfo(provider)
-    if (!info) throw new Error(`unknown provider "${provider}"`)
+    const requested = body.provider
+    const explicit = requested !== undefined && requested !== null && String(requested).trim() !== ''
+    const chosenEngine = String(explicit ? requested : config.tts.provider)
+    const info = providerInfo(chosenEngine)
+    if (!info) throw new Error(`unknown provider "${chosenEngine}"`)
+    // The voice picker in the page belongs to the selected engine, so a
+    // mismatch means a name from the other engine came in. Preview has to give
+    // the same answer the tools do, or it lies about what a call would do.
+    const picked = resolveVoice({
+      provider: chosenEngine,
+      voice: body.voice,
+      explicitProvider: explicit,
+      fallbackVoice: chosenEngine === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice,
+    })
+    const provider = picked.provider
     let apiKey = null
     if (provider === 'mimo') {
       apiKey = process.env.MIMO_API_KEY ?? null
@@ -377,7 +389,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       if (!apiKey) throw new Error('MiMo needs a key: save one above (normal Open Platform key) or set MIMO_API_KEY')
     }
     const text = String(body.text ?? '').trim() || '太行、王屋二山，方七百里，高万仞。'
-    const voice = String(body.voice ?? (provider === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice))
+    const voice = picked.voice
     const audio = await synthesizeSpeech({
       provider,
       text,
@@ -385,7 +397,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       rate: body.rate ?? config.tts.edge.rate,
       pitch: body.pitch ?? config.tts.edge.pitch,
       volume: body.volume ?? config.tts.edge.volume,
-      style: body.style ?? config.tts.mimo.style,
+      style: body.style ?? (provider === 'mimo' ? config.tts.mimo.style : undefined),
       proxy: provider === 'mimo' ? config.tts.mimo.proxy || undefined : config.tts.edge.proxy || undefined,
       baseUrl: config.tts.mimo.baseUrl,
       model: config.tts.mimo.model,
@@ -397,7 +409,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     delete payload.buffer
     return rememberAudio(encodeWav({ sampleRate: audio.sampleRate, channels: audio.channels, bitDepth: 16 }), {
       kind: 'tts',
-      label: `${provider} / ${voice}`,
+      label: `${info.label} / ${voice}`,
       ...payload,
     })
   }
