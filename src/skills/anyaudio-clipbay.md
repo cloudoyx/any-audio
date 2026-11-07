@@ -32,8 +32,8 @@
 
 2. 三个生成型工具都带上 projectId，素材自动入工程、自动建轨、自动落片段：
    anyaudio_music({ projectId, score, stems: true })   ← 每条 stem 各占一轨
-   anyaudio_tts({ projectId, text, trackName: "旁白" })
-   anyaudio_sfx({ projectId, mode: "materials", items: [...] })  ← 每个音效一个片段
+   anyaudio_tts({ projectId, text, items: [{ text, voice }] })   ← 同一音色归到一轨
+   anyaudio_sfx({ projectId, items: [...] })  ← 每个音效一个片段，自动落轨
 
    用户自有文件（他给的 MP3、要用的素材）才走 add_material：
    anyaudio_project({ mode: "add_material", projectId,
@@ -57,8 +57,8 @@
 
 1. **一个素材一条轨**，不要为了省轨把不同素材混进同一条
 2. **乐器 STEM 各自成轨**（鼓 / 贝斯 / 钢琴），不要合成一条「配乐」——人要能单独把鼓推上去
-3. **每条旁白单独成轨**（旁白 A、旁白 B…），`category: "tts"`
-4. **环境音与动效分开**（`ambience` / `foley`），雨声和开门声不是一类
+3. **旁白按音色归集**，`category: "tts"`：同一个音色的所有台词落在同一条轨上，哪怕两句重叠；换一个音色就多一条轨。要按角色分轨时用 `trackName` 显式起名
+4. **环境音与动效分开**（`ambience` / `foley`），雨声和开门声不是一类；同类里时间重叠的自动再开一条（`音效 · 动效 2`），不重叠的合并
 5. 轨道总数上限 **20**，总时长上限 **15 分钟**——超了会被拒绝，别硬凑
 
 轨道名用人能看懂的中文。「轨道 3」这种名字等于没起。

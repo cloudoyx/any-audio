@@ -154,8 +154,12 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
     const category = entry ? categoryOf({ group: entry.group }) : categoryOf({ type: item.type ?? item.name })
     const label = entry ? `${entry.name}（${entry.zh}）` : String(item.type ?? item.name)
     // Each effect is its own material on the timeline, placed where the caller
-    // asked. Effects that never overlap may share a track (spec §5.2), which is
-    // what freeTrack arranges.
+    // asked. Without an explicit start it follows the last clip of its category
+    // instead of landing at 0s: ten effects stacked on the same instant are ten
+    // tracks, which is how a batch used to run the project into the 20-track
+    // limit. Effects that never overlap still share a track (spec §5.2), because
+    // an effect overlapping another one is an error, not an arrangement choice.
+    const wantedStart = Number(item.startSec ?? item.start ?? args.startSec)
     const attached = await attachMaterialFile(workspaceRoot, projectId, written.path, {
       kind: category === '环境音' ? 'ambience' : 'sfx',
       trackName: item.trackName || args.trackName || `音效 · ${category}`,
@@ -164,7 +168,8 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
       snapshotKind: 'sfx',
       tool: 'anyaudio_sfx',
       label,
-      startSec: Number.isFinite(Number(item.startSec)) ? Number(item.startSec) : undefined,
+      startSec: Number.isFinite(wantedStart) ? Number(wantedStart) : undefined,
+      autoStart: !Number.isFinite(wantedStart),
     })
     materials.push({
       file: relativeToWorkspace(workspaceRoot, written.path),

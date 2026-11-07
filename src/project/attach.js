@@ -81,7 +81,36 @@ function overlaps(track, startSec, endSec) {
 }
 
 /**
- * The first track of this name family that is free for the given span.
+ * The tracks that belong to one name family: `环境音`, `环境音 2`, `环境音 3` …,
+ * in creation order.
+ *
+ * This — not a single name — is what "that track" means. The family is how a
+ * category spreads over several tracks when its sounds overlap in time, so any
+ * code asking "where does the next ambient sound go?" has to see all of them or
+ * it will hand back a position on one track while placing the clip on another.
+ * Both the auto-append anchor and the free-track search below read it.
+ */
+export function trackFamily(project, base) {
+  const wanted = String(base ?? '').trim()
+  if (!wanted) return []
+  const out = []
+  for (const track of project.tracks) {
+    const name = String(track.name ?? '')
+    if (name === wanted) { out.push(track); continue }
+    const match = /^(.*) (\d+)$/.exec(name)
+    if (match && match[1] === wanted && Number(match[2]) >= 2) out.push(track)
+  }
+  return out
+}
+
+/** End of the last clip across a whole family — where an appended clip goes. */
+export function familyEndSec(project, base) {
+  return trackFamily(project, base).reduce((end, track) => Math.max(end, nextFreeStartSec(track)), 0)
+}
+
+/**
+ * The first track of this name family that is free for the given span, creating
+ * one when the family is full.
  * `环境音` / `环境音 2` / `环境音 3` … — the suffix only appears when needed.
  */
 export function freeTrack(project, { name, category, startSec, endSec }) {
@@ -94,6 +123,22 @@ export function freeTrack(project, { name, category, startSec, endSec }) {
     if (!overlaps(track, startSec, endSec)) return track
   }
   throw new AttachError(`no free track for "${base}" at ${startSec.toFixed(2)}s; the project already has ${LIMITS.tracks} tracks`)
+}
+
+/**
+ * The track a clip with `allowOverlap` belongs on: the first of its family, made
+ * when the family is empty.
+ *
+ * Narration uses this (improvement plan 02, I-03). Two lines of the same voice
+ * are the same track even when they touch by a few hundredths of a second: a
+ * person who asked for one narrator does not want the fourth line to appear on
+ * "旁白 2" because it started 0.22s early. Effects do not use it — two doors at
+ * the same instant are two events and must stay separable.
+ */
+export function overlappingTrack(project, { name, category }) {
+  const base = String(name ?? '').trim()
+  if (!base) throw new AttachError('a track name is required')
+  return trackFamily(project, base)[0] ?? ensureTrack(project, { name: base, category })
 }
 
 function assertWithinLimits(project) {
@@ -110,14 +155,20 @@ function assertWithinLimits(project) {
  * Register one already-written material in the project and place it.
  *
  * `material` is what `importGeneratedMaterial` returned. `autoStart` appends the
- * clip after the last one on its track, which is what a batch of narration lines
- * wants; anything with an explicit `startSec` keeps it.
+ * clip after the last one in its track family, which is what a batch of narration
+ * lines or effects wants; anything with an explicit `startSec` keeps it.
+ *
+ * `allowOverlap` lets a clip share a track with one it touches in time. Only
+ * narration asks for it (I-03): the same voice belongs on one track even when two
+ * lines overlap by a few hundredths of a second. Effects must not — two doors at
+ * the same instant are two separate events.
  */
 export async function attachClip(workspaceRoot, projectId, material, {
   trackName,
   category = 'other',
   startSec,
   autoStart = false,
+  allowOverlap = false,
   inSec,
   outSec,
   gainDb = 0,
@@ -134,15 +185,14 @@ export async function attachClip(workspaceRoot, projectId, material, {
   }
 
   const wantedStart = startSec === undefined ? undefined : Number(startSec)
-  const start = wantedStart ?? 0
-  const provisional = project.tracks.find((track) => track.name === String(trackName ?? '').trim())
-  const begin = wantedStart ?? (autoStart && provisional ? nextFreeStartSec(provisional) : 0)
-  const track = freeTrack(project, {
-    name: trackName,
-    category,
-    startSec: begin,
-    endSec: begin + length,
-  })
+  // The append anchor spans the whole name family, not one track: otherwise a
+  // family that already spread over `音效 · 环境音` and `音效 · 环境音 2` would
+  // get its next clip placed at the first track's end, which is behind the
+  // second one — and freeTrack would then judge the family busy and open a third.
+  const begin = wantedStart ?? (autoStart ? familyEndSec(project, trackName) : 0)
+  const track = allowOverlap
+    ? overlappingTrack(project, { name: trackName, category })
+    : freeTrack(project, { name: trackName, category, startSec: begin, endSec: begin + length })
 
   const clip = placeClip(track, material, {
     startSec: begin,
@@ -177,6 +227,7 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
   label,
   startSec,
   autoStart = false,
+  allowOverlap = false,
   inSec,
   outSec,
   gainDb = 0,
@@ -198,6 +249,7 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
     category,
     startSec,
     autoStart,
+    allowOverlap,
     inSec,
     outSec,
     gainDb,

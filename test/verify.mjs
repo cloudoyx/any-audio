@@ -949,6 +949,61 @@ await test('sfx refuses mode:"timeline" and points at the alternative', async ()
   assert(/anyaudio_mix/.test(error.message), 'and where a flat bed comes from now')
 })
 
+await test('a batch of sfx without startSec chains onto one track instead of stacking at 0', async () => {
+  // Improvement plan 02, I-02. Every effect used to land at 0s, so freeTrack saw
+  // the track busy and opened the next one: ten effects became ten tracks and the
+  // project hit its 20-track limit. The rule the person actually wants is
+  // "same category that does not overlap shares a track", which needs the start
+  // to advance along the category's tracks.
+  const result = await tools.get('anyaudio_sfx').execute(
+    {
+      projectId: await freshAttach(),
+      items: [
+        { type: 'thunder', durationSec: 0.5 },
+        { type: 'thunder', durationSec: 0.5 },
+        { type: 'thunder', durationSec: 0.5 },
+        { type: 'bell', durationSec: 0.5 },
+      ],
+      output: join(tmpDir, 'sfx-chain'),
+      peakDb: null,
+    },
+    exec,
+  )
+  const placed = await readProject(repoRoot, result.projectId)
+  const ambientTracks = placed.tracks.filter((track) => track.category === 'ambience')
+  assert(ambientTracks.length === 1, `four ambient effects should share one track, they took ${ambientTracks.length}`)
+  assert(placed.tracks.length === 2, `ambience + foley = 2 tracks, got ${placed.tracks.map((t) => `${t.name}[${t.category}]`).join(', ')}`)
+  const starts = ambientTracks[0].items.map((item) => item.startSec).sort((a, b) => a - b)
+  assert(starts.length === 3, `three thunder clips on the ambient track, got ${starts.length}`)
+  assert(starts[0] === 0, `the first starts at 0, got ${starts[0]}`)
+  for (let index = 1; index < starts.length; index++) {
+    assert(starts[index] > starts[index - 1], `clips advance in time, got ${starts.join(', ')}`)
+  }
+  // And the fade of a clip is not what decides its place: the chain is by length.
+  assert(Math.abs(starts[1] - 0.5) < 0.02, `the second starts after the first ends, got ${starts[1]}`)
+})
+
+await test('an explicit sfx startSec overlapping another effect gets its own track', async () => {
+  // The other half of the same rule: overlapping effects must stay separable, so
+  // asking for two sounds at the same instant has to open a second track.
+  const result = await tools.get('anyaudio_sfx').execute(
+    {
+      projectId: await freshAttach(),
+      items: [
+        { type: 'bell', startSec: 0, durationSec: 1 },
+        { type: 'bell', startSec: 0.2, durationSec: 1 },
+      ],
+      output: join(tmpDir, 'sfx-overlap'),
+      peakDb: null,
+    },
+    exec,
+  )
+  const placed = await readProject(repoRoot, result.projectId)
+  const foley = placed.tracks.filter((track) => track.category === 'foley')
+  assert(foley.length === 2, `two overlapping bells are two tracks, got ${foley.length}`)
+  assert(foley.map((track) => track.name).sort().join(' | ') === '音效 · 动效 | 音效 · 动效 2', `suffixes only appear when needed, got ${foley.map((t) => t.name).join(' | ')}`)
+})
+
 await test('both general banks are suggested, GeneralUser is the default', async () => {
   const { RECOMMENDED_FONTS } = await import('../src/audio/fonts.js')
   const suggested = RECOMMENDED_FONTS.filter((font) => font.suggested).map((font) => font.id)

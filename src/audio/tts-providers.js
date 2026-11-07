@@ -20,6 +20,35 @@ export const EDGE_VOICES = [
 /** Built-in MiMo voices; the service also accepts custom/cloned voice ids. */
 export const MIMO_VOICES = ['mimo_default', '冰糖', '茉莉', '苏打', '白桦', 'Mia', 'Chloe', 'Milo', 'Dean']
 
+/**
+ * A short, readable name for a voice (improvement plan 02, I-03).
+ *
+ * Tracks are grouped by voice, and a track head that reads `旁白 · zh-CN-XiaoxiaoNeural`
+ * is not something a person can scan. The identifier stays the key — this is only
+ * the label; an unknown voice falls back to its own id so a cloned or custom
+ * voice still gets a track of its own instead of joining someone else's.
+ */
+export const VOICE_DISPLAY_NAMES = {
+  'zh-CN-XiaoxiaoNeural': '晓晓',
+  'zh-CN-YunxiNeural': '云希',
+  'zh-CN-YunjianNeural': '云健',
+  'zh-CN-XiaoyiNeural': '晓伊',
+  'zh-CN-YunyangNeural': '云扬',
+  'zh-CN-liaoning-XiaobeiNeural': '晓北',
+  'zh-CN-shaanxi-XiaoniNeural': '晓妮',
+  'en-US-AriaNeural': 'Aria',
+  'en-US-JennyNeural': 'Jenny',
+  'en-US-GuyNeural': 'Guy',
+  'ja-JP-NanamiNeural': 'Nanami',
+  mimo_default: '默认',
+}
+
+export function voiceDisplayName(voice) {
+  const name = typeof voice === 'string' ? voice.trim() : ''
+  if (!name) return null
+  return VOICE_DISPLAY_NAMES[name] ?? name
+}
+
 export const TTS_PROVIDERS = {
   edge: {
     id: 'edge',
