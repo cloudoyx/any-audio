@@ -217,6 +217,33 @@ await test('a family is only ever the numbered siblings of one base name', async
   assert.deepEqual(trackFamily(project, '旁白').map((track) => track.name), [])
 })
 
+// --- I-08: the granularity rule, stated as three cases -----------------------
+
+await test('effect granularity: same category never merges across an overlap', async () => {
+  // The rule the person gave, as three cases in one project:
+  //   same category, no overlap → one track
+  //   same category, overlap    → a second track (环境音 2)
+  //   different category        → separate tracks
+  const projectId = await freshProject()
+  // Three ambient effects, laid end to end: one track, three clips.
+  for (let index = 0; index < 3; index++) {
+    await place(projectId, 1, { trackName: '音效 · 环境音', category: 'ambience', startSec: index * 1 })
+  }
+  // Two ambient effects that overlap: the second opens 环境音 2.
+  await place(projectId, 1, { trackName: '音效 · 环境音', category: 'ambience', startSec: 2.5 })
+  // A foley and an "other" effect: their own families.
+  await place(projectId, 1, { trackName: '音效 · 动效', category: 'foley', startSec: 0 })
+  await place(projectId, 1, { trackName: '音效 · 其他', category: 'other', startSec: 0 })
+
+  const project = await readProject(workspaceRoot, projectId)
+  const byName = new Map(project.tracks.map((track) => [track.name, track]))
+  assert.equal(byName.get('音效 · 环境音').items.length, 3, 'three effects laid end to end share the head track')
+  assert.equal(byName.get('音效 · 环境音 2').items.length, 1, 'the one at 2.5s overlaps 2–3s, so it takes the sibling')
+  assert.ok(byName.has('音效 · 动效'), 'foley keeps its own track')
+  assert.ok(byName.has('音效 · 其他'), 'and "other" is not folded into either')
+  assert.equal(project.tracks.length, 4, `expected 4 tracks, got ${project.tracks.map((t) => t.name).join(' | ')}`)
+})
+
 await rm(scratch, { recursive: true, force: true })
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1
