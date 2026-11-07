@@ -13,7 +13,7 @@
  * data exists. The host re-checks the path against its own registry, so a
  * mismatched root fails closed (403) rather than reading someone else's folder.
  */
-import { h, useState, useEffect, useCallback, S, C, Btn, Notice, Select, Switch } from '../ui.js'
+import { h, useState, useEffect, useCallback, S, C, Btn, Notice, Select, Slider, Switch } from '../ui.js'
 import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
@@ -29,7 +29,7 @@ import {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits,
   renameTrack, setTrackVolume, setTrackPan, setTrackMuted, setTrackSolo, deleteTrack,
-  setClipFx, setTrackFx, setMasterFx,
+  setClipFx, setTrackFx, setMasterFx, setMasterFader,
   EditError,
 } from './edit.js'
 
@@ -334,6 +334,9 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
         case 'master-fx':
           result = setMasterFx(project, { chain: request.chain })
           break
+        case 'master-fader':
+          result = setMasterFader(project, { masterFaderDb: request.masterFaderDb })
+          break
         default:
           if (!track || !item) return
           result = applyClipEdit(project, track, item, request, playhead, trackId, itemId)
@@ -366,6 +369,9 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const selectedItem = selectedTrack?.items.find((entry) => entry.id === selection.itemId) ?? null
   const formats = availableFormats(project)
   const chosenFormat = formats.includes(exportFormat) ? exportFormat : formats[0]
+  // The bus fader reads the stored field every render, so it never drifts from
+  // what an export would apply.
+  const faderDb = Number(project.masterFaderDb) || 0
 
   // Which chain the right-hand column is showing (I-07). The column is 220px and
   // lives beside the picture, so one list at a time: a clip, a track, or the bus.
@@ -416,6 +422,23 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
       h('span', { style: { flex: 1 } }),
       h(Btn, { onClick: addToConversation, kind: (selection || range) ? 'primary' : undefined, disabled: !selection && !range }, t('添加到对话')),
+      // The bus fader (spec §10.2's 总推子). It sits beside the bus chain button
+      // because the two act on the whole mix, and it stays a slider rather than a
+      // number box so it can be pulled while the transport runs — the head of a
+      // track carries the same control, and the two behave identically.
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, width: 180, alignSelf: 'center' } },
+        h('span', { style: { ...S.mono, fontSize: 10, minWidth: 62, whiteSpace: 'nowrap' } },
+          `${t('总线音量')} ${faderDb} dB`,
+        ),
+        h(Slider, {
+          min: -60,
+          max: 12,
+          step: 0.5,
+          value: faderDb,
+          title: t('总线音量：整条混音的推子，作用在总线效果之前'),
+          onChange: (value) => applyEdit({ kind: 'master-fader', masterFaderDb: value }),
+        }),
+      ),
       h(Btn, {
         onClick: () => setFxTarget(fxTarget === 'master' ? null : 'master'),
         kind: fxTarget === 'master' ? 'primary' : undefined,

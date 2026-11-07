@@ -366,6 +366,24 @@ export function setClipFx(project, { trackId, itemId, chain }) {
   return { project: next, note: `设置片段「${item.label || item.id}」效果链（${describeFxChain(item.fx)}）` }
 }
 
+/**
+ * The bus fader — spec §10.2's "总推子", the one level control that acts on the
+ * whole mix.
+ *
+ * It is not a normalized value: the renderer applies `normalizeGainDb + this`,
+ * and the normalization is measured once and frozen, so pulling this down 5 dB
+ * lowers the export by exactly 5 dB instead of being compensated away.
+ */
+export function setMasterFader(project, { masterFaderDb }) {
+  const next = clone(project)
+  const value = Number(masterFaderDb)
+  if (!Number.isFinite(value)) throw new EditError('master fader must be a number')
+  if (value < -120 || value > 120) throw new EditError('master fader must stay between -120 and +120 dB')
+  if (tidy(value) === tidy(next.masterFaderDb ?? 0)) return { project: next, note: '' }
+  next.masterFaderDb = tidy(value)
+  return { project: next, note: `调整总线音量 ${next.masterFaderDb} dB` }
+}
+
 export function setMasterFx(project, { chain }) {
   const next = clone(project)
   const wanted = assertChain(chain)

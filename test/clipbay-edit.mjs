@@ -22,6 +22,7 @@ const {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits, EditError,
   renameTrack, setTrackVolume, setTrackPan, setTrackMuted, setTrackSolo, deleteTrack,
+  setMasterFader,
   itemLength, itemEnd,
 } = mod
 
@@ -269,6 +270,23 @@ test('setTrackVolume writes the fader and rejects out-of-range input', () => {
   check(/音量/.test(note), 'the note names the volume')
   assert.throws(() => setTrackVolume(project(), { trackId: 'trk_1', volumeDb: 30 }), EditError)
   assert.throws(() => setTrackVolume(project(), { trackId: 'trk_1', volumeDb: -200 }), EditError)
+})
+
+test('setMasterFader writes the bus fader and rejects out-of-range input', () => {
+  const { project: after, note } = setMasterFader(project(), { masterFaderDb: -6 })
+  close(after.masterFaderDb, -6, 'fader applied')
+  check(/总线/.test(note), 'the note says it is the bus, not a track')
+  // The range is the schema's own (-120..120), not the slider's -60..12: the
+  // mutator must not be stricter than what project.json accepts.
+  close(setMasterFader(project(), { masterFaderDb: 30 }).project.masterFaderDb, 30, 'above the slider range is still legal')
+  assert.throws(() => setMasterFader(project(), { masterFaderDb: 200 }), EditError)
+  assert.throws(() => setMasterFader(project(), { masterFaderDb: -200 }), EditError)
+  assert.throws(() => setMasterFader(project(), { masterFaderDb: 'loud' }), EditError)
+})
+
+test('setMasterFader reports no note when the value is unchanged', () => {
+  const { note } = setMasterFader(project(), { masterFaderDb: 0 })
+  equal(note, '', 'a no-op must not enter the history log')
 })
 
 test('setTrackPan writes the pan and rejects out-of-range input', () => {

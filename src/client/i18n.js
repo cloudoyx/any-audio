@@ -199,6 +199,8 @@ export const EN = {
   '这个工程只有音频，没有画面。': 'This project is audio only — there is no picture.',
   '读不出这个工程的视频，时间轴还能用。': 'The video could not be read; the timeline still works.',
   '导出': 'Export',
+  '总线音量': 'Bus',
+  '总线音量：整条混音的推子，作用在总线效果之前': 'Bus level: the whole mix, applied before the bus effects',
   '取消导出': 'Cancel export',
   '导出时归一化': 'Normalise on export',
   '正在渲染…': 'Rendering…',
