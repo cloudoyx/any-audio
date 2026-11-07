@@ -352,7 +352,7 @@ export const projectToolDefinition = finalizeTool({
     render: textRenderer((_args, value) => {
       if (value.mode === 'render') {
         return [
-          `Rendered ${Number(value.durationSec).toFixed(2)}s of ${value.tracks} tracks (${value.clips} clips) → ${value.relative || value.file}`,
+          `Rendered ${Number(value.durationSec).toFixed(2)}s of ${value.trackCount} tracks (${value.clipCount} clips) → ${value.relative || value.file}`,
           `peak ${Number(value.peakDb).toFixed(1)} dBFS, RMS ${Number(value.rmsDb).toFixed(1)} dBFS`,
           'The clip bay shows this project as it is on disk, so no further step is needed.',
         ].join('\n')
@@ -390,8 +390,9 @@ export const projectToolDefinition = finalizeTool({
         `Tracks (${value.tracks.length} of ${LIMITS.tracks}):`,
       ]
       for (const track of value.tracks) {
-        lines.push(`- ${track.name} [${track.category}] ${track.volumeDb}dB ${track.items.length ? `(${track.items.length} clips)` : '(empty)'}`)
-        for (const item of track.items) {
+        const clips = track.clips ?? []
+        lines.push(`- ${track.name} [${track.category}] ${track.volumeDb}dB ${clips.length ? `(${clips.length} clips)` : '(empty)'}`)
+        for (const item of clips) {
           const end = Number(item.startSec) + (Number(item.outSec) - Number(item.inSec))
           lines.push(`    ${item.id} "${item.label}" ${Number(item.startSec).toFixed(2)}–${end.toFixed(2)}s, material ${item.material}`)
         }
