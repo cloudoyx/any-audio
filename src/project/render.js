@@ -17,8 +17,9 @@
  */
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { accumulateInto, applyFades, applyGainDb, panGains } from '../audio/mix.js'
-import { conformChannels, encodeWav, fromDb, parseWav, peakOf, resample, rmsOf, toDb } from '../audio/wav.js'
+import { accumulateInto, applyFades, applyGainDb } from '../audio/mix.js'
+import { dbToGain, itemParams, masterParams, panGains, resolveTrackGain, trackParams } from '../client/clipbay/mix-params.js'
+import { conformChannels, encodeWav, parseWav, peakOf, resample, rmsOf, toDb } from '../audio/wav.js'
 import { findFfmpeg, runFfmpeg } from '../tools/shared.js'
 import { muxVideo, probeDuration } from '../tools/mix.js'
 import { contentEndSec, validateProject } from './schema.js'
@@ -89,26 +90,30 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
 
   const acc = [new Float32Array(frames), new Float32Array(frames)]
   const tracks = audibleTracks(project)
+  const anySolo = project.tracks.some((track) => track.solo === true)
   const reports = []
   const materialCache = new Map()
   let clipCount = 0
 
   for (const [trackIndex, track] of tracks.entries()) {
     throwIfAborted(signal)
-    const silent = track.muted === true
-    const trackGain = silent ? 0 : fromDb(Number(track.volumeDb) || 0)
+    const level = trackParams(track)
+    const trackGain = resolveTrackGain(track, anySolo)
     const report = {
       id: track.id,
       name: track.name,
       category: track.category,
-      volumeDb: Number(track.volumeDb) || 0,
+      volumeDb: level.volumeDb,
       pan: Number(track.pan) || 0,
-      muted: silent,
+      muted: level.muted,
       clips: 0,
     }
     for (const item of track.items) {
       throwIfAborted(signal)
+      // A muted clip is dropped; a muted *track* is not, because its fader is
+      // what silences it (and the report still counts its clips).
       if (item.muted) continue
+      const params = itemParams(item, track)
       const entry = findMaterial(index, item.material)
       if (!entry) {
         throw new RenderError(`clip "${item.label || item.id}" refers to material "${item.material}", which is not in the project index`)
@@ -118,14 +123,13 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
         materialCache.set(item.material, await loadMaterial(sampleRate, path))
       }
       let piece = sliceItem(materialCache.get(item.material), sampleRate, item)
-      const itemGainDb = Number(item.gainDb) || 0
-      if (itemGainDb) piece = applyGainDb(piece, itemGainDb)
-      const fadeInSec = Number(item.fadeInSec) || 0
-      const fadeOutSec = Number(item.fadeOutSec) || 0
-      if (fadeInSec > 0 || fadeOutSec > 0) piece = applyFades(piece, sampleRate, fadeInSec, fadeOutSec)
-      // Clip pan and track pan add up, then one equal-power pair is applied once.
-      const pan = Math.max(-1, Math.min(1, (Number(item.pan) || 0) + (Number(track.pan) || 0)))
-      const [panLeft, panRight] = panGains(pan)
+      if (params.gainDb) piece = applyGainDb(piece, params.gainDb)
+      if (params.fadeInSec > 0 || params.fadeOutSec > 0) {
+        piece = applyFades(piece, sampleRate, params.fadeInSec, params.fadeOutSec)
+      }
+      // Clip pan and track pan add up once, in mix-params; one equal-power pair
+      // is applied once.
+      const [panLeft, panRight] = panGains(params.pan)
       accumulateInto(acc, piece, Math.round(item.startSec * sampleRate), trackGain * panLeft, trackGain * panRight)
       report.clips++
       clipCount++
@@ -139,10 +143,11 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
 
   // Export gain is the sum of the fixed normalisation and the user's fader,
   // applied once and never measured back (spec §10.2).
-  const appliedGainDb = (Number(project.normalizeGainDb) || 0) + (Number(project.masterFaderDb) || 0)
+  const master = masterParams(project)
+  const appliedGainDb = master.gainDb
   const peakBeforeGainDb = Number(toDb(peakOf(acc)).toFixed(2))
   if (appliedGainDb) {
-    const gain = fromDb(appliedGainDb)
+    const gain = master.gain
     for (let channel = 0; channel < 2; channel++) {
       const samples = acc[channel]
       for (let i = 0; i < samples.length; i++) samples[i] *= gain
@@ -214,7 +219,7 @@ async function freezeNormalizeGain(project, workspaceRoot, rendered, signal) {
 
   // Apply the newly measured gain to what is already rendered rather than
   // rendering a second time: the only difference is this one scalar.
-  const gain = fromDb(normalizeGainDb)
+  const gain = dbToGain(normalizeGainDb)
   for (const channel of rendered.channels) {
     for (let i = 0; i < channel.length; i++) channel[i] *= gain
   }
@@ -280,7 +285,7 @@ export async function exportProject({
     throwIfAborted(signal)
     const peak = peakOf(rendered.channels)
     if (peak > 0) {
-      const gain = fromDb(EXPORT_NORMALIZE_PEAK_DB) / peak
+      const gain = dbToGain(EXPORT_NORMALIZE_PEAK_DB) / peak
       for (const channel of rendered.channels) {
         for (let i = 0; i < channel.length; i++) channel[i] *= gain
       }

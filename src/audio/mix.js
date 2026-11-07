@@ -1,55 +1,34 @@
+import { dbToGain, fadeCurve, panGains } from '../client/clipbay/mix-params.js'
 import { fromDb, padOrTrim, peakOf } from './wav.js'
 
 const EPSILON = 1e-9
 
-function fadeGain(index, total, frames) {
-  let gain = 1
-  if (total > 0) {
-    if (index < total) gain *= 0.5 - 0.5 * Math.cos((Math.PI * index) / total)
-    const tail = frames - 1 - index
-    if (tail < total) gain *= 0.5 - 0.5 * Math.cos((Math.PI * tail) / total)
-  }
-  return gain
-}
+// The fade shape, the dB conversion and the pan law live in mix-params.js so the
+// preview and the renderer cannot drift apart (improvement plan 02, I-04). This
+// module applies them to plain arrays; it never restates them.
+export { dbToGain, panGains }
 
 export function applyFades(channels, sampleRate, fadeInSec, fadeOutSec) {
   const frames = channels[0].length
   const fadeIn = Math.min(frames, Math.max(0, Math.round(fadeInSec * sampleRate)))
   const fadeOut = Math.min(frames, Math.max(0, Math.round(fadeOutSec * sampleRate)))
   if (!fadeIn && !fadeOut) return channels
+  const curve = fadeCurve(frames, sampleRate, fadeInSec, fadeOutSec)
   return channels.map((channel) => {
     const out = Float32Array.from(channel)
-    for (let i = 0; i < frames; i++) {
-      let gain = 1
-      if (fadeIn && i < fadeIn) gain *= 0.5 - 0.5 * Math.cos((Math.PI * i) / fadeIn)
-      const tail = frames - 1 - i
-      if (fadeOut && tail < fadeOut) gain *= 0.5 - 0.5 * Math.cos((Math.PI * tail) / fadeOut)
-      out[i] *= gain
-    }
+    for (let i = 0; i < frames; i++) out[i] *= curve[i]
     return out
   })
 }
 
 export function applyGainDb(channels, gainDb) {
   if (!gainDb) return channels
-  const gain = fromDb(gainDb)
+  const gain = dbToGain(gainDb)
   return channels.map((channel) => {
     const out = new Float32Array(channel.length)
     for (let i = 0; i < channel.length; i++) out[i] = channel[i] * gain
     return out
   })
-}
-
-/**
- * Equal-power gains for a pan value. Centre is a true bypass (1, 1) rather than
- * the 0.707 the raw formula gives, so a centred clip is never 3 dB quieter than
- * the same clip with panning removed.
- */
-export function panGains(pan) {
-  const amount = Math.max(-1, Math.min(1, Number(pan) || 0))
-  if (amount === 0) return [1, 1]
-  const angle = ((amount + 1) * Math.PI) / 4
-  return [Math.cos(angle), Math.sin(angle)]
 }
 
 /**

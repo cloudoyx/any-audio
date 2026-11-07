@@ -15,47 +15,42 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
-
-/** Audible tracks: solo wins over everything, then mute removes one track. */
-export function audibleTracks(tracks) {
-  const list = tracks ?? []
-  const soloed = list.filter((track) => track.solo)
-  const pool = soloed.length > 0 ? soloed : list
-  return pool.filter((track) => !track.muted)
-}
-
-export function dbToGain(db) {
-  const value = Number(db) || 0
-  return value === 0 ? 1 : 10 ** (value / 20)
-}
-
-/**
- * One clip's pan as the renderer computes it: clip pan plus track pan, clamped.
- *
- * Shared by the scheduled graph and the live update so a pan move during
- * playback lands on the same number a render would (plan M5: one parameter set
- * for preview and export).
- */
-export function clipPan(item, track) {
-  const value = (Number(item?.pan) || 0) + (Number(track?.pan) || 0)
-  return Math.max(-1, Math.min(1, value))
-}
+import { fadeCurve, itemParams, masterParams, panGains, resolveTrackGain } from './mix-params.js'
 
 /** Time constant for a live gain move: short enough to feel immediate, long
  * enough that a step does not click. `setTargetAtTime` reaches ~95% in 3τ. */
 export const TARGET_TAU_SEC = 0.01
 
 /**
- * The gain of one track, as the renderer computes it.
+ * Points per second for a scheduled fade curve.
  *
- * Mute wins over solo, and while anything is soloed every other track is silent.
- * Returned as a number (not a boolean) so the same expression can drive both the
- * scheduled graph and a live update — preview and export must agree (plan M5).
+ * The renderer walks its fade frame by frame; the preview hands WebAudio a
+ * curve and the node interpolates between the points. 200 points per second is
+ * 5 ms, far below the ear's resolution for a gain ramp, and a two-second fade
+ * costs 400 floats.
  */
-export function resolveTrackGain(track, anySolo) {
-  if (!track || track.muted) return 0
-  if (anySolo && !track.solo) return 0
-  return dbToGain(track.volumeDb)
+const FADE_CURVE_POINTS_PER_SEC = 200
+
+/**
+ * Shape a clip's fades onto one gain node, using the renderer's own curve.
+ *
+ * Three segments rather than one curve over the whole clip keeps the point count
+ * proportional to the fade, not to the clip: a two-second fade on a ten-minute
+ * clip would otherwise get a handful of points and audibly step.
+ */
+function scheduleFades(gain, when, duration, fadeInSec, fadeOutSec) {
+  gain.setValueAtTime(1, when)
+  const total = Math.max(0, Number(duration) || 0)
+  const fadeIn = Math.max(0, Math.min(Number(fadeInSec) || 0, total))
+  const fadeOut = Math.max(0, Math.min(Number(fadeOutSec) || 0, total - fadeIn))
+  if (fadeIn > 0) {
+    const points = Math.max(2, Math.round(fadeIn * FADE_CURVE_POINTS_PER_SEC))
+    gain.setValueCurveAtTime(fadeCurve(points, points / fadeIn, fadeIn, 0), when, fadeIn)
+  }
+  if (fadeOut > 0) {
+    const points = Math.max(2, Math.round(fadeOut * FADE_CURVE_POINTS_PER_SEC))
+    gain.setValueCurveAtTime(fadeCurve(points, points / fadeOut, 0, fadeOut), when + total - fadeOut, fadeOut)
+  }
 }
 
 /**
@@ -69,7 +64,7 @@ export function mixedGain(project, trackId, itemId) {
   const track = tracks.find((entry) => entry.id === trackId)
   const item = track?.items?.find((entry) => entry.id === itemId)
   if (!track || !item || item.muted) return 0
-  return resolveTrackGain(track, anySolo) * dbToGain(item.gainDb)
+  return resolveTrackGain(track, anySolo) * itemParams(item, track).gain
 }
 
 /**
@@ -101,7 +96,8 @@ export function scheduleClips(project, fromSec = 0) {
       const duration = length - skipped
       if (!(duration > 0)) continue
 
-      const itemGain = item.muted ? 0 : dbToGain(item.gainDb)
+      const params = itemParams(item, track)
+      const itemGain = item.muted ? 0 : params.gain
       out.push({
         itemId: item.id,
         trackId: track.id,
@@ -114,11 +110,11 @@ export function scheduleClips(project, fromSec = 0) {
         trackGain,
         itemGain,
         gain: trackGain * itemGain,
-        pan: clipPan(item, track),
+        pan: params.pan,
         // Fades are relative to the clip, so a clip entered mid-way keeps only
         // the part of its fade the playhead has not passed yet.
-        fadeInSec: Math.max(0, (Number(item.fadeInSec) || 0) - skipped),
-        fadeOutSec: Math.min(Number(item.fadeOutSec) || 0, duration),
+        fadeInSec: Math.max(0, params.fadeInSec - skipped),
+        fadeOutSec: Math.min(params.fadeOutSec, duration),
       })
     }
   }
@@ -181,6 +177,7 @@ export function usePlayback(root, projectId) {
   const contextRef = useRef(null)
   const cacheRef = useRef(null)
   const sourcesRef = useRef([])
+  const masterRef = useRef(null)
   const startedAtRef = useRef(0)
   const fromRef = useRef(0)
   const lastPositionRef = useRef(0)
@@ -201,7 +198,7 @@ export function usePlayback(root, projectId) {
   const stopSources = useCallback(() => {
     for (const node of sourcesRef.current) {
       try { node.source.stop() } catch { /* already ended */ }
-      for (const key of ['source', 'fade', 'itemLevel', 'trackLevel', 'panner']) {
+      for (const key of ['source', 'fade', 'itemLevel', 'trackLevel', 'splitter', 'panLeft', 'panRight', 'merger']) {
         try { node[key]?.disconnect() } catch { /* already gone */ }
       }
     }
@@ -258,8 +255,12 @@ export function usePlayback(root, projectId) {
 
     startedAtRef.current = context.currentTime
     const master = context.createGain()
-    master.gain.value = 1
+    // The master is the frozen normalisation plus the person's fader, exactly as
+    // the renderer applies it (spec §10.2). Hard-coding 1 here was why a bus
+    // fader move was audible nowhere until the export came out different.
+    master.gain.value = masterParams(project).gain
     master.connect(context.destination)
+    masterRef.current = master
 
     setError('')
     setPlaying(true)
@@ -294,29 +295,32 @@ export function usePlayback(root, projectId) {
       const duration = Math.max(0, Math.min(entry.duration, buffer.duration - offset))
       if (!(duration > 0)) continue
 
-      fade.gain.setValueAtTime(1, when)
-      if (entry.fadeInSec > 0) {
-        fade.gain.setValueAtTime(0, when)
-        fade.gain.linearRampToValueAtTime(1, when + entry.fadeInSec)
-      }
-      if (entry.fadeOutSec > 0) {
-        fade.gain.setValueAtTime(1, when + duration - entry.fadeOutSec)
-        fade.gain.linearRampToValueAtTime(0, when + duration)
-      }
+      // Same cosine curve the renderer applies, scheduled as a value curve.
+      scheduleFades(fade.gain, when, duration, entry.fadeInSec, entry.fadeOutSec)
 
-      const panner = context.createStereoPanner ? context.createStereoPanner() : null
+      // Pan by hand, not with StereoPannerNode: that node gives 0.707 per side at
+      // centre, while the renderer's law is a true bypass (1, 1) at centre — a
+      // 3 dB disagreement on every centred clip, measured, not guessed. Splitting
+      // and re-gaining reproduces the renderer's pair exactly.
+      const splitter = context.createChannelSplitter(2)
+      const merger = context.createChannelMerger(2)
+      const panLeft = context.createGain()
+      const panRight = context.createGain()
+      const [gainLeft, gainRight] = panGains(entry.pan)
+      panLeft.gain.value = gainLeft
+      panRight.gain.value = gainRight
+
       source.connect(fade)
       fade.connect(itemLevel)
       itemLevel.connect(trackLevel)
-      if (panner) {
-        panner.pan.value = entry.pan
-        trackLevel.connect(panner)
-        panner.connect(master)
-      } else {
-        trackLevel.connect(master)
-      }
+      trackLevel.connect(splitter)
+      splitter.connect(panLeft, 0)
+      splitter.connect(panRight, 1)
+      panLeft.connect(merger, 0, 0)
+      panRight.connect(merger, 0, 1)
+      merger.connect(master)
       source.start(when, offset, duration)
-      nodes.push({ source, fade, itemLevel, trackLevel, panner, trackId: entry.trackId, itemId: entry.itemId })
+      nodes.push({ source, fade, itemLevel, trackLevel, splitter, merger, panLeft, panRight, trackId: entry.trackId, itemId: entry.itemId })
     }
 
     sourcesRef.current = nodes
@@ -362,18 +366,26 @@ export function usePlayback(root, projectId) {
    */
   const applyMix = useCallback((project) => {
     const context = contextRef.current
-    if (!context || sourcesRef.current.length === 0) return
+    if (!context) return
     const now = context.currentTime
     const tracks = project?.tracks ?? []
     const anySolo = tracks.some((entry) => entry.solo)
+    // The bus gain is pushed even when nothing is scheduled: the person can move
+    // the master fader before pressing play, and the next play reads it anyway,
+    // but keeping one place that writes it means the two can never disagree.
+    masterRef.current?.gain.setTargetAtTime(masterParams(project).gain, now, TARGET_TAU_SEC)
+    if (sourcesRef.current.length === 0) return
     for (const node of sourcesRef.current) {
       const track = tracks.find((entry) => entry.id === node.trackId)
       const item = track?.items?.find((entry) => entry.id === node.itemId)
+      const params = itemParams(item, track)
       node.trackLevel?.gain.setTargetAtTime(resolveTrackGain(track, anySolo), now, TARGET_TAU_SEC)
-      node.itemLevel?.gain.setTargetAtTime(item && !item.muted ? dbToGain(item.gainDb) : 0, now, TARGET_TAU_SEC)
-      if (node.panner) {
-        node.panner.pan.setTargetAtTime(clipPan(item, track), now, TARGET_TAU_SEC)
-      }
+      node.itemLevel?.gain.setTargetAtTime(item && !item.muted ? params.gain : 0, now, TARGET_TAU_SEC)
+      // Pan moves ramp on the same path as the faders, on the two gains the
+      // renderer's law produces.
+      const [gainLeft, gainRight] = panGains(params.pan)
+      node.panLeft?.gain.setTargetAtTime(gainLeft, now, TARGET_TAU_SEC)
+      node.panRight?.gain.setTargetAtTime(gainRight, now, TARGET_TAU_SEC)
     }
   }, [])
 

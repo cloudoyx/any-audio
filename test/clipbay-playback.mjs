@@ -11,12 +11,17 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
+// The mix arithmetic lives in mix-params.js since improvement plan 02 (I-04), so
+// both modules are concatenated into one scratch module: the preview half is
+// still the real audio.js, it just gets its shared parameters from the file the
+// renderer also reads.
+const mixParamsSource = readFileSync(join(root, 'src', 'client', 'clipbay', 'mix-params.js'), 'utf8')
 const source = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
   // The hooks import react, which is not needed for the pure helpers.
   .replace(/^import .*$/gm, '')
   .replace(/export function usePlayback[\s\S]*$/m, '')
-const { scheduleClips, audibleTracks, dbToGain, scheduledLength, mixedGain, resolveTrackGain } = await import(
-  `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`
+const { scheduleClips, audibleTracks, dbToGain, scheduledLength, mixedGain, resolveTrackGain, itemParams, masterParams, panGains } = await import(
+  `data:text/javascript;base64,${Buffer.from(`${mixParamsSource}\n${source}`, 'utf8').toString('base64')}`
 )
 
 let passed = 0
@@ -269,14 +274,37 @@ test('the transport pushes the mix when the project changes', () => {
 test('pan follows the same live path as the faders', () => {
   // Pan was written once when the graph was built, so turning the knob during
   // playback did nothing until the next play. It has to ramp like the gains do,
-  // and the clip and the track must read the same sum (improvements plan 01).
+  // and the clip and the track must read the same sum — which since improvement
+  // plan 02 (I-04) is computed once, in mix-params.js, for both engines.
   const raw = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
-  assert.match(raw, /export function clipPan/, 'clipPan is exported so preview and export share one sum')
-  const applyMix = raw.slice(raw.indexOf('const applyMix = useCallback'), raw.indexOf('const applyMix = useCallback') + 900)
-  assert.match(applyMix, /panner\.pan\.setTargetAtTime/, 'applyMix ramps the panner too')
-  assert.match(applyMix, /clipPan\(/, 'using the shared sum')
+  const shared = readFileSync(join(root, 'src', 'client', 'clipbay', 'mix-params.js'), 'utf8')
+  assert.match(shared, /export function itemParams/, 'itemParams is the one place clip pan is summed')
+  assert.match(shared, /pan: Math\.max\(-1, Math\.min\(1, pan\)\)/, 'the sum is clamped once, there')
+  const applyMix = raw.slice(raw.indexOf('const applyMix = useCallback'), raw.indexOf('const applyMix = useCallback') + 1600)
+  assert.match(applyMix, /panLeft\?\.gain\.setTargetAtTime/, 'applyMix ramps the left pan gain too')
+  assert.match(applyMix, /panRight\?\.gain\.setTargetAtTime/, 'and the right one')
+  assert.match(applyMix, /panGains\(/, 'using the shared law')
   const schedule = raw.slice(raw.indexOf('export function scheduleClips'), raw.indexOf('export function scheduleClips') + 3000)
-  assert.match(schedule, /clipPan\(/, 'scheduleClips uses it as well')
+  assert.match(schedule, /itemParams\(/, 'scheduleClips uses it as well')
+})
+
+test('preview and renderer take their parameters from the same module', () => {
+  // Improvement plan 02, I-04. The point is not that the two chains agree today;
+  // it is that neither may compute a gain, a pan or a fade on its own, or the
+  // next FX added would have to be reconciled twice.
+  const renderer = readFileSync(join(root, 'src', 'project', 'render.js'), 'utf8')
+  const preview = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
+  for (const [name, source] of [['render.js', renderer], ['audio.js', preview]]) {
+    assert.match(source, /from '\.\.\/client\/clipbay\/mix-params\.js'|from '\.\/mix-params\.js'/, `${name} imports mix-params`)
+    assert.match(source, /itemParams\(/, `${name} reads clip parameters from it`)
+    assert.match(source, /masterParams\(/, `${name} reads the bus gain from it`)
+    // The two offenders from the first version: a hand-rolled dB conversion and
+    // a hand-rolled fader sum. Neither may come back.
+    assert.doesNotMatch(source, /10 \*\* \(\s*[^)]*\/ 20\)/, `${name} must not restate dB → gain`)
+    assert.doesNotMatch(source, /normalizeGainDb\)? \|\| 0\) \+ \(Number\(project\.masterFaderDb/, `${name} must not restate the fader sum`)
+  }
+  // The renderer must not keep a second solo/mute filter either.
+  assert.match(renderer, /resolveTrackGain\(/, 'the renderer takes the track gain from the shared module')
 })
 
 test('pan is described in the labels the user reads', () => {
