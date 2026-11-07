@@ -83,12 +83,6 @@ function normalize(signal, target = 0.9) {
   return signal
 }
 
-function addAt(target, source, offsetFrames, gain = 1) {
-  const start = Math.max(0, Math.round(offsetFrames))
-  const limit = Math.min(target.length, start + source.length)
-  for (let i = start; i < limit; i++) target[i] += source[i - start] * gain
-}
-
 function gustCurve(frames, sampleRate, rand, rate = 0.25, depth = 0.6) {
   const points = Math.max(2, Math.ceil((frames / sampleRate) * rate * 4))
   const control = Array.from({ length: points }, () => rand())
@@ -448,24 +442,6 @@ const GENERATORS = {
 
 export const SFX_TYPES = Object.keys(GENERATORS)
 
-export const SFX_HELP = {
-  wind: 'sustained air; params: intensity, brightness, gustRate',
-  rain: 'rain bed with droplets; params: intensity',
-  water: 'stream/brook; params: intensity, rate',
-  fire: 'fire crackle bed; params: intensity',
-  birds: 'bird calls; params: intensity, rate',
-  footsteps: 'periodic steps; params: intensity, rate (steps per minute)',
-  stones: 'stone/gravel scatter; params: intensity, rate',
-  whoosh: 'transition sweep; params: intensity, brightness',
-  impact: 'impact/rumble hit; params: weight',
-  bell: 'bell strike; params: pitch (Hz)',
-  gong: 'gong swell; params: pitch (Hz)',
-  drum: 'taiko-style drum; params: pitch (Hz)',
-  riser: 'tension riser; params: pitch (Hz)',
-  heartbeat: 'heartbeat; params: rate (bpm)',
-  thunder: 'thunder; params: weight',
-}
-
 function clamp01(value) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return 0.6
@@ -480,28 +456,6 @@ export function synthesizeSfx({ type, durationSec, sampleRate = 48000, params = 
   const [left, right] = generator({ durationSec, sampleRate, rand, params })
   const out = [left.subarray(0, frames), right.subarray(0, frames)]
   return out.map((channel) => normalize(Float32Array.from(channel), 0.85))
-}
-
-export function renderSfxTimeline({ items, durationSec, sampleRate = 48000 }) {
-  const frames = Math.ceil(durationSec * sampleRate)
-  const left = new Float32Array(frames)
-  const right = new Float32Array(frames)
-  const report = []
-  items.forEach((item, index) => {
-    const type = item.type ?? item.name
-    if (!type) throw new Error(`sfx item #${index} needs a type`)
-    const start = Number(item.startSec ?? item.start ?? 0)
-    const length = Number(item.durationSec ?? item.duration ?? durationSec)
-    if (!Number.isFinite(start) || start < 0) throw new Error(`sfx item #${index} has an invalid startSec`)
-    if (!Number.isFinite(length) || length <= 0) throw new Error(`sfx item #${index} has an invalid durationSec`)
-    const seed = Number.isFinite(Number(item.seed)) ? Number(item.seed) : index * 104729 + 17
-    const channels = synthesizeSfx({ type, durationSec: length, sampleRate, params: item.params ?? {}, seed })
-    const gain = Math.pow(10, (Number.isFinite(Number(item.gainDb)) ? Number(item.gainDb) : 0) / 20)
-    addAt(left, channels[0], start * sampleRate, gain)
-    addAt(right, channels[1], start * sampleRate, gain)
-    report.push({ type, startSec: start, durationSec: length, gainDb: Number.isFinite(Number(item.gainDb)) ? Number(item.gainDb) : 0 })
-  })
-  return { channels: [left, right], report }
 }
 
 /**

@@ -49,7 +49,7 @@ registerAllTools({
   logger: { info: () => {} },
   get: () => undefined,
 })
-const { createProject } = await import('../src/project/store.js')
+const { createProject, readProject } = await import('../src/project/store.js')
 
 // Improvement 01 / I-10: the three generating tools refuse to run without a
 // project, because audio a person cannot adjust is the failure this suite is
@@ -424,18 +424,19 @@ await test('velocity controls loudness (dynamic response)', async () => {
   assert(ratio > 8, `velocity 120 should be much louder than 30, measured ${ratio.toFixed(1)} dB`)
 })
 
-await test('sfx renderer is deterministic and honours the timeline', async () => {
+await test('sfx renderer is deterministic', async () => {
   const a = synthesizeSfx({ type: 'wind', durationSec: 1.5, sampleRate: 48000, params: { intensity: 0.6 }, seed: 42 })
   const b = synthesizeSfx({ type: 'wind', durationSec: 1.5, sampleRate: 48000, params: { intensity: 0.6 }, seed: 42 })
   assert(a[0].length === b[0].length && a[0].length === 72000, 'expected 1.5s at 48kHz')
   let maxDiff = 0
   for (let i = 0; i < a[0].length; i++) maxDiff = Math.max(maxDiff, Math.abs(a[0][i] - b[0][i]))
   assert(maxDiff === 0, `same seed must give identical audio, max difference ${maxDiff}`)
-  const result = await tools.get('anyaudio_sfx').execute(
-    { projectId: await freshAttach(), items: [{ type: 'impact', startSec: 0.5, durationSec: 0.5 }], durationSec: 2, output: '.anyaudio/test-tmp/sfx.wav' },
-    exec,
-  )
-  near(result.durationSec, 2, 0.001, 'sfx timeline length')
+  // A different seed has to give different audio, or "deterministic" would also
+  // be satisfied by a generator that ignores its seed entirely.
+  const c = synthesizeSfx({ type: 'wind', durationSec: 1.5, sampleRate: 48000, params: { intensity: 0.6 }, seed: 43 })
+  let different = 0
+  for (let i = 0; i < a[0].length; i += 97) different = Math.max(different, Math.abs(a[0][i] - c[0][i]))
+  assert(different > 1e-6, 'a different seed must give different audio')
 })
 
 await test('ducking lowers the music bed while narration is present', async () => {
@@ -813,8 +814,8 @@ await test('sfx catalog lists default-bank presets by scene', async () => {
   assert(weather.presets.some((entry) => entry.id === 'seashore'), 'seashore belongs to weather')
 })
 
-await test('sfx preset renders real audio and keeps timeline length', async () => {
-  const output = join(tmpDir, 'sfx-preset.wav')
+await test('sfx preset renders real audio, one file per effect', async () => {
+  const output = join(tmpDir, 'sfx-preset')
   const result = await tools.get('anyaudio_sfx').execute(
     {
       projectId: await freshAttach(),
@@ -822,17 +823,24 @@ await test('sfx preset renders real audio and keeps timeline length', async () =
         { preset: 'rain', startSec: 0.5, durationSec: 2.5, gainDb: -6 },
         { preset: 'gun-shot', startSec: 0, gainDb: -8 },
       ],
-      durationSec: 3,
       peakDb: null,
       output,
     },
     exec,
   )
-  const wav = parseWav(await readFile(output))
-  assert(Math.abs(wav.durationSec - 3) < 0.01, `expected 3s, got ${wav.durationSec}`)
-  assert(peakOf(wav.channels) > 0.001, 'preset render must not be silent')
-  assert(result.items.length === 2 && result.items.every((item) => item.preset), 'report should name both presets')
-  assert(result.items.some((item) => item.presetName.includes('雨')), 'report should use the Chinese name')
+  // Each effect is its own file now, so there is no shared bed length to check:
+  // the material length is what the clip plays, and it has to be real audio.
+  assert(result.materials.length === 2, `expected 2 materials, got ${result.materials.length}`)
+  for (const entry of result.materials) {
+    const wav = parseWav(await readFile(entry.absolutePath))
+    assert(peakOf(wav.channels) > 0.001, `${entry.file} must not be silent`)
+    assert(Math.abs(wav.durationSec - entry.durationSec) < 0.05, `${entry.file}: report says ${entry.durationSec}s, file is ${wav.durationSec}s`)
+  }
+  const rain = result.materials.find((entry) => entry.preset === 'rain')
+  assert(rain, 'the report should name the rain preset')
+  assert(rain.presetName.includes('雨'), 'report should use the Chinese name')
+  assert(Math.abs(rain.durationSec - 2.5) < 0.05, `rain should be cut at 2.5s, got ${rain.durationSec}`)
+  assert(result.materials.every((entry) => entry.attached?.clipId), 'both effects must land as clips')
 })
 
 await test('unknown sfx preset points at the catalog', async () => {
@@ -899,18 +907,46 @@ await test('sfx materials mode refuses an item without a length', async () => {
   assert(/needs durationSec/.test(error.message), `message should name the missing length, got: ${error.message}`)
 })
 
-await test('the default sfx mode is still timeline', async () => {
-  const output = join(tmpDir, 'sfx-default.wav')
+await test('sfx has a single mode and it places events as clips', async () => {
+  // Improvement plan 02, I-01. "timeline" mode used to bake every effect into one
+  // full-length clip, so nothing inside it could be moved or rebalanced — the
+  // exact shape a clip bay exists to prevent. It is gone, and the default with it.
+  const output = join(tmpDir, 'sfx-default')
   const result = await tools.get('anyaudio_sfx').execute(
-    { projectId: await freshAttach(), items: [{ type: 'impact', startSec: 0.3, durationSec: 0.4 }], durationSec: 2, output, peakDb: null },
+    {
+      projectId: await freshAttach(),
+      items: [
+        { type: 'impact', startSec: 0.3, durationSec: 0.4 },
+        { type: 'whoosh', durationSec: 0.4 },
+      ],
+      output,
+      peakDb: null,
+    },
     exec,
   )
-  // The default must not have moved: old callers that never pass `mode` keep
-  // getting one full-length file with the sound placed at startSec.
-  assert(result.mode === 'timeline', `default mode should be timeline, got ${result.mode}`)
-  const wav = parseWav(await readFile(output))
-  assert(Math.abs(wav.durationSec - 2) < 0.01, `expected a 2s timeline, got ${wav.durationSec}`)
-  assert(Math.abs(wav.channels[0][0]) < 1e-4, 'nothing should sound before startSec')
+  assert(result.mode === 'materials', `the only mode is materials, got ${result.mode}`)
+  assert(result.materials.length === 2, `one file per effect, got ${result.materials.length}`)
+  assert(result.materials.every((entry) => entry.attached?.clipId), 'each effect lands as its own clip')
+  assert(result.materials.every((entry) => entry.file), 'and its own file')
+  const placed = await readProject(repoRoot, result.projectId)
+  const clips = placed.tracks.flatMap((track) => track.items)
+  assert(clips.length === 2, `the project should hold two clips, it holds ${clips.length}`)
+  assert(clips.some((item) => Math.abs(item.startSec - 0.3) < 1e-6), `the explicit startSec must be honoured, got ${clips.map((item) => item.startSec).join(', ')}`)
+})
+
+await test('sfx refuses mode:"timeline" and points at the alternative', async () => {
+  let error = null
+  try {
+    await tools.get('anyaudio_sfx').execute(
+      { projectId: await freshAttach(), mode: 'timeline', items: [{ type: 'wind', durationSec: 1 }] },
+      exec,
+    )
+  } catch (caught) {
+    error = caught
+  }
+  assert(error, 'the removed mode must fail')
+  assert(/Use mode:"materials"/.test(error.message), `it must name the surviving mode, got: ${error.message}`)
+  assert(/anyaudio_mix/.test(error.message), 'and where a flat bed comes from now')
 })
 
 await test('both general banks are suggested, GeneralUser is the default', async () => {

@@ -166,27 +166,25 @@ MuseScore General 另有一组更响的版本（`sea-shore`、`bird-tweet`、`te
 - 音效不要铺满；关键点之外保持干净。
 - 环境底噪可以用低音量 `wind`/`rain` 或 `preset:"wind"` 轨道（role `ambience`），它同样会被 ducking 压低。
 
-### 两种模式：`timeline` 与 `materials`
+### 一种模式：每个音效都是一个片段
 
-`anyaudio_sfx` 默认 `mode:"timeline"`：把 items 按 `startSec` 摆到一条时间轴上，输出一个 `durationSec` 长的 WAV。**这个默认没有变**，旧调用照旧拿全长文件。
+`anyaudio_sfx` 只产出素材：N 个 items 产出 **N 个各自从 t=0 开始的短文件**，外加一份 `manifest.json`（文件、类别、时长、峰值）。每个文件同时落成工程里的一个片段，位置由 items 的 `startSec` 决定；不写时间就依次排在同类别轨道的末尾。
 
-`mode:"materials"` 是给剪辑台用的：N 个 items 产出 **N 个各自从 t=0 开始的短文件**，外加一份 `manifest.json`（文件、类别、时长、峰值）。位置不再由工具决定，交给 `anyaudio_project`。
+它没有"把整段音效烤成一条"的模式了：那种产物里每个声音都没法单独挪动、单独调增益，正是剪辑台要避免的形状。只要一个不可拆的音床，用 `anyaudio_mix`。
 
 ```json
-{ "mode": "materials",
-  "items": [
-    { "preset": "rain", "durationSec": 30, "gainDb": -14 },
-    { "type": "impact", "durationSec": 0.8, "params": { "weight": 0.8 } }
+{ "items": [
+    { "preset": "rain", "startSec": 0, "durationSec": 30, "gainDb": -14 },
+    { "type": "impact", "durationSec": 0.8, "params": { "weight": 0.8 }, "startSec": 12.4 }
   ],
   "output": ".anyaudio/out/sfx" }
 ```
 
 要点：
 
-- `startSec` 在 `materials` 模式下被忽略；每段必须有自己的 `durationSec`（没有时间轴可当兜底）。
-- 清单里的「类别」是 spec §5.2 的分轨依据：环境音 / 动效 / 其他。同类别同时刻不共轨，不同时刻可以复用。
+- 每段必须有自己的 `durationSec`（程序化音效没有自然长度）；preset 的一次性音效不写就放完自然尾巴。
+- 清单里的「类别」是 spec §5.2 的分轨依据：环境音 / 动效 / 其他。同类别时间重叠 → 另起一条轨；不重叠 → 合并到同一条。
 - 每个文件的峰值单独报告，工具不会拿 `peakDb` 把各文件拉平——那样会改掉音效之间的相对关系。平衡在工程里用片段增益做。
-- 产出的文件直接喂给 `anyaudio_project` 的 `add_material`，不要再用 `anyaudio_mix` 手动摆放。
 
 ## 验收清单
 
