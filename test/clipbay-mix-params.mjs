@@ -192,12 +192,14 @@ await test('the rendered samples equal the preview schedule applied to the same 
   const { emptyProject, defaultTrack, defaultItem, contentEndSec } = await import('../src/project/schema.js')
   // The preview half pulls in react for the hook, which has nothing to do with
   // the numbers. Strip the imports and the hook, exactly as clipbay-playback does.
+  // `API` is the one module-level value the stripped imports used to supply (the
+  // worklet URL is built from it), so it is declared here instead.
   const previewSource = read('src/client/clipbay/audio.js')
     .replace(/^import .*$/gm, '')
     .replace(/export function usePlayback[\s\S]*$/m, '')
   const sharedSource = read('src/client/clipbay/mix-params.js')
   const { scheduleClips } = await import(
-    `data:text/javascript;base64,${Buffer.from(`${sharedSource}\n${previewSource}`, 'utf8').toString('base64')}`
+    `data:text/javascript;base64,${Buffer.from(`const API = '/api/dsh-any-audio'\n${sharedSource}\n${previewSource}`, 'utf8').toString('base64')}`
   )
 
   // A tone, so the only thing that varies is the gain the two chains apply to

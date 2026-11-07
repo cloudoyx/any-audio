@@ -16,7 +16,7 @@
  */
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
-import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS } from '../project/schema.js'
+import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS, FX_TYPES, validateFxChain } from '../project/schema.js'
 import { createProject, listProjects, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
 import { findMaterial, registerMaterial, deleteMaterial } from '../project/materials.js'
 import { importFile, importGeneratedMaterial } from '../project/import.js'
@@ -43,6 +43,8 @@ async function projectSummary(workspaceRoot, project) {
     name: project.name,
     durationSec: contentEndSec(project),
     folder: relativeToWorkspace(workspaceRoot, projectDir(workspaceRoot, project.id)),
+    masterFaderDb: project.masterFaderDb,
+    ...(project.masterFx?.length ? { masterFx: project.masterFx } : {}),
     tracks: project.tracks.map((track) => ({
       id: track.id,
       name: track.name,
@@ -51,6 +53,7 @@ async function projectSummary(workspaceRoot, project) {
       pan: track.pan,
       muted: track.muted,
       solo: track.solo,
+      ...(track.fx?.length ? { fx: track.fx } : {}),
       clips: track.items.map((item) => ({
         id: item.id,
         material: item.material,
@@ -63,6 +66,9 @@ async function projectSummary(workspaceRoot, project) {
         fadeInSec: item.fadeInSec,
         fadeOutSec: item.fadeOutSec,
         muted: item.muted,
+        // Effects are reported on the level they belong to, so "where does this
+        // EQ live" is answered by the shape of the value rather than by asking.
+        ...(item.fx?.length ? { fx: item.fx } : {}),
       })),
     })),
     materials: index.materials.map((material) => ({
@@ -93,12 +99,16 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
     switch (field) {
       case 'name': project.name = String(value).trim().slice(0, 80); return `重命名工程「${project.name}」`
       case 'masterFaderDb': project.masterFaderDb = Number(value); return `调整总线音量 ${project.masterFaderDb} dB`
+      case 'masterFx': {
+        project.masterFx = validateFxChain(value, 'masterFx')
+        return `设置总线效果链（${describeChain(project.masterFx)}）`
+      }
       case 'normalizeGainDb':
         throw new Error(
           'project field "normalizeGainDb" is measured by the renderer, not set: it is fixed the first time the project is exported (spec §10.2), '
           + 'so a manual value would be overwritten anyway. Adjust the mix with masterFaderDb, track volumeDb or clip gainDb instead.',
         )
-      default: throw new Error(`unknown project field "${field}"; use name or masterFaderDb`)
+      default: throw new Error(`unknown project field "${field}"; use name, masterFaderDb or masterFx`)
     }
   }
 
@@ -112,7 +122,11 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
       case 'pan': track.pan = Number(value); return `调整轨道「${track.name}」声像 ${track.pan}`
       case 'muted': track.muted = Boolean(value); return `${track.muted ? '静音' : '取消静音'}轨道「${track.name}」`
       case 'solo': track.solo = Boolean(value); return `${track.solo ? '独奏' : '取消独奏'}轨道「${track.name}」`
-      default: throw new Error(`unknown track field "${field}"; use name, volumeDb, pan, muted or solo`)
+      case 'fx': {
+        track.fx = validateFxChain(value, 'fx')
+        return `设置轨道「${track.name}」效果链（${describeChain(track.fx)}）`
+      }
+      default: throw new Error(`unknown track field "${field}"; use name, volumeDb, pan, muted, solo or fx`)
     }
   }
 
@@ -128,9 +142,19 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
     case 'fadeOutSec': clip.fadeOutSec = Number(value); break
     case 'muted': clip.muted = Boolean(value); break
     case 'label': clip.label = String(value).slice(0, 120); break
-    default: throw new Error(`unknown clip field "${field}"; use startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted or label`)
+    case 'fx': {
+      clip.fx = validateFxChain(value, 'fx')
+      return `设置片段「${clip.label || clip.id}」效果链（${describeChain(clip.fx)}）`
+    }
+    default: throw new Error(`unknown clip field "${field}"; use startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label or fx`)
   }
   return `调整片段「${clip.label || clip.id}」的 ${field}`
+}
+
+/** A chain as the history line reads it: "eq → compressor", or "空". */
+function describeChain(chain) {
+  if (!chain?.length) return '空'
+  return chain.map((fx) => fx.type).join(' → ')
 }
 
 async function runCreate(workspaceRoot, args) {

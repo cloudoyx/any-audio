@@ -9,11 +9,18 @@
  *
  * `react` stays external: the shell provides it, and bundling a second copy would
  * give the plugin its own hooks dispatcher (every render would throw).
+ *
+ * There is a second entry point: the reverb AudioWorklet. It cannot be part of
+ * the main bundle — a worklet is loaded by URL and runs on the audio thread — so
+ * it is built separately and fetched at runtime. It imports the same
+ * `src/audio/fx.js` the renderer uses, which is the whole point: one reverb, two
+ * runtimes.
  */
 import { build } from 'esbuild'
 import { readFile, writeFile } from 'node:fs/promises'
 
 const OUT = 'lib/client.js'
+const WORKLET_OUT = 'lib/reverb-worklet.js'
 const CLIENT_EXTERNAL = ['react', 'react/jsx-runtime']
 
 const result = await build({
@@ -61,3 +68,33 @@ if (calls !== 1) throw new Error(`expected exactly one __ModuleLoader__.load cal
 await writeFile(OUT, source)
 const bytes = Buffer.byteLength(source)
 console.log(`built ${OUT} (${(bytes / 1024).toFixed(1)} KB)`)
+
+// The reverb worklet: plain ESM, no loader, loaded by URL at runtime. It has to
+// stay a module (not an IIFE) because `registerProcessor` runs in the worklet's
+// own global scope, and the file is fetched rather than evaluated by the page.
+const worklet = await build({
+  entryPoints: ['src/client/clipbay/reverb-worklet.js'],
+  bundle: true,
+  write: false,
+  format: 'esm',
+  target: ['chrome120'],
+  platform: 'browser',
+  legalComments: 'none',
+  charset: 'utf8',
+  logLevel: 'warning',
+})
+
+const workletSource = worklet.outputFiles[0].text
+if (/^\s*import\s/m.test(workletSource)) {
+  throw new Error('the worklet bundle still contains an import; AudioWorklet.addModule cannot resolve one')
+}
+if (!/registerProcessor\(/.test(workletSource)) {
+  throw new Error('the worklet bundle does not call registerProcessor, so the node would never exist')
+}
+// The reverb implementation must be inlined here: if it were not, the worklet
+// would be missing the DSP its preview is supposed to share with the renderer.
+if (!/COMB_TUNING|combTuning|freeverb/i.test(workletSource)) {
+  throw new Error('the worklet bundle does not contain the Freeverb implementation from src/audio/fx.js')
+}
+await writeFile(WORKLET_OUT, workletSource)
+console.log(`built ${WORKLET_OUT} (${(Buffer.byteLength(workletSource) / 1024).toFixed(1)} KB)`)

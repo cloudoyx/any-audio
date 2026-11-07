@@ -10,8 +10,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
+// `edit.js` names the effect types it accepts by importing them from `fx.js`, so
+// validation and the DSP cannot disagree about what an effect is. The data: URL
+// loader below resolves no imports, so the dependency is concatenated in front —
+// the same module the browser bundle would inline.
+const fxSource = readFileSync(join(root, 'src', 'audio', 'fx.js'), 'utf8')
 const source = readFileSync(join(root, 'src', 'client', 'clipbay', 'edit.js'), 'utf8')
-const mod = await import(`data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`)
+  .replace(/^import .*$/gm, '')
+const mod = await import(`data:text/javascript;base64,${Buffer.from(`${fxSource}\n${source}`, 'utf8').toString('base64')}`)
 const {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits, EditError,

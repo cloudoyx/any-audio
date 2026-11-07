@@ -16,6 +16,34 @@ export const TRACK_CATEGORIES = ['music', 'tts', 'ambience', 'foley', 'other', '
 
 export const MATERIAL_KINDS = ['music', 'music-stem', 'tts', 'sfx', 'ambience', 'video-audio', 'imported']
 
+/**
+ * Effect chains (improvement plan 02, I-07). The shapes live here; the DSP lives
+ * in `src/audio/fx.js`, which is shared with the browser preview.
+ *
+ * `fx` is an array and its order is the processing order, the way a DAW shows a
+ * chain. An empty chain is omitted rather than written as `[]`, so a project
+ * without effects looks exactly like one written before this field existed.
+ */
+export const FX_TYPES = ['eq', 'compressor', 'limiter', 'reverb', 'delay', 'duck', 'pitch']
+export const MAX_FX_PER_CHAIN = 8
+export const MAX_EQ_BANDS = 6
+
+const EQ_BAND_TYPES = ['peaking', 'lowshelf', 'highshelf']
+const EQ_RANGE = { freqHz: [20, 20000], gainDb: [-24, 24], q: [0.1, 18] }
+
+/** Bounds per effect field; the validator refuses what it cannot represent. */
+const FX_RANGES = {
+  compressor: {
+    thresholdDb: [-60, 0], ratio: [1, 20], attackSec: [0.001, 1],
+    releaseSec: [0.01, 2], kneeDb: [0, 40], makeupDb: [-24, 24],
+  },
+  limiter: { ceilingDb: [-12, 0], releaseSec: [0.01, 2] },
+  reverb: { roomSize: [0, 1], damping: [0, 1], wet: [0, 1], dry: [0, 1], width: [0, 1] },
+  delay: { timeSec: [0.01, 2], feedback: [0, 0.95], wet: [0, 1], dry: [0, 1] },
+  duck: { targetDb: [-40, 0], thresholdDb: [-60, 0], attackSec: [0.001, 1], releaseSec: [0.01, 2] },
+  pitch: { rate: [0.25, 4], pitchSemitones: [-12, 12] },
+}
+
 export class ProjectSchemaError extends Error {
   constructor(message) {
     super(message)
@@ -86,6 +114,10 @@ export function defaultTrack(id, name = id) {
     pan: 0,
     muted: false,
     solo: false,
+    // Processing order, the way a DAW lists a chain. Empty is the normal case and
+    // is omitted on save, so a project without effects reads exactly like one
+    // written before this field existed.
+    fx: [],
     items: [],
   }
 }
@@ -103,10 +135,9 @@ export function defaultItem(id, material) {
     fadeOutSec: 0,
     muted: false,
     label: '',
+    fx: [],
   }
-}
-
-export function emptyProject({ id, name, sampleRate = 48000, createdAt = nowIso() } = {}) {
+}export function emptyProject({ id, name, sampleRate = 48000, createdAt = nowIso() } = {}) {
   return {
     schemaVersion: SCHEMA_VERSION,
     id,
@@ -115,6 +146,9 @@ export function emptyProject({ id, name, sampleRate = 48000, createdAt = nowIso(
     durationSec: 0,
     normalizeGainDb: 0,
     masterFaderDb: 0,
+    // The bus chain: applied after normalizeGainDb + masterFaderDb, never before
+    // (see render.js — a limiter that ran first would be undone by the fader).
+    masterFx: [],
     createdAt,
     modifiedAt: createdAt,
     history: [{ at: createdAt, by: 'agent', note: 'created' }],
@@ -170,6 +204,51 @@ export function contentEndSec(project) {
 }
 
 /**
+ * Validate one effect chain.
+ *
+ * A missing chain and an empty chain both mean "no effects": an old project.json
+ * written before this field existed has to keep opening, and an empty array is
+ * omitted on save rather than written as `[]`. Only a present, non-empty chain is
+ * held to the field rules — and there the rule is rejection, not clamping: the
+ * DSP would clamp silently, and a value the caller got wrong should surface.
+ */
+export function validateFxChain(chain, path) {
+  if (chain === undefined || chain === null) return []
+  if (!Array.isArray(chain)) fail(`${path} must be an array of effects`)
+  if (chain.length > MAX_FX_PER_CHAIN) {
+    fail(`${path} holds ${chain.length} effects; the limit is ${MAX_FX_PER_CHAIN}`)
+  }
+  chain.forEach((fx, index) => {
+    const at = `${path}[${index}]`
+    if (!isPlainObject(fx)) fail(`${at} must be an object`)
+    choice(fx.type, `${at}.type`, FX_TYPES)
+    if (fx.type === 'eq') {
+      if (!Array.isArray(fx.bands) || fx.bands.length === 0) fail(`${at}.bands must be a non-empty array`)
+      if (fx.bands.length > MAX_EQ_BANDS) fail(`${at}.bands holds ${fx.bands.length} bands; the limit is ${MAX_EQ_BANDS}`)
+      fx.bands.forEach((band, bandIndex) => {
+        const bandPath = `${at}.bands[${bandIndex}]`
+        if (!isPlainObject(band)) fail(`${bandPath} must be an object`)
+        choice(band.type, `${bandPath}.type`, EQ_BAND_TYPES)
+        number(band.freqHz, `${bandPath}.freqHz`, { min: EQ_RANGE.freqHz[0], max: EQ_RANGE.freqHz[1] })
+        number(band.gainDb, `${bandPath}.gainDb`, { min: EQ_RANGE.gainDb[0], max: EQ_RANGE.gainDb[1] })
+        if (band.q !== undefined) number(band.q, `${bandPath}.q`, { min: EQ_RANGE.q[0], max: EQ_RANGE.q[1] })
+      })
+      return
+    }
+    if (fx.type === 'duck') {
+      if (typeof fx.sourceTrackId !== 'string') fail(`${at}.sourceTrackId must be a string (the track whose level drives the ducking)`)
+    }
+    if (fx.type === 'delay' && fx.pingPong !== undefined) flag(fx.pingPong, `${at}.pingPong`)
+    if (fx.type === 'pitch' && fx.preservePitch !== undefined) flag(fx.preservePitch, `${at}.preservePitch`)
+    for (const [field, [min, max]] of Object.entries(FX_RANGES[fx.type] ?? {})) {
+      if (fx[field] === undefined) continue
+      number(fx[field], `${at}.${field}`, { min, max })
+    }
+  })
+  return chain
+}
+
+/**
  * Validate an already-migrated project. Rejects instead of repairing: a value
  * the caller got wrong must surface, not be silently replaced with a default.
  */
@@ -205,6 +284,8 @@ export function validateProject(project) {
     flag(video.locked, 'project.video.locked')
   }
 
+  validateFxChain(project.masterFx, 'project.masterFx')
+
   if (!Array.isArray(project.tracks)) fail('project.tracks must be an array')
   if (project.tracks.length > LIMITS.tracks) {
     fail(`a project may hold at most ${LIMITS.tracks} tracks, this one has ${project.tracks.length}`)
@@ -223,6 +304,7 @@ export function validateProject(project) {
     number(track.pan, `${base}.pan`, { min: -1, max: 1 })
     flag(track.muted, `${base}.muted`)
     flag(track.solo, `${base}.solo`)
+    validateFxChain(track.fx, `${base}.fx`)
 
     if (!Array.isArray(track.items)) fail(`${base}.items must be an array`)
     track.items.forEach((item, itemIndex) => {
@@ -242,6 +324,7 @@ export function validateProject(project) {
       number(item.fadeOutSec, `${at}.fadeOutSec`, { min: 0 })
       flag(item.muted, `${at}.muted`)
       if (typeof item.label !== 'string') fail(`${at}.label must be a string`)
+      validateFxChain(item.fx, `${at}.fx`)
     })
   })
 

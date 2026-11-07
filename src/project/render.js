@@ -18,6 +18,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { accumulateInto, applyFades, applyGainDb } from '../audio/mix.js'
+import { applyFxChain, monoEnvelope } from '../audio/fx.js'
 import { dbToGain, itemParams, masterParams, panGains, resolveTrackGain, trackParams } from '../client/clipbay/mix-params.js'
 import { conformChannels, encodeWav, parseWav, peakOf, resample, rmsOf, toDb } from '../audio/wav.js'
 import { findFfmpeg, runFfmpeg } from '../tools/shared.js'
@@ -95,6 +96,78 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
   const materialCache = new Map()
   let clipCount = 0
 
+  // Ducking detectors read *another* track's signal, so the envelope has to be
+  // measured from that track's clips rather than from the mix. Built lazily and
+  // cached: a project with no duck effect never allocates one.
+  const duckEnvelopes = new Map()
+
+  const material = async (item) => {    const entry = findMaterial(index, item.material)
+    if (!entry) {
+      throw new RenderError(`clip "${item.label || item.id}" refers to material "${item.material}", which is not in the project index`)
+    }
+    if (!materialCache.has(item.material)) {
+      const path = resolveInside(dir, entry.file, `material "${item.material}"`)
+      materialCache.set(item.material, await loadMaterial(sampleRate, path))
+    }
+    return materialCache.get(item.material)
+  }
+
+  /**
+   * One clip, processed up to (not including) the track fader.
+   *
+   * `withEffects:false` is the sidechain detector asking for the same clip with
+   * its gain and fades but without the chain — ducking the source of a duck
+   * effect would make the effect chase its own tail.
+   */
+  const renderClip = async (track, item, { withEffects = true } = {}) => {
+    const params = itemParams(item, track)
+    let piece = sliceItem(await material(item), sampleRate, item)
+    if (params.gainDb) piece = applyGainDb(piece, params.gainDb)
+    if (params.fadeInSec > 0 || params.fadeOutSec > 0) {
+      piece = applyFades(piece, sampleRate, params.fadeInSec, params.fadeOutSec)
+    }
+    if (!withEffects || !item.fx?.length) return piece
+    // Clip effects sit after the gain and the fades: an EQ on a clip shapes the
+    // material, it is not shaped by the clip's own fade.
+    for (const fx of item.fx) {
+      if (fx?.type === 'duck' && fx.sourceTrackId) await duckEnvelopeFor(fx.sourceTrackId)
+    }
+    return applyFxChain(piece, sampleRate, item.fx, { duckEnvelopes, preserveLength: true })
+  }
+
+  /** The sidechain signal: that track's clips summed, with no fader of its own. */
+  const duckEnvelopeFor = async (trackId) => {
+    if (duckEnvelopes.has(trackId)) return duckEnvelopes.get(trackId)
+    const source = project.tracks.find((track) => track.id === trackId)
+    if (!source) return null
+    // Registered before the walk so a chain that ducks its own track terminates
+    // instead of recursing.
+    duckEnvelopes.set(trackId, null)
+    const buffer = [new Float32Array(frames), new Float32Array(frames)]
+    for (const item of source.items ?? []) {
+      if (item.muted) continue
+      const piece = await renderClip(source, item, { withEffects: false })
+      accumulateInto(buffer, piece, Math.round(item.startSec * sampleRate), 1, 1)
+    }
+    const envelope = monoEnvelope(buffer)
+    duckEnvelopes.set(trackId, envelope)
+    return envelope
+  }
+
+  /**
+   * Resolve every sidechain a chain needs before applying it.
+   *
+   * `applyDuck` reads its envelope from the map and does nothing without one —
+   * the right behaviour for a source track that was deleted, the wrong one for a
+   * track that simply had not been measured yet: a duck at track or bus level
+   * would then be skipped without a word.
+   */
+  const prepareDuckSources = async (chain) => {
+    for (const fx of chain ?? []) {
+      if (fx?.type === 'duck' && fx.sourceTrackId) await duckEnvelopeFor(fx.sourceTrackId)
+    }
+  }
+
   for (const [trackIndex, track] of tracks.entries()) {
     throwIfAborted(signal)
     const level = trackParams(track)
@@ -107,33 +180,47 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
       pan: Number(track.pan) || 0,
       muted: level.muted,
       clips: 0,
+      fx: (track.fx ?? []).length,
     }
+
+    // A track with effects is summed on its own first, processed, then mixed into
+    // the master. The alternative — one buffer per track for the whole project —
+    // is 20 × 330 MB on a 15-minute project (plan §8, "no per-track bus").
+    const trackBus = track.fx?.length ? [new Float32Array(frames), new Float32Array(frames)] : null
+
     for (const item of track.items) {
       throwIfAborted(signal)
       // A muted clip is dropped; a muted *track* is not, because its fader is
       // what silences it (and the report still counts its clips).
       if (item.muted) continue
+      const piece = await renderClip(track, item)
       const params = itemParams(item, track)
-      const entry = findMaterial(index, item.material)
-      if (!entry) {
-        throw new RenderError(`clip "${item.label || item.id}" refers to material "${item.material}", which is not in the project index`)
-      }
-      if (!materialCache.has(item.material)) {
-        const path = resolveInside(dir, entry.file, `material "${item.material}"`)
-        materialCache.set(item.material, await loadMaterial(sampleRate, path))
-      }
-      let piece = sliceItem(materialCache.get(item.material), sampleRate, item)
-      if (params.gainDb) piece = applyGainDb(piece, params.gainDb)
-      if (params.fadeInSec > 0 || params.fadeOutSec > 0) {
-        piece = applyFades(piece, sampleRate, params.fadeInSec, params.fadeOutSec)
-      }
       // Clip pan and track pan add up once, in mix-params; one equal-power pair
       // is applied once.
       const [panLeft, panRight] = panGains(params.pan)
-      accumulateInto(acc, piece, Math.round(item.startSec * sampleRate), trackGain * panLeft, trackGain * panRight)
+      if (trackBus) accumulateInto(trackBus, piece, Math.round(item.startSec * sampleRate), panLeft, panRight)
+      else accumulateInto(acc, piece, Math.round(item.startSec * sampleRate), trackGain * panLeft, trackGain * panRight)
       report.clips++
       clipCount++
       onProgress?.({ phase: 'render', track: trackIndex + 1, tracks: tracks.length, clips: clipCount })
+    }
+
+    if (trackBus) {
+      throwIfAborted(signal)
+      // A duck at track level reads another track's signal; it has to be measured
+      // before the chain runs, or `applyDuck` finds no envelope and quietly does
+      // nothing.
+      await prepareDuckSources(track.fx)
+      const processed = applyFxChain(trackBus, sampleRate, track.fx, { duckEnvelopes, preserveLength: true })
+      // Only the fader is left to apply. Pan already went onto each clip above —
+      // the same combined pair the no-effect path uses — so applying the track
+      // pan again here would square it, and a track with an EQ would quietly
+      // pan differently from one without.
+      //
+      // Order inside the track: clips (gain, fades, clip effects, pan) → chain →
+      // fader. That is what a track insert means in a DAW, and it keeps a
+      // compressor's threshold in the same place whether or not the fader moved.
+      accumulateInto(acc, processed, 0, trackGain, trackGain)
     }
     reports.push(report)
   }
@@ -141,8 +228,10 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
   throwIfAborted(signal)
   if (clipCount === 0) throw new RenderError('this project has no audible clips to render')
 
-  // Export gain is the sum of the fixed normalisation and the user's fader,
-  // applied once and never measured back (spec §10.2).
+  // Order is a hard rule (I-07): normalisation and the master fader first, then
+  // the master chain. The other way round lets a limiter at −1 dBFS be undone by
+  // a +6 dB fader, which puts the output back at +5 dBFS — clipping, with the
+  // limiter having done nothing.
   const master = masterParams(project)
   const appliedGainDb = master.gainDb
   const peakBeforeGainDb = Number(toDb(peakOf(acc)).toFixed(2))
@@ -151,6 +240,16 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
     for (let channel = 0; channel < 2; channel++) {
       const samples = acc[channel]
       for (let i = 0; i < samples.length; i++) samples[i] *= gain
+    }
+  }
+  if (project.masterFx?.length) {
+    throwIfAborted(signal)
+    await prepareDuckSources(project.masterFx)
+    const processed = applyFxChain(acc, sampleRate, project.masterFx, { duckEnvelopes, preserveLength: true })
+    // applyFxChain may return new buffers (reverb and delay allocate their own);
+    // copy back so the caller keeps the same accumulator it was given.
+    for (let channel = 0; channel < 2; channel++) {
+      if (processed[channel] !== acc[channel]) acc[channel].set(processed[channel])
     }
   }
 

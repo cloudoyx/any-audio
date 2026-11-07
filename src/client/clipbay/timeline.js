@@ -161,7 +161,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, onPointerD
   )
 }
 
-function TrackHead({ track, active, height, onSelect, onEdit }) {
+function TrackHead({ track, active, height, onSelect, onEdit, onFx }) {
   const [name, setName] = useState(track.name)
   const [editing, setEditing] = useState(false)
 
@@ -225,6 +225,12 @@ function TrackHead({ track, active, height, onSelect, onEdit }) {
         style: { padding: '0 4px', fontSize: 9, minWidth: 16, lineHeight: 1.4 },
       }, 'S'),
       h(Btn, {
+        onClick: (event) => { event.stopPropagation(); onFx() },
+        kind: track.fx?.length ? 'primary' : 'plain',
+        title: track.fx?.length ? `${t('轨道效果')}（${track.fx.length}）` : t('轨道效果'),
+        style: { padding: '0 4px', fontSize: 9, minWidth: 18, lineHeight: 1.4 },
+      }, 'FX'),
+      h(Btn, {
         onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-delete' }) },
         title: t('删除轨道'),
         style: { padding: '0 3px', fontSize: 9, lineHeight: 1.4 },
@@ -257,13 +263,13 @@ function TrackHead({ track, active, height, onSelect, onEdit }) {
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
+function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, onFx, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
   const height = TRACK_HEIGHT
   const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h(TrackHead, { track, active, height, onSelect, onEdit }),
+    h(TrackHead, { track, active, height, onSelect, onEdit, onFx }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -304,7 +310,7 @@ function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, drag, sel
   )
 }
 
-export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange, onClearSelection }) {
+export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange, onClearSelection, onFx }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const peaksById = usePeaks(root, projectId, materials)
@@ -558,6 +564,9 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             active: track.id === activeTrackId,
             onSelect: () => setActiveTrackId(track.id),
             onEdit: (request) => onEdit?.({ ...request, trackId: track.id }),
+            // A track's own chain lives behind the FX button in its head, which
+            // opens the same editor the clip and bus use.
+            onFx: () => onFx?.(track.id),
             drag: { preview: dragPreview },
             selection,
             onClipPointerDown: startDrag,

@@ -15,6 +15,7 @@ import { h, S, Btn, NumberInput, Switch, C } from '../ui.js'
 import { t } from '../i18n.js'
 import { itemLength } from './edit.js'
 import { clockLabel } from './timeline.js'
+import { FxEditor } from './fx-editor.js'
 
 const cellInput = { padding: '2px 6px', fontSize: 12, height: 24 }
 const smallBtn = { padding: '3px 6px', fontSize: 11 }
@@ -27,7 +28,7 @@ function cell(label, control) {
   )
 }
 
-export function ClipProperties({ selection, track, item, onEdit, onClear }) {
+export function ClipProperties({ selection, track, item, tracks, onEdit, onClear }) {
   if (!selection || !item) {
     return h('div', { style: { ...S.desc, padding: '2px 2px 0' } },
       t('选中一个片段后可以在这里改增益、声像和淡入淡出。'),
@@ -97,5 +98,16 @@ export function ClipProperties({ selection, track, item, onEdit, onClear }) {
         style: { ...S.desc, fontSize: 10, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       }, `${track.name} · ${track.volumeDb} dB${track.pan ? ` · ${t('声像')} ${track.pan}` : ''}`)
       : null,
+    // The clip's own chain (I-07). It sits last in the column because it is the
+    // longest block, and the fields a person reaches for first — gain, pan,
+    // fades — have to stay where they were.
+    h('div', { style: { borderTop: `1px solid ${C.border}`, paddingTop: 5, marginTop: 1 } },
+      h(FxEditor, {
+        level: 'clip',
+        chain: item.fx,
+        tracks,
+        onChange: (chain) => onEdit({ kind: 'fx', chain }),
+      }),
+    ),
   )
 }

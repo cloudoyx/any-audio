@@ -5,6 +5,10 @@
  * must go through this function: it names each field explicitly instead of
  * spreading, which is what stops view state from ever reaching the disk and what
  * makes a newly added schema field fail loudly in the test rather than vanish.
+ *
+ * Deliberately dependency-free: the test evaluates this file on its own, and the
+ * rule it enforces ("no field reaches the disk by accident") is easier to trust
+ * when there is nothing else it could be pulling in.
  */
 export function serializeProject(project) {
   return {
@@ -15,6 +19,10 @@ export function serializeProject(project) {
     durationSec: project.durationSec,
     normalizeGainDb: project.normalizeGainDb,
     masterFaderDb: project.masterFaderDb,
+    // An empty chain is omitted rather than written as []: a project without
+    // effects then looks exactly like one written before the field existed, and
+    // the diff of a save that only moved a clip stays about the clip.
+    ...(project.masterFx?.length ? { masterFx: serializeChain(project.masterFx) } : {}),
     createdAt: project.createdAt,
     modifiedAt: project.modifiedAt,
     history: (project.history ?? []).map((entry) => ({ at: entry.at, by: entry.by, note: entry.note })),
@@ -29,6 +37,7 @@ export function serializeProject(project) {
       pan: track.pan,
       muted: track.muted,
       solo: track.solo,
+      ...(track.fx?.length ? { fx: serializeChain(track.fx) } : {}),
       items: (track.items ?? []).map((item) => ({
         id: item.id,
         material: item.material,
@@ -41,10 +50,50 @@ export function serializeProject(project) {
         fadeOutSec: item.fadeOutSec,
         muted: item.muted,
         label: item.label,
+        ...(item.fx?.length ? { fx: serializeChain(item.fx) } : {}),
       })),
     })),
   }
 }
+
+/**
+ * One chain, field by field, with no import at all.
+ *
+ * The point of naming every field is that a field added later has to be added
+ * here on purpose — the same rule the rest of this file follows. It stays
+ * dependency-free so the test can evaluate this module on its own: the rule
+ * "nothing reaches the disk by accident" is easier to trust when there is
+ * nothing else this file could be pulling in.
+ *
+ * Defaults are *not* filled in here. Writing them would freeze today's defaults
+ * into every file, so a project saved now would stop following a later change to
+ * how an effect is meant to sound; leaving the sparse form lets `resolveFx` in
+ * `src/audio/fx.js` be the one place defaults live.
+ */
+function serializeChain(chain) {
+  return (chain ?? []).map((fx) => {
+    const out = { type: fx.type }
+    if (Array.isArray(fx.bands)) {
+      out.bands = fx.bands.map((band) => ({
+        type: band.type,
+        freqHz: band.freqHz,
+        gainDb: band.gainDb,
+        q: band.q,
+      }))
+    }
+    for (const field of FX_SCALAR_FIELDS) {
+      if (fx[field] !== undefined) out[field] = fx[field]
+    }
+    return out
+  })
+}
+
+/** Every scalar an effect can carry; `type` and `bands` are handled above. */
+const FX_SCALAR_FIELDS = [
+  'sourceTrackId', 'ceilingDb', 'thresholdDb', 'ratio', 'attackSec', 'releaseSec',
+  'kneeDb', 'makeupDb', 'roomSize', 'damping', 'wet', 'dry', 'width', 'timeSec',
+  'feedback', 'pingPong', 'targetDb', 'rate', 'pitchSemitones', 'preservePitch',
+]
 
 /** Length of one clip on the timeline, derived from its source range. */
 export function itemLengthSec(item) {

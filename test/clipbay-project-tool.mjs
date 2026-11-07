@@ -424,7 +424,8 @@ await test('update lists the legal project fields when given a bogus one', async
   })
   assert.equal(result.ok, false)
   assert.match(result.error, /unknown project field/)
-  assert.match(result.error, /name or masterFaderDb/, 'the message has to name them, or the Agent guesses again')
+  assert.match(result.error, /masterFaderDb/, 'the message has to name the legal fields, or the Agent guesses again')
+  assert.match(result.error, /masterFx/, 'including the bus effect chain')
 })
 
 await test('render writes a wav and reports its shape', async () => {

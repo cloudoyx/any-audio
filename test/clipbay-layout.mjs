@@ -95,16 +95,20 @@ test('clip properties sit beside the preview, not below the timeline', () => {
   // The user was explicit: the item properties belong to the right of the video,
   // the way 剪映 lays them out.
   const previewAt = panel.indexOf('h(Preview')
-  const propsAt = panel.indexOf('h(ClipProperties')
+  const columnAt = panel.indexOf("flex: '0 1 220px'")
   const timelineAt = panel.indexOf('h(Timeline')
-  assert.ok(previewAt > 0 && propsAt > 0 && timelineAt > 0, 'all three render')
-  assert.ok(propsAt > previewAt, 'the properties come after the preview in document order')
-  assert.ok(propsAt < timelineAt, 'and before the timeline, so they share its row')
-  const column = panel.slice(propsAt - 700, propsAt)
-  assert.match(column, /flex: '0 1 220px'/, 'the properties column is 220px wide but may shrink')
+  assert.ok(previewAt > 0 && columnAt > 0 && timelineAt > 0, 'all three render')
+  assert.ok(columnAt > previewAt, 'the properties column comes after the preview in document order')
+  assert.ok(columnAt < timelineAt, 'and before the timeline, so they share its row')
   // On a squeezed panel (wide right sidebar on a 16:9 screen) the column has to
   // give way, otherwise the picture is pushed down to a 124px thumbnail.
+  const column = panel.slice(columnAt - 700, columnAt + 200)
   assert.match(column, /minWidth: 132/, 'and has a floor so the fields stay usable')
+  // The column holds one editor at a time: the clip's own fields, or a chain.
+  // Both have to be inside the row, between the picture and the timeline.
+  const body = panel.slice(columnAt, timelineAt)
+  assert.match(body, /h\(ClipProperties/, 'the clip properties render inside the column')
+  assert.match(body, /h\(FxEditor/, 'and so does the effect-chain editor it swaps to')
 })
 
 test('the timeline is the only scrolling area', () => {

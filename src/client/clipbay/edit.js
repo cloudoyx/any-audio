@@ -13,6 +13,7 @@
  * Times are seconds, gains are dB, pan is -1..1. Nothing here clamps a value the
  * schema would reject: it throws, because a silent clamp hides a bug in the UI.
  */
+import { FX_TYPES } from '../../audio/fx.js'
 
 export class EditError extends Error {
   constructor(message) {
@@ -311,3 +312,66 @@ export function deleteTrack(project, { trackId }) {
       : `删除轨道「${track.name}」`,
   }
 }
+
+// --- effect chains (improvement plan 02, I-07) ------------------------------
+//
+// Three levels, one shape: each of these replaces the whole chain at its level.
+// That is deliberate — a chain is an ordered list, and replacing it means the UI
+// never has to describe a half-applied edit (insert, move, delete) as three
+// separate events in history. The mutators stay pure like everything else here,
+// so undo works on them for free.
+
+/** Human name for an effect, for the history line and the panel. */
+const FX_LABELS = {
+  eq: 'EQ',
+  compressor: '压缩',
+  limiter: '限幅',
+  reverb: '混响',
+  delay: '延迟',
+  duck: '侧链',
+  pitch: '变速变调',
+}
+
+function describeFxChain(chain) {
+  if (!chain?.length) return '空'
+  return chain.map((fx) => FX_LABELS[fx.type] ?? fx.type).join(' → ')
+}
+
+function assertChain(chain) {
+  if (!Array.isArray(chain)) throw new EditError('an effect chain must be an array')
+  for (const fx of chain) {
+    if (!fx || typeof fx !== 'object') throw new EditError('each effect must be an object')
+    if (!FX_TYPES.includes(fx.type)) throw new EditError(`unknown effect type "${fx.type}"; use ${FX_TYPES.join(', ')}`)
+  }
+  return chain
+}
+
+export function setTrackFx(project, { trackId, chain }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  const wanted = assertChain(chain)
+  const before = JSON.stringify(track.fx ?? [])
+  if (JSON.stringify(wanted) === before) return { project: next, note: '' }
+  track.fx = wanted.map((fx) => structuredClone(fx))
+  return { project: next, note: `设置轨道「${track.name}」效果链（${describeFxChain(track.fx)}）` }
+}
+
+export function setClipFx(project, { trackId, itemId, chain }) {
+  const next = clone(project)
+  const track = findTrack(next, trackId)
+  const item = findItem(track, itemId)
+  const wanted = assertChain(chain)
+  if (JSON.stringify(wanted) === JSON.stringify(item.fx ?? [])) return { project: next, note: '' }
+  item.fx = wanted.map((fx) => structuredClone(fx))
+  return { project: next, note: `设置片段「${item.label || item.id}」效果链（${describeFxChain(item.fx)}）` }
+}
+
+export function setMasterFx(project, { chain }) {
+  const next = clone(project)
+  const wanted = assertChain(chain)
+  if (JSON.stringify(wanted) === JSON.stringify(next.masterFx ?? [])) return { project: next, note: '' }
+  next.masterFx = wanted.map((fx) => structuredClone(fx))
+  return { project: next, note: `设置总线效果链（${describeFxChain(next.masterFx)}）` }
+}
+
+export { FX_LABELS, describeFxChain }

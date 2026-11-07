@@ -23,11 +23,13 @@ import { useExport, availableFormats, describeJob } from './exporter.js'
 import { Timeline } from './timeline.js'
 import { Preview } from './preview.js'
 import { ClipProperties } from './properties.js'
+import { FxEditor } from './fx-editor.js'
 import { buildMention, appendToDraft } from './mention.js'
 import {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits,
   renameTrack, setTrackVolume, setTrackPan, setTrackMuted, setTrackSolo, deleteTrack,
+  setClipFx, setTrackFx, setMasterFx,
   EditError,
 } from './edit.js'
 
@@ -136,6 +138,8 @@ function applyClipEdit(project, track, item, request, playhead, trackId, itemId)
       })
     case 'mute':
       return setClipMuted(project, { trackId, itemId, muted: request.muted })
+    case 'fx':
+      return setClipFx(project, { trackId, itemId, chain: request.chain })
     default:
       return null
   }
@@ -191,6 +195,11 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const [editError, setEditError] = useState('')
   const [saveError, setSaveError] = useState('')
   const [mentionNotice, setMentionNotice] = useState('')
+  // Which effect chain the right-hand column is showing, if any (I-07). Null means
+  // "show the selected clip": the panel is one column, so opening a track or the
+  // bus chain replaces the clip properties rather than stacking three lists in
+  // 220px.
+  const [fxTarget, setFxTarget] = useState(null)
   const composerInset = useComposerInset()
   // Export settings live in the panel, not in project.json: they describe this
   // one export, and spec §6.8 keeps one-off UI state out of the project.
@@ -318,6 +327,13 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           if (!track) throw new EditError(`no such track: ${trackId}`)
           result = deleteTrack(project, { trackId })
           break
+        case 'track-fx':
+          if (!track) throw new EditError(`no such track: ${trackId}`)
+          result = setTrackFx(project, { trackId, chain: request.chain })
+          break
+        case 'master-fx':
+          result = setMasterFx(project, { chain: request.chain })
+          break
         default:
           if (!track || !item) return
           result = applyClipEdit(project, track, item, request, playhead, trackId, itemId)
@@ -350,6 +366,17 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const selectedItem = selectedTrack?.items.find((entry) => entry.id === selection.itemId) ?? null
   const formats = availableFormats(project)
   const chosenFormat = formats.includes(exportFormat) ? exportFormat : formats[0]
+
+  // Which chain the right-hand column is showing (I-07). The column is 220px and
+  // lives beside the picture, so one list at a time: a clip, a track, or the bus.
+  const fxTrack = typeof fxTarget === 'string' && fxTarget !== 'master'
+    ? project.tracks.find((entry) => entry.id === fxTarget)
+    : null
+  const fxEditor = fxTarget === 'master'
+    ? { level: 'master', chain: project.masterFx ?? [], title: t('总线效果'), apply: (chain) => applyEdit({ kind: 'master-fx', chain }) }
+    : fxTrack
+      ? { level: 'track', chain: fxTrack.fx ?? [], title: `${t('轨道效果')} · ${fxTrack.name}`, apply: (chain) => applyEdit({ kind: 'track-fx', trackId: fxTrack.id, chain }) }
+      : null
 
   // The panel fills the view area and handles its own scrolling, so the header,
   // the preview row and the transport stay put while only the tracks scroll
@@ -389,6 +416,11 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
       h('span', { style: { flex: 1 } }),
       h(Btn, { onClick: addToConversation, kind: (selection || range) ? 'primary' : undefined, disabled: !selection && !range }, t('添加到对话')),
+      h(Btn, {
+        onClick: () => setFxTarget(fxTarget === 'master' ? null : 'master'),
+        kind: fxTarget === 'master' ? 'primary' : undefined,
+        title: t('总线效果：作用在母带推子之后的整条混音上'),
+      }, t('总线')),
       h(Btn, { onClick: undo, disabled: !canUndo, title: 'Ctrl+Z' }, t('撤销')),
       h(Btn, { onClick: redo, disabled: !canRedo, title: 'Ctrl+Shift+Z' }, t('重做')),
       h('span', { style: { width: 8 } }),
@@ -440,13 +472,29 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           background: C.softer,
         },
       },
-        h(ClipProperties, {
-          selection,
-          track: selectedTrack,
-          item: selectedItem,
-          onClear: clearSelection,
-          onEdit: (request) => applyEdit({ ...request, trackId: selection?.trackId, itemId: selection?.itemId }),
-        }),
+        fxEditor
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+              h(Btn, { onClick: () => setFxTarget(null), title: t('返回片段属性'), style: { padding: '1px 6px', fontSize: 11, lineHeight: 1.4 } }, '←'),
+              h('span', { style: { fontSize: 11, color: C.muted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, fxEditor.title),
+            ),
+            h(FxEditor, {
+              level: fxEditor.level,
+              chain: fxEditor.chain,
+              tracks: project.tracks,
+              onChange: fxEditor.apply,
+            }),
+          )
+          : h(ClipProperties, {
+            selection,
+            track: selectedTrack,
+            item: selectedItem,
+            // The chain editor needs every track, because a duck effect has to name
+            // the track whose level drives it.
+            tracks: project.tracks,
+            onClear: clearSelection,
+            onEdit: (request) => applyEdit({ ...request, trackId: selection?.trackId, itemId: selection?.itemId }),
+          }),
       ),
     ),
     h(Timeline, {
@@ -463,6 +511,8 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       range,
       onRange: setRange,
       onClearSelection: clearSelection,
+      // A track's FX button opens that track's chain in the right-hand column.
+      onFx: (trackId) => setFxTarget(trackId),
     }),
   )
 }

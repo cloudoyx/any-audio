@@ -12,6 +12,7 @@
  *   POST /clipbay/render?root=&project=     start an export job
  *   GET  /clipbay/render?root=&project=&job= job status
  *   POST /clipbay/render/cancel             cancel a running export
+ *   GET  /clipbay/worklet                   the reverb AudioWorklet bundle
  *
  * The media routes must skip the custom client header: `<audio>` / `<video>`
  * cannot send one. Their only protection is the same `sec-fetch-site`
@@ -293,12 +294,22 @@ async function handle(req, res, { url, method, path, ctx }) {
     return json(res, 200, { ok: true, job: publicRenderJob(job) })
   }
 
+  if (path === '/clipbay/worklet') {
+    if (method !== 'GET') throw new RouteError(405, 'method not allowed')
+    // The reverb AudioWorklet bundle. No root or project is involved: it is the
+    // plugin's own artifact, identical for every project, so the only check is
+    // the custom client header every route carries.
+    const file = new URL('../../lib/reverb-worklet.js', import.meta.url)
+    return serveFile(req, res, file, { contentType: 'text/javascript; charset=utf-8' })
+  }
+
   throw new RouteError(404, `unknown clip bay route ${path}`)
 }
 
 /** Only project read/write needs the page header; media elements cannot send one. */
 export function needsClientHeader(path) {
   return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/render' || path === '/clipbay/render/cancel'
+    || path === '/clipbay/worklet'
 }
 
 /**
