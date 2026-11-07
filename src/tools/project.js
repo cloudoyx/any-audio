@@ -77,11 +77,31 @@ async function projectSummary(workspaceRoot, project) {
 }
 
 /**
- * Apply one field change to a track or a clip, addressed by id. Kept deliberately
- * narrow: the Agent names a field and a value, and this refuses what the schema
- * would reject rather than writing a project the clip bay cannot open.
+ * Apply one field change to a project, a track or a clip, addressed by id. Kept
+ * deliberately narrow: the Agent names a field and a value, and this refuses what
+ * the schema would reject rather than writing a project the clip bay cannot open.
+ *
+ * `target:"project"` exists because the fields were there and unreachable: the
+ * bus fader lives in project.json, so an Agent asked to change the master level
+ * could only guess a track field, which is what happened ("unknown track field
+ * masterFaderDb"). `normalizeGainDb` stays closed on purpose — it is measured by
+ * the renderer on the first export and frozen (spec §10.2), so letting it be set
+ * by hand would break "measured once, then fixed".
  */
 function applyUpdate(project, { target, trackId, clipId, field, value }) {
+  if (target === 'project') {
+    switch (field) {
+      case 'name': project.name = String(value).trim().slice(0, 80); return `重命名工程「${project.name}」`
+      case 'masterFaderDb': project.masterFaderDb = Number(value); return `调整总线音量 ${project.masterFaderDb} dB`
+      case 'normalizeGainDb':
+        throw new Error(
+          'project field "normalizeGainDb" is measured by the renderer, not set: it is fixed the first time the project is exported (spec §10.2), '
+          + 'so a manual value would be overwritten anyway. Adjust the mix with masterFaderDb, track volumeDb or clip gainDb instead.',
+        )
+      default: throw new Error(`unknown project field "${field}"; use name or masterFaderDb`)
+    }
+  }
+
   const track = project.tracks.find((entry) => entry.id === trackId)
   if (!track) throw new Error(`no such track: ${trackId}`)
 
@@ -307,17 +327,17 @@ export const projectToolDefinition = finalizeTool({
       label: { type: 'string', description: 'add_material: the clip label shown on the timeline.' },
       changes: {
         type: 'array',
-        description: 'update: the edits to apply, each addressing a track or clip by id.',
+        description: 'update: the edits to apply, each addressing the project, a track or a clip by id.',
         items: {
           type: 'object',
           properties: {
-            target: { type: 'string', enum: ['track', 'clip'] },
-            trackId: { type: 'string' },
+            target: { type: 'string', enum: ['project', 'track', 'clip'], description: 'project: name or masterFaderDb (no trackId needed). track: name, volumeDb, pan, muted, solo. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label.' },
+            trackId: { type: 'string', description: 'Required for target:"track" and target:"clip"; ignored for target:"project".' },
             clipId: { type: 'string' },
             field: { type: 'string' },
             value: {},
           },
-          required: ['target', 'trackId', 'field'],
+          required: ['target', 'field'],
         },
       },
       format: { type: 'string', enum: ['wav', 'mp3', 'mp4'], description: 'render: the output format, default wav.' },

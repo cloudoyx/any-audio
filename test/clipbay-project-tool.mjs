@@ -374,6 +374,59 @@ await test('update with no changes is refused', async () => {
   assert.match(result.error, /at least one edit/)
 })
 
+await test('update reaches the project-level fields, which had no door before', async () => {
+  // Improvement plan 02, I-06. `masterFaderDb` lives in project.json, but the only
+  // update targets were track and clip, so an Agent asked to set the bus level had
+  // to guess a track field — which is exactly what happened in a real session
+  // ("unknown track field masterFaderDb"). The fader had no legal entrance.
+  const result = await call({
+    mode: 'update',
+    projectId,
+    changes: [
+      { target: 'project', field: 'masterFaderDb', value: -6 },
+      { target: 'project', field: 'name', value: '海边主题曲（终稿）' },
+    ],
+  })
+  assert.equal(result.ok, true, result.error)
+  assert.equal(result.applied.length, 2)
+  const after = await readProject(workspaceRoot, projectId)
+  assert.equal(after.masterFaderDb, -6, 'the bus fader is written')
+  assert.equal(after.name, '海边主题曲（终稿）', 'and so is the name')
+
+  // Every write is recorded, so the person can see what changed.
+  const last = after.history.at(-1)
+  assert.equal(last.by, 'agent')
+  assert.match(last.note, /总线音量/)
+  assert.match(last.note, /重命名工程/)
+})
+
+await test('update refuses to set normalizeGainDb by hand, and says why', async () => {
+  // It is measured by the renderer on the first export and then frozen (spec
+  // §10.2). A hand value would be silently overwritten, which is worse than a
+  // refusal: the Agent would believe it had changed the loudness.
+  const result = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'project', field: 'normalizeGainDb', value: 6 }],
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /measured by the renderer/)
+  assert.match(result.error, /masterFaderDb/, 'and names the field that does move the level')
+  const after = await readProject(workspaceRoot, projectId)
+  assert.notEqual(after.normalizeGainDb, 6, 'nothing was written')
+})
+
+await test('update lists the legal project fields when given a bogus one', async () => {
+  const result = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'project', field: 'bogus', value: 1 }],
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /unknown project field/)
+  assert.match(result.error, /name or masterFaderDb/, 'the message has to name them, or the Agent guesses again')
+})
+
 await test('render writes a wav and reports its shape', async () => {
   const result = await call({ mode: 'render', projectId, format: 'wav' })
   assert.equal(result.ok, true)
