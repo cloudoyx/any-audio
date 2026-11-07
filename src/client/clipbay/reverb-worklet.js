@@ -44,16 +44,19 @@ class ReverbProcessor extends AudioWorkletProcessor {
     const output = outputs[0]
     if (!output || output.length === 0) return true
     const frames = output[0].length
-    if (!input || input.length === 0) {
-      // No input yet: emit silence rather than a stale tail, or a reverb node
-      // that was never connected would ring on its own.
-      for (const channel of output) channel.fill(0)
-      return true
-    }
+
+    // Silence is *input*, not a reason to skip: a reverb's whole point is that it
+    // keeps sounding after the source stops. Returning zeros here cut every tail
+    // off at the moment its clip ended (measured: peak 0.079 during the tone, 0
+    // after it). Feeding zeros lets the comb filters decay on their own, which is
+    // what the renderer does too — it hands over the clip and the buffer is what
+    // the project says it is.
     const left = new Float32Array(frames)
     const right = new Float32Array(frames)
-    left.set(input[0].subarray(0, frames))
-    right.set((input[1] ?? input[0]).subarray(0, frames))
+    if (input && input.length > 0) {
+      left.set(input[0].subarray(0, frames))
+      right.set((input[1] ?? input[0]).subarray(0, frames))
+    }
     const processed = this.processor.process([left, right], frames)
     output[0].set(processed[0])
     if (output[1]) output[1].set(processed[1] ?? processed[0])

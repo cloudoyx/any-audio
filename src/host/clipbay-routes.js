@@ -296,9 +296,11 @@ async function handle(req, res, { url, method, path, ctx }) {
 
   if (path === '/clipbay/worklet') {
     if (method !== 'GET') throw new RouteError(405, 'method not allowed')
-    // The reverb AudioWorklet bundle. No root or project is involved: it is the
-    // plugin's own artifact, identical for every project, so the only check is
-    // the custom client header every route carries.
+    // The reverb AudioWorklet bundle, served without the custom client header:
+    // `AudioWorklet.addModule` is a browser fetch the page does not build, so it
+    // cannot carry one. Nothing here comes from the request — the file is the
+    // plugin's own artifact, the same for every project — so the cross-site
+    // rejection every route already gets is all the protection it needs.
     const file = new URL('../../lib/reverb-worklet.js', import.meta.url)
     return serveFile(req, res, file, { contentType: 'text/javascript; charset=utf-8' })
   }

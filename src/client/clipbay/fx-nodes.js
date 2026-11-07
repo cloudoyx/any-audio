@@ -73,13 +73,25 @@ function makeBiquad(context, band) {
  * duck curve (computed by the caller from the sidechain track), and whether the
  * reverb worklet loaded.
  */
-function buildEffect(ctx, fx) {
-  const { context, resolved } = ctx
+function buildEffect(context, fx, { hasWorklet = false } = {}) {
+  const resolved = fx
   switch (fx.type) {
     case 'eq': {
-      const nodes = resolved.bands.filter((band) => band.gainDb).map((band) => makeBiquad(context, band))
-      if (nodes.length === 0) return passthrough(context)
-      return chainOf(nodes)
+      // One biquad per band, *always* — including a band sitting at 0 dB.
+      //
+      // Skipping flat bands looks like a free optimisation and is a trap: a chain
+      // built from three flat bands then becomes a single pass-through gain, and
+      // when the person turns one band up, `updateFxChain` sees "one node, one
+      // audible band" and writes `.frequency` onto that gain node. That threw, the
+      // render died, and the whole panel went blank — found by screenshotting the
+      // panel after changing an EQ gain, not by any assertion.
+      //
+      // Building every band keeps the node count equal to the band count, which is
+      // the invariant the live-update path relies on.
+      const bands = resolved.bands
+      if (bands.length === 0) return passthrough(context)
+      const nodes = bands.map((band) => makeBiquad(context, band))
+      return { ...chainOf(nodes), effectType: 'eq' }
     }
     case 'compressor': {
       const node = context.createDynamicsCompressor()
@@ -126,7 +138,7 @@ function buildEffect(ctx, fx) {
       return { input, output, nodes: [input, output, delay, feedback, wet, dry], effectType: 'delay' }
     }
     case 'reverb': {
-      if (!ctx.hasWorklet) return passthrough(context)
+      if (!hasWorklet) return passthrough(context)
       const node = new AudioWorkletNode(context, 'anyaudio-reverb', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
@@ -174,7 +186,7 @@ export function buildFxChain(context, chain, { hasWorklet = false } = {}) {
   if (resolved.length === 0) return null
   const built = []
   for (const fx of resolved) {
-    built.push({ fx, ...buildEffect({ context, resolved: fx, hasWorklet }) })
+    built.push({ fx, ...buildEffect(context, fx, { hasWorklet }) })
   }
   // Effects that are pure gain (duck) or handled elsewhere (pitch) still need a
   // seam so the chain stays contiguous.
@@ -222,13 +234,18 @@ export function updateFxChain(built, chain) {
     if (currentType !== fx.type) return false
     switch (fx.type) {
       case 'eq': {
+        // One node per band, both here and in `buildEffect`: the counts match by
+        // construction, so a band turning from 0 dB to +18 dB only writes values
+        // onto nodes that already exist. Filtering flat bands on either side is
+        // what made this branch throw and blank the panel.
         const bands = entry.nodes
-        const wantedBands = fx.bands.filter((band) => band.gainDb)
-        if (bands.length !== wantedBands.length) return false
+        if (bands.length !== fx.bands.length) return false
         for (let b = 0; b < bands.length; b++) {
-          bands[b].frequency.value = wantedBands[b].freqHz
-          bands[b].gain.value = wantedBands[b].gainDb
-          if (bands[b].type === 'peaking') bands[b].Q.value = wantedBands[b].q
+          const wanted = fx.bands[b]
+          const node = bands[b]
+          node.frequency.value = wanted.freqHz
+          node.gain.value = wanted.gainDb
+          if (node.type === 'peaking') node.Q.value = wanted.q
         }
         break
       }
