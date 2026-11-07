@@ -9,6 +9,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { encodeWav, parseWav, peakOf, rmsOf, toDb } from '../src/audio/wav.js'
 import { registerAllTools } from '../src/tools/index.js'
+import { createProject } from '../src/project/store.js'
 import { findFfmpeg, runFfmpeg } from '../src/tools/shared.js'
 
 const animationDir = 'D:\\animation'
@@ -16,6 +17,9 @@ const repoRoot = resolve('.')
 const outDir = join(repoRoot, '.anyaudio', 'out', 'animation-case')
 const excerptDir = join(outDir, 'excerpts')
 const exec = { agent: { workspaceRoot: repoRoot } }
+// anyaudio_music and anyaudio_sfx write into a clip bay project (improvement 01
+// / I-10); this case keeps one in the scratch tree.
+const projectId = (await createProject(repoRoot, { name: 'animation-case' })).id
 const tools = new Map()
 registerAllTools({
   tools: { register: (definition) => tools.set(definition.name, definition) },
@@ -108,7 +112,7 @@ log(`score: ${score.tracks.map((track) => `${track.name}(${track.instrument}, ${
 
 const renderStart = Date.now()
 const music = await tools.get('anyaudio_music').execute(
-  { score, durationSec: total, output: join(outDir, 'music.wav') },
+  { projectId, score, durationSec: total, output: join(outDir, 'music.wav') },
   exec,
 )
 log(`music: ${music.file} ${music.durationSec}s peak ${music.peakDb} dBFS, rendered in ${((Date.now() - renderStart) / 1000).toFixed(1)}s`)
@@ -116,6 +120,7 @@ for (const warning of music.warnings) log(`  warning: ${warning}`)
 
 const sfx = await tools.get('anyaudio_sfx').execute(
   {
+    projectId,
     items: [
       { type: 'wind', startSec: 0, durationSec: total, gainDb: -30, params: { intensity: 0.45, gustRate: 0.25 } },
       { type: 'stones', startSec: 45.0, durationSec: 4, gainDb: -18, params: { intensity: 0.5 } },

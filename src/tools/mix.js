@@ -136,7 +136,8 @@ export const mixToolDefinition = finalizeTool({
   name: 'anyaudio_mix',
   description:
     'Mix audio tracks onto one timeline and write a final WAV (optionally muxing it into a video with ffmpeg). ' +
-    'Finish every video deliverable with this tool: even a short clip sounds unfinished without a mix of music, effects and voice. ' +
+    'This produces one finished file that nobody can adjust afterwards. Audio a person will listen to and may want to change belongs in a clip bay project instead: anyaudio_music, anyaudio_tts and anyaudio_sfx write into a project directly, and anyaudio_project mode:"render" mixes it down to WAV/MP3/MP4. ' +
+    'Reach for this tool when a single ready-to-use file really is the whole point — a standalone sound bed with nothing left to tweak, or a picture whose final mix happens in one pass. ' +
     'Tracks are placed in order with per-track gain, pan, fades and looping; any track with role "narration" automatically lowers the level of all other tracks while the voice is present (ducking), which keeps dialogue intelligible. ' +
     'It balances the narration / music / sfx buses against each other; the balance between instruments inside the music is anyaudio_music\'s job (per-track gainDb), so fix a buried instrument there instead of pulling the whole music bus up. ' +
     'Always pass durationSec = the video length so audio and picture end together. ' +

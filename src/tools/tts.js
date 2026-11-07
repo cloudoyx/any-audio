@@ -3,7 +3,8 @@ import { dirname } from 'node:path'
 import { readConfig } from '../config.js'
 import { EDGE_VOICES, MIMO_VOICES, TTS_PROVIDERS, providerInfo, synthesizeSpeech } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
-import { finalizeTool, nowStamp, relativeToWorkspace, resolveOutputPath, textRenderer, workspaceRootOf } from './shared.js'
+import { attachMaterialFile } from '../project/attach.js'
+import { deliverCopy, deliveryPath, finalizeTool, nowStamp, relativeToWorkspace, requireProjectId, stagePath, textRenderer, workspaceRootOf } from './shared.js'
 
 let credentialResolver = null
 
@@ -68,8 +69,9 @@ export function resolveProviders(items, fallbackProvider) {
 export const ttsToolDefinition = finalizeTool({
   name: 'anyaudio_tts',
   description:
-    'Synthesize narration and write 48 kHz mono WAV files that anyaudio_mix can place on a video timeline. ' +
+    'Synthesize narration and add it to a clip bay project as material on a track, so the person can open, hear and adjust it. ' +
     'This is the only supported way to make narration for a video: it honours the engine and voice the user picked in Settings → AnyAudio, so do not shell out to edge-tts or any other TTS library. ' +
+    'Pass projectId: the lines are placed on its narration track one after another, and a copy of each WAV is kept under the project folder — that copy is what the project plays, the "output" path is only an extra deliverable. ' +
     'Two providers: "edge" (no key, unofficial Microsoft Edge service, MP3 → WAV via ffmpeg) and "mimo" (MiMo-V2.5-TTS, needs a normal Open Platform API key saved in Settings → AnyAudio). ' +
     `When "provider" is omitted the configured default is used. Edge voices include ${EDGE_VOICES.join(', ')} (default zh-CN-YunjianNeural). MiMo voices include ${MIMO_VOICES.join(', ')}; "${MIMO_VOICES[0]}" is resolved by the server cluster and may differ between clusters. ` +
     'rate/pitch/volume apply to Edge ("-12%", "-3Hz"); for MiMo they are folded into a style instruction. ' +
@@ -81,9 +83,12 @@ export const ttsToolDefinition = finalizeTool({
       text: { type: 'string', description: 'Narration text for one file.' },
       items: {
         type: 'array',
-        description: 'Several narration clips in one call: [{text, provider, voice, rate, pitch, volume, style, output}].',
+        description: 'Several narration clips in one call: [{text, provider, voice, rate, pitch, volume, style, output, trackName, startSec}].',
         items: { type: 'object', additionalProperties: true },
       },
+      projectId: { type: 'string', description: 'The clip bay project this narration belongs to. Required: run anyaudio_project mode:"create" first when the task has no project yet. Each line is added as material and placed on a track.' },
+      trackName: { type: 'string', description: 'Track the narration goes on, default 旁白. Lines land one after another on that track; give each speaker its own name so different voices never share a track. An item may override it with its own trackName.' },
+      startSec: { type: 'number', description: 'Where the first line starts on the project timeline. Later lines follow the previous one; an item may set its own startSec.' },
       provider: { type: 'string', enum: ['edge', 'mimo'], description: 'TTS engine. Defaults to the value in Settings → AnyAudio (edge).' },
       voice: { type: 'string', description: 'Voice name for the selected provider. Defaults to Settings → AnyAudio.' },
       rate: { type: 'string', description: 'Edge speaking rate, e.g. "-12%".' },
@@ -91,8 +96,9 @@ export const ttsToolDefinition = finalizeTool({
       volume: { type: 'string', description: 'Edge volume, e.g. "+0%".' },
       style: { type: 'string', description: 'MiMo style/emotion instruction (not spoken).' },
       proxy: { type: 'string', description: 'Optional proxy override, e.g. "http://127.0.0.1:7890". Defaults to the per-engine proxy configured in Settings → AnyAudio.' },
-      output: { type: 'string', description: "Output WAV path for the single-text form. Relative paths resolve against the user's project; defaults to <project>/.anyaudio/out/speech-<timestamp>.wav." },
+      output: { type: 'string', description: "Optional extra copy of the WAV at this path. Relative paths resolve against the user's project. The project's own copy is always written under the project folder." },
     },
+    required: ['projectId'],
   },
   output: {
     schema: {
@@ -100,6 +106,7 @@ export const ttsToolDefinition = finalizeTool({
       additionalProperties: true,
       properties: {
         ok: { type: 'boolean' },
+        projectId: { type: 'string' },
         provider: { type: 'string' },
         files: { type: 'array', items: { type: 'object', additionalProperties: true } },
         warnings: { type: 'array', items: { type: 'string' } },
@@ -108,16 +115,19 @@ export const ttsToolDefinition = finalizeTool({
     render: textRenderer((args, value) => {
       const lines = [`Synthesised narration (${value.provider}):`]
       for (const file of value.files ?? []) {
-        lines.push(`- ${file.durationSec.toFixed(2)}s, peak ${file.peakDb} dBFS → ${file.file} [${file.voice}]`)
+        const where = file.attached ? ` → project track "${file.attached.trackName}" @ ${Number(file.attached.startSec).toFixed(2)}s` : ''
+        lines.push(`- ${file.durationSec.toFixed(2)}s, peak ${file.peakDb} dBFS → ${file.file} [${file.voice}]${where}`)
+        if (file.delivered) lines.push(`  delivered copy: ${file.delivered}`)
       }
       if (value.warnings?.length) lines.push(`Warnings:\n${value.warnings.map((warning) => `- ${warning}`).join('\n')}`)
-      lines.push('Place these files on the timeline with anyaudio_mix (role "narration" so the music ducks under them).')
+      lines.push(`In project ${value.projectId}. Next: add music and effects with their own projectId, then render the project for the finished file.`)
       return lines.join('\n')
     }),
   },
   async execute(args, exec) {
     const workspaceRoot = await workspaceRootOf(exec)
     const { config } = await readConfig()
+    const projectId = requireProjectId(args, 'anyaudio_tts')
     const provider = String(args.provider ?? config.tts.provider)
     const info = providerInfo(provider)
     if (!info) throw new Error(`unknown TTS provider "${provider}"; use ${Object.keys(TTS_PROVIDERS).join(' or ')}`)
@@ -158,7 +168,7 @@ export const ttsToolDefinition = finalizeTool({
       const style = itemProvider === 'mimo'
         ? [config.tts.mimo.style, item.style, styleFromLegacy({ rate: edgeRate, pitch: edgePitch })].filter((part) => typeof part === 'string' && part.trim()).join('。')
         : undefined
-      const target = resolveOutputPath({ workspaceRoot, outputDir: config.output.dir, requested: item.output, defaultName: items.length > 1 ? `speech-${stamp}-${index + 1}.wav` : `speech-${stamp}.wav` })
+      const target = stagePath(workspaceRoot, items.length > 1 ? `speech-${stamp}-${index + 1}.wav` : `speech-${stamp}.wav`)
       await mkdir(dirname(target), { recursive: true })
       let audio
       try {
@@ -186,9 +196,31 @@ export const ttsToolDefinition = finalizeTool({
       const wav = encodeWav({ sampleRate: audio.sampleRate, channels: audio.channels, bitDepth: 16 })
       await (await import('node:fs/promises')).writeFile(target, wav)
       const pcm = audio.channels
+      // Narration lines land one after another on one track by default: a
+      // character's lines are versions of each other, and a person adjusts them
+      // as a group (spec §5.3). `trackName` splits them by speaker instead.
+      const speaker = String(item.trackName ?? args.trackName ?? '').trim() || '旁白'
+      const attached = await attachMaterialFile(workspaceRoot, projectId, target, {
+        kind: 'tts',
+        trackName: speaker,
+        category: 'tts',
+        snapshot: { text: item.text, provider: itemProvider, voice },
+        snapshotKind: 'tts',
+        tool: 'anyaudio_tts',
+        label: item.text.slice(0, 24),
+        startSec: item.startSec !== undefined ? item.startSec : args.startSec,
+        autoStart: true,
+      })
+      const delivered = await deliverCopy(target, deliveryPath({
+        workspaceRoot,
+        outputDir: config.output.dir,
+        requested: item.output,
+        stagedPath: target,
+      }))
       files.push({
         file: relativeToWorkspace(workspaceRoot, target),
         absolutePath: target,
+        ...(delivered ? { delivered: relativeToWorkspace(workspaceRoot, delivered), deliveredAbsolutePath: delivered } : {}),
         durationSec: Number((pcm[0].length / audio.sampleRate).toFixed(3)),
         sampleRate: audio.sampleRate,
         peakDb: Number(toDb(peakOf(pcm)).toFixed(1)),
@@ -196,6 +228,7 @@ export const ttsToolDefinition = finalizeTool({
         provider: itemProvider,
         voice,
         text: item.text.slice(0, 120),
+        attached,
       })
     }
     if (files.length === 0) {
@@ -206,7 +239,7 @@ export const ttsToolDefinition = finalizeTool({
     // a single-engine batch, the mixed list otherwise. Reporting the configured
     // default here would say "mimo" for a batch of edge files.
     const usedProviders = [...new Set(files.map((file) => file.provider))]
-    return { ok: true, provider: usedProviders.length === 1 ? usedProviders[0] : usedProviders.join('+'), files, warnings }
+    return { ok: true, projectId, provider: usedProviders.length === 1 ? usedProviders[0] : usedProviders.join('+'), files, warnings }
   },
 })
 

@@ -15,9 +15,11 @@
 
 ## 三步工作流
 
-1. **确定时间轴**：视频总时长、分镜/情绪节点、旁白区间。优先读取项目已有文件（分镜表、字幕、timing.json、narration.json），不要凭空猜时间。
-2. **渲染音乐**：`anyaudio_music` 写一个 score（秒为单位，直接对视频时间轴），得到 WAV。
-3. **混音交付**：`anyaudio_mix` 把音乐、旁白、音效放到同一条时间轴，开启旁白 ducking，对齐视频总长，必要时直接 mux 出 MP4。
+1. **建工程**：`anyaudio_project` 的 `mode:"create"`，名字用内容本身（主题、曲名、集数），不要用 `untitled` 或时间戳。拿到 `projectId`。
+2. **生成素材**：`anyaudio_music` / `anyaudio_tts` / `anyaudio_sfx` 都要求传 `projectId`——它们会自动把产出登记进工程、建好轨道、放好片段。时间轴仍要先定好：优先读项目已有文件（分镜表、字幕、timing.json、narration.json），不要凭空猜时间。
+3. **渲染成品**：`anyaudio_project` 的 `mode:"render"` 出 WAV/MP3/MP4。工程本身留在 `.anyaudio/projects/` 下，用户随时可以打开剪辑台审听和调整。
+
+**不要用 `anyaudio_mix` 组装交付物。** 它产出的是一个窗口期过后就改不动的成品：某个音效想挪 0.5 秒、某句旁白想重配，都得整条重跑。它只在「一个成品文件就是全部目标」时才用。
 
 第一次使用若报"没有安装音源"，先调 `anyaudio_sources`（action `install`）安装 GeneralUser GS，再渲染。
 
@@ -99,7 +101,15 @@
 - 结尾留尾音自然收，不要突然截断（用 `tailSec` 或淡出）。
 - 有旁白的段落音乐让位：旋律稀疏、音区避开人声中频（300Hz–3kHz），把厚度放在低音与高频。
 
-## 混音（anyaudio_mix）
+## 混音（在工程里做，不是用 anyaudio_mix）
+
+平衡是在工程里调出来的：轨道音量、片段增益、淡入淡出都是工程数据，改完立刻能听。
+
+- 音乐通常比旁白低 6–10dB，音效低 4–8dB，旁白 0dB。
+- 看 `anyaudio_music` 返回的每个 score 轨道的 `rmsDb`：某条轨道比最响的低 12dB 以上会收到警告——用那条轨道的 `gainDb` 修，别去拉整条音乐总线。
+- 长片结尾留 2–3 秒淡出，用 `anyaudio_project mode:"update"` 改片段的 `fadeOutSec`。
+
+**`anyaudio_mix` 的场合**：只有一个成品文件、之后不会有人再调（例如单独交一段音床）。它能做的 ducking 与 mux，工程侧目前只有 mux（`mode:"render"` 出 MP4）；需要旁白自动压低音乐的成品，暂时只能用 `anyaudio_mix`。
 
 ```json
 {
@@ -122,7 +132,7 @@
 - 音乐通常 -6 到 -10dB，音效 -4 到 -8dB，旁白 0dB；峰值留给 master（默认 -1.5dBFS）。返回的 `tracks[].rmsDb` 是每轨实际电平：旁白与音乐的 RMS 差通常留 6–12dB；如果音乐太轻，先看是不是峰值归一（稀疏音乐峰值高、RMS 低），可以调高音乐增益或重渲染时传 `peakDb: null`。
 - 淡入淡出用秒数，长片结尾至少 2–3s。
 - 检查 `anyaudio_mix` 返回的 `ducking.measuredDropDb`（实际压低了多少）和 `peakDb`。
-- 输出位置：相对路径一律按**用户当前项目目录**解析，默认写入 `<项目>/.anyaudio/out/`。想放到别的目录就传 `output`（相对项目或绝对路径）；不要假设插件会把文件写进 DSH 安装目录。
+- 输出位置：`output` 只是额外的一份副本。真正被工程使用的那份永远在工程目录下，工具会把两个路径都报出来；不要假设插件会把文件写进 DSH 安装目录。
 
 ## 音效
 
@@ -197,12 +207,13 @@ MuseScore General 另有一组更响的版本（`sea-shore`、`bird-tweet`、`te
 - 时长没对齐视频 → 结尾音画不同步。
 - 用 numpy 手搓合成器代替真实音源 → 电子感。
 - 自己写 Python/Node 调 edge-tts 生成旁白 → 绕过用户的 TTS 引擎与音色设置，MiMo 永远用不上。
-- 把相对 `output` 当成 DSH 目录里的路径 → 文件跑到插件安装目录，用户找不到；相对路径按项目目录解析。
 - 只调 `anyaudio_music` 不看每轨电平 → 旋律把伴奏压没（用 `analyze: true` 或 `stems: true` 检查）。
 - 为了"专业"堆十几个轨道 → 浑浊，先做减法。
+- 直接给 `anyaudio_mix` 一串文件路径当交付 → 用户拿到的是改不动的成品；先建工程再生成，mix 只留给"一个成片就够"的场合。
 
 ## 与视频整合
 
-- 插件不重编码视频：`anyaudio_mix` 的 mux 用 `-c:v copy` 复制原视频流，只重编码音频为 AAC 192k。
+- 把画面交给工程：`anyaudio_project mode:"add_material"` 导入 MP4，它会抽出一条 `video-audio` 素材并自动落轨，工程从此有画面了。
+- 插件不重编码视频：`anyaudio_project mode:"render"`（及 `anyaudio_mix`）的 mux 都用 `-c:v copy` 复制原视频流，只重编码音频为 AAC 192k。
 - 没有 ffmpeg 时仍会输出 WAV，并提示手动 mux；也可以把 WAV 交给项目原有渲染流程（例如 imageio_ffmpeg）合并。
 - 不要覆盖原视频；输出到新文件（例如 `<原名>-anyaudio.mp4`）。

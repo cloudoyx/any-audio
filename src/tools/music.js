@@ -3,7 +3,8 @@ import { planFonts, resolveConfiguredDefault } from '../audio/banks.js'
 import { compileScore } from '../audio/score.js'
 import { renderCompiled } from '../audio/synth.js'
 import { readConfig } from '../config.js'
-import { finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, resolveOutputPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
+import { attachMaterialFile } from '../project/attach.js'
+import { deliverCopy, deliveryPath, finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, seconds as clampSeconds, stagePath, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 
 function describeTracks(tracks) {
   return tracks
@@ -19,6 +20,7 @@ export const musicToolDefinition = finalizeTool({
   name: 'anyaudio_music',
   description:
     'Render a note score to a WAV file with real SoundFont instruments (MIDI-style notes, per-track gain/pan/reverb, optional automation). ' +
+    'The rendered music goes into a clip bay project: pass projectId, and it is added as material and placed on its own track (one track per score track when stems:true), so the person can open, hear and adjust it. ' +
     'Call it whenever you are making or editing a video that should have a soundtrack, and prefer it over hand-writing numpy synthesis: acoustic timbres, several instruments, humanised timing. ' +
     'Each track may name a "source" (font id from anyaudio_sources, a .sf2 path, or "auto" to pick the best-scored installed font for that instrument). ' +
     'Different tracks in one score may use different fonts; they are loaded into one synth and kept on non-overlapping bank offsets. ' +
@@ -31,7 +33,10 @@ export const musicToolDefinition = finalizeTool({
     type: 'object',
     properties: {
       score: { oneOf: [{ type: 'object' }, { type: 'string' }], description: 'Score object as described above. A path to a .json file holding the same object is also accepted and is the better choice for long scores — keep the notes in a file and pass the path instead of inlining thousands of numbers.' },
-      output: { type: 'string', description: "Output WAV path. Relative paths resolve against the user's project; defaults to <project>/.anyaudio/out/score-<timestamp>.wav." },
+      projectId: { type: 'string', description: 'The clip bay project this music belongs to. Required: run anyaudio_project mode:"create" first when the task has no project yet. The rendered music is added to the project as material and placed on its own track.' },
+      trackName: { type: 'string', description: 'Name of the track to create for this music, default the score title. Ignored with stems:true, where each score track gets its own project track named after it.' },
+      startSec: { type: 'number', description: 'Where the music starts on the project timeline, default 0.' },
+      output: { type: 'string', description: "Optional extra copy of the rendered WAV at this path. Relative paths resolve against the user's project. The project's own copy is always written under the project folder." },
       font: { type: 'string', description: 'Default SoundFont path or id (.sf2/.sf3/.dls). Tracks without "source" use it; drum kits always come from it. Defaults to the installed font.' },
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
       durationSec: { type: 'number', description: 'Exact output length. Defaults to last note end + tailSec.' },
@@ -40,7 +45,7 @@ export const musicToolDefinition = finalizeTool({
       stems: { type: 'boolean', description: 'Also write one WAV per track next to the mix. Stems keep the master\'s relative levels (they are not peak-normalised), so they can be inspected or re-balanced later.' },
       analyze: { type: 'boolean', description: 'Render every track separately only to report its peak/RMS level (no stem files). Use this to check the balance between melody and accompaniment.' },
     },
-    required: ['score'],
+    required: ['score', 'projectId'],
   },
   output: {
     schema: {
@@ -50,6 +55,10 @@ export const musicToolDefinition = finalizeTool({
         ok: { type: 'boolean' },
         file: { type: 'string' },
         absolutePath: { type: 'string' },
+        delivered: { type: 'string' },
+        deliveredAbsolutePath: { type: 'string' },
+        projectId: { type: 'string' },
+        attached: { type: 'array', items: { type: 'object', additionalProperties: true } },
         durationSec: { type: 'number' },
         sampleRate: { type: 'number' },
         peakDb: { type: 'number' },
@@ -72,12 +81,18 @@ export const musicToolDefinition = finalizeTool({
       ]
       if (value.stems?.length) lines.push(`Stems (relative levels kept): ${value.stems.join(', ')}`)
       if (value.warnings?.length) lines.push(`Warnings:\n${value.warnings.map((warning) => `- ${warning}`).join('\n')}`)
-      lines.push('Next: mix it with narration and finish with anyaudio_mix (ducking, fades, master level).')
+      const placed = value.attached ?? []
+      lines.push(placed.length
+        ? `In project ${value.projectId}: ${placed.map((entry) => `${entry.clipId} "${entry.trackName}" @ ${Number(entry.startSec).toFixed(2)}s`).join(', ')}`
+        : `In project ${value.projectId}.`)
+      if (value.delivered) lines.push(`Delivered copy: ${value.delivered}`)
+      lines.push('Next: the project holds this music now — add narration and effects with their own projectId, then render the project for the finished file.')
       return lines.join('\n')
     }),
   },
   async execute(args, exec) {
     const workspaceRoot = await workspaceRootOf(exec)
+    const projectId = requireProjectId(args, 'anyaudio_music')
     const { config } = await readConfig()
     const score = await readJsonParam(args.score, 'score', { workspaceRoot })
     const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.music.sampleRate, config.music.sampleRate)) || config.music.sampleRate
@@ -101,10 +116,14 @@ export const musicToolDefinition = finalizeTool({
     const peakDb = peakSetting === null ? undefined : Number(peakSetting)
     const normalize = peakSetting !== null
 
-    const target = resolveOutputPath({ workspaceRoot, outputDir: config.output.dir, requested: args.output, defaultName: `score-${nowStamp()}.wav` })
+    // Render into `.anyaudio/out/` first: this file is not the deliverable, it is
+    // the material that is about to join the project. `output` only says where a
+    // delivered copy goes once the project owns the material (I-10).
+    const target = stagePath(workspaceRoot, `score-${nowStamp()}.wav`)
     const rendered = await renderCompiled(compiled, { banks: plan.banks, layout: plan.layout, sampleRate, durationSec, peakDb, normalize })
     const written = await writeWavFile(target, rendered.channels, sampleRate)
     const stems = []
+    const stemFiles = []
     const levels = new Map()
     if (args.stems === true || args.analyze === true) {
       const base = target.replace(/\.wav$/i, '')
@@ -119,9 +138,43 @@ export const musicToolDefinition = finalizeTool({
           const stemPath = `${base}-${track.name.replace(/[^\w.-]+/g, '_')}.wav`
           await writeWavFile(stemPath, channels, sampleRate)
           stems.push(relativeToWorkspace(workspaceRoot, stemPath))
+          const attached = await attachMaterialFile(workspaceRoot, projectId, stemPath, {
+            kind: 'music-stem',
+            trackName: track.name,
+            category: 'music',
+            snapshot: score,
+            snapshotKind: 'score',
+            tool: 'anyaudio_music',
+            label: track.name,
+            exec,
+          })
+          stemFiles.push(attached)
         }
       }
     }
+
+    // A score with stems goes into the project stem by stem (spec §5.3), so a
+    // person can rebalance the instruments. A plain render is one track.
+    const attached = args.stems === true
+      ? stemFiles
+      : [await attachMaterialFile(workspaceRoot, projectId, written.path, {
+        kind: 'music',
+        trackName: args.trackName || String(score.title ?? '').trim() || '音乐',
+        category: 'music',
+        snapshot: score,
+        snapshotKind: 'score',
+        tool: 'anyaudio_music',
+        label: String(score.title ?? '').trim() || '音乐',
+        startSec: args.startSec,
+        exec,
+      })]
+
+    const delivered = await deliverCopy(written.path, deliveryPath({
+      workspaceRoot,
+      outputDir: config.output.dir,
+      requested: args.output,
+      stagedPath: written.path,
+    }))
 
     const tracks = compiled.tracks.map((track) => {
       const assignment = plan.layout.get(track.name)
@@ -159,8 +212,10 @@ export const musicToolDefinition = finalizeTool({
 
     return {
       ok: true,
+      projectId,
       file: relativeToWorkspace(workspaceRoot, written.path),
       absolutePath: written.path,
+      ...(delivered ? { delivered: relativeToWorkspace(workspaceRoot, delivered), deliveredAbsolutePath: delivered } : {}),
       bytes: written.bytes,
       durationSec: Number(rendered.durationSec.toFixed(3)),
       sampleRate,
@@ -171,6 +226,7 @@ export const musicToolDefinition = finalizeTool({
       tracks,
       stems,
       stemsNormalized: false,
+      attached,
       warnings,
     }
   },

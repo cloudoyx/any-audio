@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { encodeWav } from '../audio/wav.js'
 
 let workingDirectoryService
@@ -54,6 +54,62 @@ export function resolveOutput(workspaceRoot, output, defaultName) {
     return candidate
   }
   return join(outputDir(workspaceRoot), defaultName)
+}
+
+/**
+ * Where a generated file is written before it belongs to anything.
+ *
+ * Always inside the workspace's `.anyaudio/`, so a task can never leave audio in
+ * a place the project does not know about. The generating tools attach this file
+ * to a project and only then copy it out to wherever the person asked for it
+ * (improvement plan 01, I-10).
+ */
+export function stageDir(workspaceRoot) {
+  return join(workspaceRoot, '.anyaudio', 'out')
+}
+
+export function stagePath(workspaceRoot, defaultName) {
+  return join(stageDir(workspaceRoot), defaultName)
+}
+
+/**
+ * Where the delivered copy goes. `requested` wins when the caller named a path;
+ * otherwise the configured output directory; otherwise the staging file itself is
+ * the only copy and nothing else is written.
+ */
+export function deliveryPath({ workspaceRoot, outputDir: configuredDir, requested, stagedPath }) {
+  if (typeof requested === 'string' && requested.trim()) {
+    return isAbsolute(requested) ? requested : resolve(workspaceRoot, requested)
+  }
+  const base = configuredDir && String(configuredDir).trim()
+    ? (isAbsolute(String(configuredDir).trim()) ? String(configuredDir).trim() : resolve(workspaceRoot, String(configuredDir).trim()))
+    : null
+  if (!base) return null
+  return join(base, basename(stagedPath))
+}
+
+/** Copy `from` to `to` unless they are the same file. Returns the delivered path. */
+export async function deliverCopy(from, to) {
+  if (!to) return null
+  if (resolve(from) === resolve(to)) return to
+  await mkdir(dirname(to), { recursive: true })
+  await copyFile(from, to)
+  return to
+}
+
+/**
+ * A generating tool without a project is the failure this whole change exists to
+ * stop: the audio would be delivered as a loose file nobody can adjust. The
+ * message has to name the next step, because the Agent reads it and acts.
+ */
+export function requireProjectId(args, toolName) {
+  const projectId = typeof args?.projectId === 'string' ? args.projectId.trim() : ''
+  if (projectId) return projectId
+  throw new Error(
+    `${toolName} writes into a clip bay project: pass "projectId". `
+    + 'Run anyaudio_project mode:"create" first when this task has no project yet, '
+    + 'then pass the id it returns — the result has to be something the person can open and adjust.',
+  )
 }
 
 export function relativeToWorkspace(workspaceRoot, path) {

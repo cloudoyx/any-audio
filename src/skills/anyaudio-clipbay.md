@@ -11,14 +11,16 @@
 
 | 需求 | 用什么 |
 |---|---|
-| 一段视频配一条完整混音，交付的是成品 | `anyaudio_mix` / `anyaudio_music` |
-| 对方要能自己调某一轨、挪某个音效、只重做一段 | **剪辑台 + `anyaudio_project`** |
+| 对方要能自己调某一轨、挪某个音效、只重做一段 | **剪辑台 + 三个生成型工具** |
+| 一段视频配一条完整混音，交付的是成品，之后没人会改 | `anyaudio_mix` |
 
-判断标准很简单：**只要对方说过「这块能不能再…」「我想自己调一下」「只改这几秒」，就该用剪辑台。** 60 秒以上的多轨内容默认也用剪辑台——返工成本比一次性混音低得多。
+判断标准很简单：**只要对方说过「这块能不能再…」「我想自己调一下」「只改这几秒」，就该用剪辑台；没说也一样**——人拿到文件后的第一反应通常是「某一处能不能改改」。60 秒以上的多轨内容默认也用剪辑台，返工成本比一次性混音低得多。
 
-**默认就建工程。** 凡是要产出一段有人会听的东西（配音、音乐、音效、视频配乐），先建工程再生成素材，而不是先堆一堆 WAV 再问要不要工程。人打开剪辑台才能听见结果、才知道能不能调；只给一堆文件路径，等于让人对着一串文件名想象声音。唯一不用工程的场合是「合成一个最终文件、之后没人再改」，那才轮到 `anyaudio_mix`。
+**默认就建工程。** 凡是要产出一段有人会听的东西（配音、音乐、音效、视频配乐），先建工程再生成素材。人打开剪辑台才能听见结果、才知道能不能调；只给一堆文件路径，等于让人对着一串文件名想象声音。
 
-`anyaudio_mix` 不是剪辑台的替代品：它是把成品压成一条混音，做不了单轨调整。已经建了工程还去调 `anyaudio_mix`，等于把人能调的那层信息丢了。
+这不是靠自觉：`anyaudio_music`、`anyaudio_tts`、`anyaudio_sfx` **都要求传 `projectId`**，不传直接报错。所以顺序是死的——先 `create` 拿 id，再生成。
+
+`anyaudio_mix` 不是剪辑台的替代品：它把成品压成一条混音，做不了单轨调整。已经建了工程还去调 `anyaudio_mix`，等于把人能调的那层信息丢了。
 
 建工程不用问过用户——它建在 `.anyaudio/projects/` 下，不覆盖任何既有文件。名字用内容本身命名（「海边主题曲」「第三集旁白」），不要用「untitled」或时间戳。
 
@@ -28,20 +30,22 @@
 1. anyaudio_project({ mode: "create", name: "海边主题曲" })
       → 返回 projectId，例如 prj_ab12cd34
 
-2. 每个素材单独生成、逐个登记：
-   anyaudio_music(...)  → 输出 WAV
-   anyaudio_project({ mode: "add_material",
-                      projectId,
-                      sourcePath: "<上一步的输出>",
-                      kind: "music-stem",
-                      trackName: "鼓",
-                      category: "music",
-                      startSec: 0 })
+2. 三个生成型工具都带上 projectId，素材自动入工程、自动建轨、自动落片段：
+   anyaudio_music({ projectId, score, stems: true })   ← 每条 stem 各占一轨
+   anyaudio_tts({ projectId, text, trackName: "旁白" })
+   anyaudio_sfx({ projectId, mode: "materials", items: [...] })  ← 每个音效一个片段
+
+   用户自有文件（他给的 MP3、要用的素材）才走 add_material：
+   anyaudio_project({ mode: "add_material", projectId,
+                      sourcePath: "<文件>", kind: "music",
+                      trackName: "外部音乐", category: "music", startSec: 0 })
 
 3. anyaudio_project({ mode: "read", projectId })   ← 改之前先读
 4. anyaudio_project({ mode: "update", projectId, changes: [...] })
 5. anyaudio_project({ mode: "render", projectId, format: "mp4" })
 ```
+
+**素材文件落在哪**：生成型工具先把音频写进 `.anyaudio/out/`，再复制一份进 `<工程>/materials/`——这份是工程真正播放的副本。你传 `output` 只是额外再复制一份到用户指定的位置，工具会把两个路径都报出来。所以用户的原始文件永远不会被搬走或删掉。
 
 `add_material` 一次只登记一个文件，但会顺手把轨道建好、把片段摆上去。**不要**先建一堆空轨道再往里塞。
 
@@ -62,6 +66,8 @@
 ## 保留创作资料
 
 `add_material` 会冻结一份快照到工程的 `sources/` 里。**快照不要删、不要改**：它是「这个素材当时是怎么做出来的」的唯一记录。重做一段时，你要么用同一份快照重新生成，要么把新素材作为新材料加进来——不要覆盖旧素材，人可能想比较两版。
+
+生成型工具（`anyaudio_music` / `anyaudio_tts` / `anyaudio_sfx`）入工程时也会自动冻结快照：music 存整份 score，tts 存文本、引擎与音色，sfx 存 preset 或程序化参数与 seed。
 
 ## 人让你改一段的时候
 

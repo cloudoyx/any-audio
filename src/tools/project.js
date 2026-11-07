@@ -15,13 +15,14 @@
  * see what changed and is why the clip bay refuses to undo those edits.
  */
 import { readFile, stat } from 'node:fs/promises'
-import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS } from '../project/schema.js'
 import { createProject, listProjects, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
 import { findMaterial, registerMaterial, deleteMaterial } from '../project/materials.js'
 import { importFile, importGeneratedMaterial } from '../project/import.js'
 import { exportProject, renderProject } from '../project/render.js'
-import { newItemId, newTrackId, projectDir, resolveInside } from '../project/paths.js'
+import { ensureTrack, placeClip } from '../project/attach.js'
+import { projectDir, resolveInside } from '../project/paths.js'
 import { findFfmpeg, finalizeTool, nowStamp, outputDir, relativeToWorkspace, resolveOutputPath, textBlocks, textRenderer, workspaceRootOf } from './shared.js'
 import { readConfig } from '../config.js'
 
@@ -34,46 +35,6 @@ function requireWorkspace(exec) {
   })
 }
 
-/** Insert a track when the requested name does not exist yet, and return it. */
-function ensureTrack(project, { name, category = 'other' }) {
-  const wanted = String(name ?? '').trim()
-  if (!wanted) throw new Error('a track name is required')
-  const existing = project.tracks.find((track) => track.name === wanted)
-  if (existing) return existing
-  const resolved = TRACK_CATEGORIES.includes(category) ? category : 'other'
-  const track = {
-    id: newTrackId(),
-    name: wanted,
-    category: resolved,
-    volumeDb: 0,
-    pan: 0,
-    muted: false,
-    solo: false,
-    items: [],
-  }
-  project.tracks.push(track)
-  return track
-}
-
-function placeClip(track, material, { startSec = 0, inSec, outSec, gainDb = 0, pan = 0, fadeInSec = 0, fadeOutSec = 0, label }) {
-  const item = {
-    id: newItemId(),
-    material: material.id,
-    startSec: Number(startSec) || 0,
-    inSec: inSec === undefined ? 0 : Number(inSec),
-    outSec: outSec === undefined ? material.durationSec : Number(outSec),
-    gainDb: Number(gainDb) || 0,
-    pan: Number(pan) || 0,
-    fadeInSec: Number(fadeInSec) || 0,
-    fadeOutSec: Number(fadeOutSec) || 0,
-    muted: false,
-    label: String(label ?? '').trim() || basename(material.file, extname(material.file)),
-  }
-  item.outSec = Math.min(item.outSec, material.durationSec)
-  if (!(item.outSec > item.inSec)) throw new Error(`clip range ${item.inSec}–${item.outSec}s is empty; the material lasts ${material.durationSec}s`)
-  track.items.push(item)
-  return item
-}
 
 async function projectSummary(workspaceRoot, project) {
   const index = await readMaterialIndex(workspaceRoot, project.id)
