@@ -15,13 +15,18 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 // both modules are concatenated into one scratch module: the preview half is
 // still the real audio.js, it just gets its shared parameters from the file the
 // renderer also reads.
+//
+// `API` is the one module-level value the stripped imports supplied — the reverb
+// worklet URL is built from it, which is evaluated when the module loads even
+// though no test calls the hook. Declaring it here keeps the pure helpers
+// loadable without a browser.
 const mixParamsSource = readFileSync(join(root, 'src', 'client', 'clipbay', 'mix-params.js'), 'utf8')
 const source = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
   // The hooks import react, which is not needed for the pure helpers.
   .replace(/^import .*$/gm, '')
   .replace(/export function usePlayback[\s\S]*$/m, '')
 const { scheduleClips, audibleTracks, dbToGain, scheduledLength, mixedGain, resolveTrackGain, itemParams, masterParams, panGains } = await import(
-  `data:text/javascript;base64,${Buffer.from(`${mixParamsSource}\n${source}`, 'utf8').toString('base64')}`
+  `data:text/javascript;base64,${Buffer.from(`const API = '/api/dsh-any-audio'\n${mixParamsSource}\n${source}`, 'utf8').toString('base64')}`
 )
 
 let passed = 0
@@ -280,7 +285,12 @@ test('pan follows the same live path as the faders', () => {
   const shared = readFileSync(join(root, 'src', 'client', 'clipbay', 'mix-params.js'), 'utf8')
   assert.match(shared, /export function itemParams/, 'itemParams is the one place clip pan is summed')
   assert.match(shared, /pan: Math\.max\(-1, Math\.min\(1, pan\)\)/, 'the sum is clamped once, there')
-  const applyMix = raw.slice(raw.indexOf('const applyMix = useCallback'), raw.indexOf('const applyMix = useCallback') + 1600)
+  // Slice the whole function, not a fixed window: applyMix grew when the effect
+  // chains landed, and a char count would silently start reading past its end.
+  const mixStart = raw.indexOf('const applyMix = useCallback')
+  const mixEnd = raw.indexOf('const setProject = useCallback')
+  assert.ok(mixStart > 0 && mixEnd > mixStart, 'applyMix is where the test expects it')
+  const applyMix = raw.slice(mixStart, mixEnd)
   assert.match(applyMix, /panLeft\?\.gain\.setTargetAtTime/, 'applyMix ramps the left pan gain too')
   assert.match(applyMix, /panRight\?\.gain\.setTargetAtTime/, 'and the right one')
   assert.match(applyMix, /panGains\(/, 'using the shared law')

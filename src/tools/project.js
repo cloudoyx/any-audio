@@ -16,7 +16,7 @@
  */
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
-import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS, FX_TYPES, validateFxChain } from '../project/schema.js'
+import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS, validateFxChain } from '../project/schema.js'
 import { createProject, listProjects, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
 import { findMaterial, registerMaterial, deleteMaterial } from '../project/materials.js'
 import { importFile, importGeneratedMaterial } from '../project/import.js'

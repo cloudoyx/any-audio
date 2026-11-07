@@ -306,10 +306,17 @@ async function handle(req, res, { url, method, path, ctx }) {
   throw new RouteError(404, `unknown clip bay route ${path}`)
 }
 
-/** Only project read/write needs the page header; media elements cannot send one. */
+/**
+ * Only project read/write needs the page header.
+ *
+ * Media elements and `AudioWorklet.addModule` cannot send a custom header — they
+ * are plain browser fetches the page does not construct — so the media routes and
+ * the worklet bundle are exempt. Their only protection is the same
+ * `sec-fetch-site` rejection the settings bridge applies; the worklet route serves
+ * one fixed file from the plugin itself and accepts no path from the request.
+ */
 export function needsClientHeader(path) {
   return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/render' || path === '/clipbay/render/cancel'
-    || path === '/clipbay/worklet'
 }
 
 /**

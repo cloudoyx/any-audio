@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
 import { buildDuckCurve } from '../../audio/fx.js'
 import { fadeCurve, itemParams, masterParams, panGains, resolveTrackGain } from './mix-params.js'
-import { buildFxChain, chainNeedsWorklet, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
+import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
 
 /**
  * Resolution of a ducking curve in the preview: 50 points a second.
