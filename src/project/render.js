@@ -270,7 +270,14 @@ export async function exportProject({
     throw new RenderError(`unknown export format "${format}"; use wav, mp3 or mp4`)
   }
   if (target === 'mp4' && !project.video?.path) {
-    throw new RenderError('this project has no video; export MP4 only for projects with a picture')
+    // A refusal that only says "no" is what made an agent give up on the project
+    // and mux the picture itself with ffmpeg, leaving the project and the finished
+    // file describing two different things. Say what the next step is instead.
+    throw new RenderError(
+      'this project has no video; export MP4 only for projects with a picture. '
+      + 'Import the picture first with anyaudio_project mode:"add_material" — that sets the project\'s video and pulls its soundtrack onto a track, '
+      + 'and after that mode:"render" format:"mp4" produces the finished file. Do not assemble the picture with ffmpeg yourself: the project would no longer match the file people watch.',
+    )
   }
   const rendered = await renderProject({ project, workspaceRoot, signal, onProgress })
   const frozen = freezeNormalize ? await freezeNormalizeGain(project, workspaceRoot, rendered, signal) : null

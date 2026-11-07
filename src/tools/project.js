@@ -384,10 +384,19 @@ export const projectToolDefinition = finalizeTool({
         ].join('\n')
       }
       if (value.mode === 'add_material') {
+        const summary = `Project now has ${value.tracks.length} tracks, ${Number(value.durationSec).toFixed(2)}s long.`
+        // With a picture in the project, render can produce the finished file.
+        // Saying it here matters: without this sentence the way to a finished
+        // MP4 looked like a separate ffmpeg run, so an agent took that route and
+        // left the project describing an arrangement nobody could watch (I-05).
+        const pictureNote = value.video?.path
+          ? `The project now has a picture (${value.tracks.length} tracks, ${Number(value.durationSec).toFixed(2)}s). anyaudio_project mode:"render" format:"mp4" produces the finished file with this picture and the mixed audio.`
+          : null
         if (value.silent) {
           return [
             'The picture was imported as a reference picture, but it has no audio stream, so there is no soundtrack material to place.',
-            `Project now has ${value.tracks.length} tracks, ${Number(value.durationSec).toFixed(2)}s long.`,
+            ...(pictureNote ? [pictureNote] : []),
+            summary,
           ].join('\n')
         }
         const lines = [
@@ -395,7 +404,7 @@ export const projectToolDefinition = finalizeTool({
         ]
         if (value.clip) lines.push(`Placed it on "${value.clip.trackName}" at ${Number(value.clip.startSec).toFixed(2)}s`)
         else lines.push('It is registered but not placed on a track.')
-        lines.push(`Project now has ${value.tracks.length} tracks, ${Number(value.durationSec).toFixed(2)}s long.`)
+        lines.push(pictureNote ?? summary)
         return lines.join('\n')
       }
       if (value.mode === 'update') {

@@ -461,6 +461,12 @@ await step('MP4 export without a video is refused', async () => {
     message = error.message
   }
   assert(/no video/.test(message), `expected a "no video" error, got "${message}"`)
+  // Improvement plan 02, I-05. A refusal that only says "no" is what made an
+  // agent leave the project and mux the picture itself with ffmpeg — after which
+  // the clip bay shows one arrangement and the released file contains another.
+  // The message has to carry the next step.
+  assert(/add_material/.test(message), `the error must name the way forward, got "${message}"`)
+  assert(/ffmpeg/.test(message), `and warn off the bypass that detaches the file from the project, got "${message}"`)
 })
 
 await step('export does not re-normalise the mix unless asked', async () => {
