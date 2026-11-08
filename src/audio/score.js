@@ -187,11 +187,29 @@ function automationEvents(automation, warn) {
   if (cc === undefined) throw new Error(`unknown automation controller "${controller}"`)
   const points = automation.points
   if (!Array.isArray(points) || points.length === 0) throw new Error(`automation for "${trackName}" needs points`)
+  const clamped = []
   const parsed = points.map((point, index) => {
     const [t, raw] = Array.isArray(point) ? point : [point.t, point.v ?? point.value]
     const value = number(raw, `automation point #${index} value`)
+    if (value < 0 || value > 127) {
+      clamped.push({ index, value, to: Math.max(0, Math.min(127, value)) })
+    }
     return { t: Math.max(0, number(t, `automation point #${index} time`)), value: Math.max(0, Math.min(127, value)) }
   })
+  // A CC value is 0..127. Writing dB here (-26, -20) is the mistake that is
+  // easiest to make — gainDb on the same track takes dB, so the two look alike —
+  // and the clamp then turns every negative into 0, which is silence. One real
+  // session shipped a warm pad that was digit-for-digit zero for 64 seconds
+  // because of this, and the only warning said it sat "102.6 dB below the
+  // loudest track", pointing at gainDb instead of at these points.
+  if (clamped.length > 0) {
+    const worst = clamped[0]
+    warn(
+      `automation for "${trackName}": ${clamped.length} point(s) fall outside 0..127 and were clamped — point #${worst.index} is ${worst.value}, clamped to ${worst.to}`
+      + `${clamped.some((entry) => entry.to === 0) ? ', and 0 silences the controller for its whole span' : ''}.`
+      + ' CC values are 0..127, not dB: use 127 for the loudest, 0 for silence, and roughly 100 for a -12 dB part.',
+    )
+  }
   parsed.sort((a, b) => a.t - b.t)
   const events = []
   const step = 1 / 20
@@ -291,7 +309,16 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
   for (const automation of score.automation ?? []) {
     const { trackName, events } = automationEvents(automation, warn)
     const target = byName.get(trackName)
-    if (!target) throw new ScoreError(`automation references unknown track "${trackName}"`)
+    // The name is the identifier here, and the mistake in a real session was
+    // passing the track's index instead. Naming what is available ends it; a bare
+    // "unknown track" leaves the model guessing at the same wrong value.
+    if (!target) {
+      const available = tracks.map((track, index) => `#${index} "${track.name}"`).join(', ')
+      throw new ScoreError(
+        `automation references unknown track "${trackName}". This score has: ${available || '(none)'}. `
+        + 'automation.track takes the track name, not its index or MIDI channel.',
+      )
+    }
     for (const event of events) target.events.push({ ...event, channel: target.channel })
     target.events.sort((a, b) => a.t - b.t)
   }

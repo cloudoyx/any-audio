@@ -280,7 +280,18 @@ export function setTrackMuted(project, { trackId, muted }) {
   const value = Boolean(muted)
   if (value === track.muted) return { project: next, note: '' }
   track.muted = value
-  return { project: next, note: `${value ? '静音' : '取消静音'}轨道「${track.name}」` }
+  // Muting a soloed track used to leave both flags lit. Mute wins in
+  // `resolveTrackGain`, so that combination silences the soloed track while solo
+  // silences every other one — the whole project goes quiet with two buttons lit
+  // and nothing on screen explaining it. Clearing solo makes the two flags mean
+  // what their buttons promise: a track is either the one being listened to or
+  // the one being switched off.
+  const cleared = value && track.solo === true
+  if (cleared) track.solo = false
+  return {
+    project: next,
+    note: `${value ? '静音' : '取消静音'}轨道「${track.name}」${cleared ? '（同时取消独奏）' : ''}`,
+  }
 }
 
 /**
@@ -293,7 +304,16 @@ export function setTrackSolo(project, { trackId, solo }) {
   const value = Boolean(solo)
   if (value === track.solo) return { project: next, note: '' }
   track.solo = value
-  return { project: next, note: `${value ? '独奏' : '取消独奏'}轨道「${track.name}」` }
+  // Soloing a muted track is the same trap from the other side: `resolveTrackGain`
+  // returns 0 for a muted track before it ever looks at solo, so the person would
+  // solo something and hear silence while every other track is silenced too.
+  // Soloing a track asserts it should be heard, so mute has to give way.
+  const cleared = value && track.muted === true
+  if (cleared) track.muted = false
+  return {
+    project: next,
+    note: `${value ? '独奏' : '取消独奏'}轨道「${track.name}」${cleared ? '（同时取消静音）' : ''}`,
+  }
 }
 
 /**

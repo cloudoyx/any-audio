@@ -328,6 +328,54 @@ await test('update changes several clips in one call', async () => {
   assert.equal(result.applied.length, 2)
 })
 
+await test('update keeps mute and solo from both being lit', async () => {
+  // The mixer sums mute above solo: a track that is both is silent, while solo
+  // silences every other track too — the whole project goes quiet. The clip bay's
+  // buttons now clear the other flag, and the agent's update path has to agree,
+  // or the same dead state comes back through the other door.
+  const project = await readProject(workspaceRoot, projectId)
+  const track = project.tracks[0]
+
+  const soloed = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'track', trackId: track.id, field: 'solo', value: true }],
+  })
+  assert.equal(soloed.ok, true)
+  assert.match(soloed.applied[0], /独奏/)
+
+  const muted = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'track', trackId: track.id, field: 'muted', value: true }],
+  })
+  assert.equal(muted.ok, true)
+  const afterMute = await readProject(workspaceRoot, projectId)
+  const mutedTrack = afterMute.tracks.find((entry) => entry.id === track.id)
+  assert.equal(mutedTrack.muted, true, 'muted')
+  assert.equal(mutedTrack.solo, false, 'solo must clear, or every track is silent')
+  assert.match(muted.applied[0], /同时取消独奏/)
+
+  const soloAgain = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'track', trackId: track.id, field: 'solo', value: true }],
+  })
+  assert.equal(soloAgain.ok, true)
+  const afterSolo = await readProject(workspaceRoot, projectId)
+  const soloTrack = afterSolo.tracks.find((entry) => entry.id === track.id)
+  assert.equal(soloTrack.solo, true, 'soloed')
+  assert.equal(soloTrack.muted, false, 'mute must clear, or soloing it plays silence')
+  assert.match(soloAgain.applied[0], /同时取消静音/)
+
+  // Put the track back so later tests start from a clean slate.
+  await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'track', trackId: track.id, field: 'solo', value: false }],
+  })
+})
+
 await test('update refuses an unknown track, clip or field', async () => {
   const missingTrack = await call({
     mode: 'update',

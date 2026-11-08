@@ -157,6 +157,7 @@ export const musicToolDefinition = finalizeTool({
     const stems = []
     const stemFiles = []
     const levels = new Map()
+    const usedStemNames = new Set()
     if (args.stems === true || args.analyze === true) {
       const base = target.replace(/\.wav$/i, '')
       for (const track of compiled.tracks) {
@@ -167,7 +168,16 @@ export const musicToolDefinition = finalizeTool({
         const channels = gain === 1 ? stem.channels : stem.channels.map((channel) => channel.map((sample) => sample * gain))
         levels.set(track.name, { peakDb: stem.peakDb + 20 * Math.log10(gain || 1), rmsDb: stem.rmsDb + 20 * Math.log10(gain || 1) })
         if (args.stems === true) {
-          const stemPath = `${base}-${track.name.replace(/[^\w.-]+/g, '_')}.wav`
+          // `\w` is ASCII-only, so every Chinese track name collapsed to the same
+          // `_`: a five-part score wrote all five stems to one path and only the
+          // last survived, while the reply listed that same path five times. Keep
+          // Unicode letters and digits, and only append a counter when two tracks
+          // still collide.
+          const safeName = track.name.replace(/[^\p{L}\p{N}._-]+/gu, '_').replace(/^[._]+|[._]+$/g, '') || 'stem'
+          let stemName = safeName
+          for (let suffix = 2; usedStemNames.has(stemName); suffix++) stemName = `${safeName}-${suffix}`
+          usedStemNames.add(stemName)
+          const stemPath = `${base}-${stemName}.wav`
           await writeWavFile(stemPath, channels, sampleRate)
           stems.push(relativeToWorkspace(workspaceRoot, stemPath))
           const attached = await attachMaterialFile(workspaceRoot, projectId, stemPath, {
@@ -235,7 +245,24 @@ export const musicToolDefinition = finalizeTool({
     if (leveled.length > 1) {
       const loudest = Math.max(...leveled.map(([, level]) => level.rmsDb))
       for (const [trackName, level] of leveled) {
+        // A track that rendered to pure zeros is not "quiet" and the balance
+        // knob cannot bring it back: something silenced it. One session got
+        // "sits 102.6 dB below the loudest track" for a pad that was zero from
+        // end to end because its automation had been written in dB, and the
+        // advice to turn gainDb up was useless. Say what actually happened.
+        if (level.rmsDb === -Infinity) {
+          warnings.push(`track "${trackName}" rendered completely silent (every sample is zero) — check its automation points, mute flags and note velocities before adjusting its gainDb, which cannot restore a track that produced no signal`)
+          continue
+        }
         const drop = loudest - level.rmsDb
+        // 60 dB under the loudest part is inaudible in any real mix, and it is far
+        // outside what a fader is for — a track that far down was silenced by
+        // something, not mixed low. Naming that keeps the advice from sending the
+        // caller to the wrong knob (measured at -91 dB for a dB-written CC curve).
+        if (drop > 60) {
+          warnings.push(`track "${trackName}" sits ${drop.toFixed(1)} dB below the loudest track, which is inaudible — check its automation points and mute flags first; its gainDb is not what silenced it`)
+          continue
+        }
         if (drop > 12) {
           warnings.push(`track "${trackName}" sits ${drop.toFixed(1)} dB below the loudest track — per-track gainDb is the balance knob (master normalisation does not rebalance); check whether the melody is drowning this part`)
         }

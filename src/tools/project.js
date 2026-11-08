@@ -136,8 +136,23 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
       case 'name': track.name = String(value).slice(0, 80); return `重命名轨道「${track.name}」`
       case 'volumeDb': track.volumeDb = Number(value); return `调整轨道「${track.name}」音量 ${track.volumeDb} dB`
       case 'pan': track.pan = Number(value); return `调整轨道「${track.name}」声像 ${track.pan}`
-      case 'muted': track.muted = Boolean(value); return `${track.muted ? '静音' : '取消静音'}轨道「${track.name}」`
-      case 'solo': track.solo = Boolean(value); return `${track.solo ? '独奏' : '取消独奏'}轨道「${track.name}」`
+      case 'muted': {
+        track.muted = Boolean(value)
+        // Same rule as the clip bay's own buttons: mute wins over solo in
+        // `resolveTrackGain`, so a track that is both is silent while every other
+        // track is silenced by the solo — the whole project goes quiet and the
+        // caller has no way to tell. Clearing the other flag keeps the two
+        // properties meaning what their names say.
+        const cleared = track.muted && track.solo === true
+        if (cleared) track.solo = false
+        return `${track.muted ? '静音' : '取消静音'}轨道「${track.name}」${cleared ? '（同时取消独奏）' : ''}`
+      }
+      case 'solo': {
+        track.solo = Boolean(value)
+        const cleared = track.solo && track.muted === true
+        if (cleared) track.muted = false
+        return `${track.solo ? '独奏' : '取消独奏'}轨道「${track.name}」${cleared ? '（同时取消静音）' : ''}`
+      }
       case 'fx': {
         track.fx = validateFxChain(value, 'fx')
         return `设置轨道「${track.name}」效果链（${describeChain(track.fx)}）`

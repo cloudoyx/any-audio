@@ -229,6 +229,51 @@ await test('compileScore rejects impossible pitches with a clear message', async
   assert(message.includes('pitch'), `error should mention pitch, got "${message}"`)
 })
 
+await test('automation written in dB is clamped and says so', async () => {
+  // CC values are 0..127. Writing dB here is easy to do (gainDb on the same
+  // track takes dB) and the clamp turns every negative into 0, which is
+  // silence: one real project shipped a warm pad that was zero for 64 seconds.
+  // It has to be reported, not applied quietly.
+  const compiled = compileScore({
+    tracks: [{ name: 'pad', instrument: 'choir', gainDb: -20, notes: [[0, 2, 60, 80]] }],
+    automation: [{ track: 'pad', controller: 'volume', points: [[0, -26], [4, -20]] }],
+  })
+  const ccs = compiled.tracks[0].events.filter((event) => event.type === 'cc' && event.controller === 7)
+  assert(ccs.some((event) => event.value === 0), 'a negative point still clamps to 0')
+  const warning = compiled.warnings.find((entry) => entry.includes('automation for "pad"'))
+  assert(warning, `clamping must warn, got ${JSON.stringify(compiled.warnings)}`)
+  assert(warning.includes('0..127'), 'the warning must name the real range')
+  assert(warning.includes('not dB'), 'the warning must say the values are not dB')
+  assert(warning.includes('-26'), 'the warning must quote the offending value')
+})
+
+await test('automation inside 0..127 stays silent about clamping', async () => {
+  const compiled = compileScore({
+    tracks: [{ name: 'pad', instrument: 'choir', notes: [[0, 2, 60, 80]] }],
+    automation: [{ track: 'pad', controller: 'volume', points: [[0, 100], [4, 40]] }],
+  })
+  assert(!compiled.warnings.some((entry) => entry.includes('automation')), `a valid curve must not warn, got ${JSON.stringify(compiled.warnings)}`)
+})
+
+await test('automation naming an unknown track lists what the score has', async () => {
+  let message = ''
+  try {
+    compileScore({
+      tracks: [
+        { name: '卡林巴旋律', instrument: 'kalimba', notes: [[0, 1, 60, 80]] },
+        { name: '贝斯', instrument: 'bass', notes: [[0, 1, 40, 80]] },
+      ],
+      // The real mistake: the track's index, not its name.
+      automation: [{ track: 2, controller: 'volume', points: [[0, 90]] }],
+    })
+  } catch (error) {
+    message = error.message
+  }
+  assert(message.includes('unknown track "2"'), `should name the bad value, got "${message}"`)
+  assert(message.includes('卡林巴旋律') && message.includes('贝斯'), `should list the available tracks, got "${message}"`)
+  assert(message.includes('not its index'), 'should name the index-versus-name confusion')
+})
+
 await test('drum tracks accept drum-kit names as pitches', async () => {
   const compiled = compileScore({
     tracks: [{ name: 'perc', instrument: 'drums', drums: true, notes: [[0, 0.2, 'kick'], [0.5, 0.2, 'taiko'], [1, 0.2, 'gong']] }],
@@ -737,6 +782,76 @@ await test('stems keep the authored balance instead of being re-normalised', asy
   // Each stem is its own clip on its own track, so a person can rebalance them.
   assert(result.attached.length === 2, `both stems must land in the project, got ${result.attached.length}`)
   assert(result.attached.every((entry) => entry.trackName && entry.clipId), 'each stem needs its own track and clip')
+})
+
+await test('stems with Chinese track names get distinct files', async () => {
+  // `\w` is ASCII-only, so every Chinese name collapsed to the same `_`: a
+  // five-part score wrote all five stems to one path (only the last survived)
+  // and the reply listed that same path five times. Measured on a real project:
+  // out/ held a single `score-...-_.wav` for five tracks.
+  const result = await tools.get('anyaudio_music').execute(
+    {
+      projectId: await freshAttach(),
+      score: {
+        title: 'chinese-stems',
+        tracks: [
+          { name: '卡林巴旋律', instrument: 'kalimba', gainDb: -4, notes: [[0, 0.6, 76, 90]] },
+          { name: '贝斯', instrument: 'finger-bass', gainDb: -6, notes: [[0, 0.6, 40, 90]] },
+          { name: '暖垫和声', instrument: 'warm-pad', gainDb: -10, notes: [[0, 0.8, [60, 64], 70]] },
+        ],
+      },
+      durationSec: 1,
+      stems: true,
+      output: '.anyaudio/test-tmp/chinese-stems.wav',
+    },
+    exec,
+  )
+  assert(result.stems.length === 3, `three stems, got ${result.stems.length}`)
+  const unique = new Set(result.stems)
+  assert(unique.size === 3, `each stem needs its own path, got ${JSON.stringify(result.stems)}`)
+  for (const name of ['卡林巴旋律', '贝斯', '暖垫和声']) {
+    const found = result.stems.filter((entry) => entry.includes(name))
+    assert(found.length === 1, `"${name}" must appear in exactly one stem path, saw ${JSON.stringify(result.stems)}`)
+  }
+  // The files have to be readable at those paths, and hold different audio.
+  const levels = await Promise.all(result.stems.map(async (entry) => rmsOf(parseWav(await readFile(join(repoRoot, entry))).channels)))
+  assert(levels.every((level) => level > 0), `no stem may be empty, got ${JSON.stringify(levels)}`)
+})
+
+await test('a stem that renders to silence is reported as silent, not as quiet', async () => {
+  // A pad whose automation was written in dB (CC7 is 0..127) clamped to 0 and
+  // produced a file that is all zeros but for the first few samples, which slip
+  // through before the CC curve lands. The only warning said it sat "91.3 dB
+  // below the loudest track", which points at gainDb — a knob that cannot
+  // restore a track something else silenced. Name the real condition.
+  const result = await tools.get('anyaudio_music').execute(
+    {
+      projectId: await freshAttach(),
+      score: {
+        title: 'silent-pad',
+        tracks: [
+          { name: 'lead', instrument: 'koto', gainDb: 0, notes: [[0, 1.6, 'D5', 110]] },
+          { name: 'pad', instrument: 'choir', gainDb: -4, notes: [[0, 1.6, 60, 80]] },
+        ],
+        automation: [{ track: 'pad', controller: 'volume', points: [[0, -26], [1.6, -20]] }],
+      },
+      durationSec: 1.8,
+      analyze: true,
+      output: '.anyaudio/test-tmp/silent-pad.wav',
+    },
+    exec,
+  )
+  const silenced = result.warnings.find((warning) => warning.includes('automation points') && warning.includes('pad'))
+  assert(silenced, `a silenced track must be pointed at its automation, got ${JSON.stringify(result.warnings)}`)
+  assert(
+    !result.warnings.some((warning) => warning.includes('below the loudest track') && warning.includes('per-track gainDb is the balance knob') && warning.includes('pad')),
+    'the generic "raise its gainDb" advice must not fire for a track something else silenced',
+  )
+  // And the clamp itself is reported by the score compiler, in the same reply.
+  assert(
+    result.warnings.some((warning) => warning.includes('automation for "pad"') && warning.includes('not dB')),
+    'the dB-versus-CC mistake must also be named directly',
+  )
 })
 
 await test('workspace comes from the working-directory service, not process.cwd()', async () => {

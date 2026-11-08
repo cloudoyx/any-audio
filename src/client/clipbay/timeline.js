@@ -112,7 +112,7 @@ function Ruler({ scale, durationSec, onSeek }) {
   }, marks)
 }
 
-function Clip({ item, track, peaks, scale, height, selected, preview, onPointerDown, onSelect }) {
+function Clip({ item, track, peaks, scale, height, selected, preview, audible = true, onPointerDown, onSelect }) {
   const lengthSec = itemLengthSec(item)
   const dragging = preview && preview.itemId === item.id && preview.trackId === track.id
   const offset = dragging ? preview.deltaSec * scale : 0
@@ -122,7 +122,12 @@ function Clip({ item, track, peaks, scale, height, selected, preview, onPointerD
   const color = CATEGORY_COLOR[track.category] || CATEGORY_COLOR.other
   const fadeIn = Math.min(width / 2, (Number(item.fadeInSec) || 0) * scale)
   const fadeOut = Math.min(width / 2, (Number(item.fadeOutSec) || 0) * scale)
-  const dimmed = track.muted || item.muted
+  // `audible` is false when solo has silenced this track without touching its
+  // mute flag. The mix has always honoured that (`resolveTrackGain`), but the
+  // timeline showed every clip at full strength, so a soloed track looked
+  // identical to a project where nothing was soloed — the person heard one
+  // instrument and saw seven.
+  const dimmed = track.muted || item.muted || !audible
 
   return h('div', {
     onPointerDown,
@@ -168,7 +173,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, onPointerD
   )
 }
 
-function TrackHead({ track, active, height, headWidth = HEAD_WIDTH, onSelect, onEdit, onFx }) {
+function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WIDTH, onSelect, onEdit, onFx }) {
   const [name, setName] = useState(track.name)
   const [editing, setEditing] = useState(false)
 
@@ -197,6 +202,9 @@ function TrackHead({ track, active, height, headWidth = HEAD_WIDTH, onSelect, on
       // scrolled. The background must be opaque or the clips slide through it.
       position: 'sticky', left: 0, zIndex: 2,
       background: active ? 'rgb(40,40,44)' : 'rgb(28,28,30)',
+      // A track silenced by someone else's solo greys out rather than
+      // disappearing: it is still there to be clicked and un-soloed.
+      opacity: audible ? 1 : 0.5,
     },
   },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 } },
@@ -270,13 +278,13 @@ function TrackHead({ track, active, height, headWidth = HEAD_WIDTH, onSelect, on
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, headWidth, onSelect, onEdit, onFx, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
+function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, onSelect, onEdit, onFx, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
   const height = TRACK_HEIGHT
   const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h(TrackHead, { track, active, height, headWidth, onSelect, onEdit, onFx }),
+    h(TrackHead, { track, active, audible, height, headWidth, onSelect, onEdit, onFx }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -285,6 +293,7 @@ function TrackRow({ track, peaksById, scale, active, headWidth, onSelect, onEdit
         peaks: peaksById.get(item.material),
         scale,
         height,
+        audible,
         selected: selection?.itemId === item.id,
         preview: drag.preview,
         onSelect: () => onClipSelect(track.id, item.id),
@@ -330,6 +339,17 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const [rangeDrag, setRangeDrag] = useState(false)
   const headDragRef = useRef(null)
   const [headDragging, setHeadDragging] = useState(false)
+
+  // Which tracks can actually be heard. Solo is exclusive once anything is
+  // soloed, and mute wins over solo — the same rule `resolveTrackGain` applies to
+  // the mixer and the renderer. The timeline has to say so too: soloing a track
+  // silently gagged every other one while their clips still looked healthy, so
+  // the picture disagreed with the sound.
+  const anySolo = project.tracks.some((track) => track.solo === true)
+  const audibleByTrack = new Map(project.tracks.map((track) => [
+    track.id,
+    !(track.muted === true || (anySolo && track.solo !== true)),
+  ]))
 
   /**
    * Dragging across a track selects a time range on that track — one of the three
@@ -615,6 +635,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             peaksById,
             scale,
             headWidth,
+            audible: audibleByTrack.get(track.id) !== false,
             active: track.id === activeTrackId,
             onSelect: () => setActiveTrackId(track.id),
             onEdit: (request) => onEdit?.({ ...request, trackId: track.id }),

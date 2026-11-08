@@ -183,5 +183,21 @@ test('the track heads are frozen against horizontal scrolling', () => {
   assert.match(timeline, /position: 'sticky', left: 0, zIndex: 3/, 'the ruler corner is frozen sideways too')
 })
 
+test('a track silenced by someone else\u2019s solo is drawn as unhearable', () => {
+  // The mixer always honoured solo: `resolveTrackGain` returns 0 for every
+  // non-soloed track. The timeline did not, so soloing one instrument left six
+  // tracks looking perfectly healthy while they played nothing. Measured in the
+  // browser before the fix: clicking S changed the solo button's own colour and
+  // nothing else on screen.
+  assert.match(timeline, /const anySolo = project\.tracks\.some\(\(track\) => track\.solo === true\)/, 'the timeline computes whether anything is soloed')
+  assert.match(timeline, /audibleByTrack/, 'and maps each track to whether it can be heard')
+  assert.match(timeline, /anySolo && track\.solo !== true/, 'the same rule the mixer uses: solo silences the other tracks')
+  assert.match(timeline, /audible: audibleByTrack\.get\(track\.id\) !== false/, 'the row is told')
+  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 2000)
+  assert.match(head, /opacity: audible \? 1 : 0\.5/, 'the head dims rather than vanishing: it must stay clickable')
+  const clip = timeline.slice(timeline.indexOf('function Clip('), timeline.indexOf('function Clip(') + 1600)
+  assert.match(clip, /track\.muted \|\| item\.muted \|\| !audible/, 'the clip greys out too')
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1

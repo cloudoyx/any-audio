@@ -295,13 +295,50 @@ test('setTrackPan writes the pan and rejects out-of-range input', () => {
   assert.throws(() => setTrackPan(project(), { trackId: 'trk_1', pan: -3 }), EditError)
 })
 
-test('setTrackMuted and setTrackSolo toggle independently', () => {
+test('setTrackMuted and setTrackSolo leave the other flag alone when it is off', () => {
   const muted = setTrackMuted(project(), { trackId: 'trk_1', muted: true })
   equal(muted.project.tracks[0].muted, true, 'muted')
   equal(muted.project.tracks[0].solo, false, 'solo untouched')
   const soloed = setTrackSolo(project(), { trackId: 'trk_1', solo: true })
   equal(soloed.project.tracks[0].solo, true, 'soloed')
   equal(soloed.project.tracks[0].muted, false, 'mute untouched')
+})
+
+/**
+ * Mute and solo cannot both be lit on one track.
+ *
+ * They are not independent switches in the mixer: mute wins over solo in
+ * `resolveTrackGain`, so a track that is both is silent while solo silences
+ * every other track too — the whole project goes quiet with two buttons lit and
+ * nothing on screen explaining it. Measured in a real project: with one track
+ * both muted and soloed, `resolveTrackGain` returned 0 for every track.
+ */
+test('muting a soloed track clears its solo', () => {
+  const soloed = setTrackSolo(project(), { trackId: 'trk_1', solo: true }).project
+  equal(soloed.tracks[0].solo, true, 'soloed first')
+  const { project: after, note } = setTrackMuted(soloed, { trackId: 'trk_1', muted: true })
+  equal(after.tracks[0].muted, true, 'muted')
+  equal(after.tracks[0].solo, false, 'solo must clear, or nothing in the project is audible')
+  equal(note.includes('同时取消独奏'), true, 'the history entry must say autoplay was cleared')
+})
+
+test('soloing a muted track clears its mute', () => {
+  const muted = setTrackMuted(project(), { trackId: 'trk_1', muted: true }).project
+  equal(muted.tracks[0].muted, true, 'muted first')
+  const { project: after, note } = setTrackSolo(muted, { trackId: 'trk_1', solo: true })
+  equal(after.tracks[0].solo, true, 'soloed')
+  equal(after.tracks[0].muted, false, 'mute must clear, or soloing it would play silence')
+  equal(note.includes('同时取消静音'), true, 'the history entry must say the mute was cleared')
+})
+
+test('repeatedly toggling mute and solo never leaves both lit', () => {
+  let current = project()
+  for (const step of ['solo', 'mute', 'solo', 'mute', 'solo']) {
+    current = step === 'solo'
+      ? setTrackSolo(current, { trackId: 'trk_1', solo: true }).project
+      : setTrackMuted(current, { trackId: 'trk_1', muted: true }).project
+    equal(current.tracks[0].muted && current.tracks[0].solo, false, `both lit after ${step}`)
+  }
 })
 
 test('several tracks can be soloed at once', () => {
