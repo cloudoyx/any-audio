@@ -778,6 +778,49 @@ await test('the runtime skill declares a string source for the dsh-skill contrac
   assert(typeof payload.whenToUse === 'string' && payload.whenToUse.length > 0, 'skill should advertise whenToUse')
 })
 
+await test('the system prompt keeps the rules that decide whether a project survives', async () => {
+  // The skill is only loaded when the agent thinks to load it. In the session
+  // that prompted this, `skill` was called zero times in a whole build — so
+  // everything that lived only in `anyaudio-clipbay.md` was invisible, and one
+  // narrator ended up spread across eleven tracks. The rules that change whether
+  // the deliverable is still editable therefore have to be in the prompt itself,
+  // which is injected every turn.
+  const { apply } = await import('../src/index.js')
+  let text = null
+  const ctx = {
+    get: (id) => (id === 'systemPrompt' ? { section: (value) => { text = value.text } } : undefined),
+    tools: { register: () => {} },
+    logger: { info: () => {} },
+  }
+  apply(ctx, { routes: false })
+  for (let attempt = 0; attempt < 40 && !text; attempt++) await new Promise((resolve) => setTimeout(resolve, 25))
+  assert(text, 'the prompt section was not registered')
+
+  // One assertion per rule, so deleting a rule fails here rather than showing up
+  // as a bad project three turns later.
+  assert(/never one track per sentence/i.test(text), 'the narration track rule has to be stated')
+  assert(/every line of one voice/i.test(text), 'and it has to say what to do instead')
+  assert(/never one track for everything/i.test(text), 'the opposite mistake must be closed too')
+  assert(/mode:"read"/.test(text) && /only the range/i.test(text), 'reading first and staying inside the range')
+  assert(/there is no undo/i.test(text), 'and why a broad edit is destructive')
+  assert(/never overwrite or delete a material/i.test(text), 'frozen snapshots')
+  assert(/no direct ffmpeg/i.test(text), 'the finished file comes from render only')
+  assert(/do not re-normalise/i.test(text), 'normalisation happens once')
+  assert(!/one track per narration line/i.test(text), 'the old wording that caused this must not come back')
+})
+
+await test('creating a project points at the clip bay skill', async () => {
+  // B of the same fix: a file listed in the catalog does not tell an agent when
+  // to open it, but a sentence in the reply it is already reading does.
+  const result = await tools.get('anyaudio_project').execute({ mode: 'create', name: '提示用工程' }, { agent: { workspaceRoot: repoRoot } })
+  const rendered = tools.get('anyaudio_project').output.render({ mode: 'create' }, result)
+  const text = rendered.map((block) => block.text ?? '').join('\n')
+  assert(/anyaudio-clipbay/.test(text), 'the reply has to name the skill')
+  assert(/never/i.test(text) || /do not/i.test(text), 'and say what not to do')
+  assert(!/give each generated file its own track/i.test(text), 'the sentence that split one narrator across eleven tracks must not come back')
+  await rm(join(repoRoot, '.anyaudio', 'projects', result.projectId), { recursive: true, force: true })
+})
+
 await test('tts tool exposes edge and mimo providers', async () => {
   const definition = tools.get('anyaudio_tts')
   assert(definition, 'anyaudio_tts should be registered')

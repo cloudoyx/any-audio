@@ -412,6 +412,14 @@ export const projectToolDefinition = finalizeTool({
           // want to move — one per stem, one per voice, one per ambience/foley
           // family — not one per file.
           'Put each instrument stem on its own track, keep every line of one voice on a single narration track (a second voice gets a second track), and keep ambience apart from foley. Do not open a track per sentence.',
+          // The pointer has to arrive here, not only in the system prompt. The
+          // session this came from never loaded the skill at all: `skill` was
+          // called zero times, so every rule that lived only in
+          // `anyaudio-clipbay.md` — frozen snapshots, "only the range that was
+          // asked about", no hand-rolled ffmpeg — was invisible to it. A file
+          // listed in the catalog does not tell an agent when to open it; a line
+          // in the reply it is reading right now does.
+          'Before laying out tracks or editing this project, load the "anyaudio-clipbay" skill — it carries the placement rules, how to change one range without touching the rest, and how a finished file is meant to be produced.',
         ].join('\n')
       }
       if (value.mode === 'add_material') {

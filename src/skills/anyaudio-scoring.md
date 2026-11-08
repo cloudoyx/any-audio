@@ -69,11 +69,11 @@
 
 ## 旁白（anyaudio_tts）
 
-- 视频需要配音、但项目里没有现成录音时，**必须用 `anyaudio_tts`**：单条 `{text}`，或多条 `{items:[{text, voice}]}`。输出 48kHz 单声道 WAV，可直接放进 `anyaudio_mix` 的 `role: "narration"` 轨。
+- 视频需要配音、但项目里没有现成录音时，**必须用 `anyaudio_tts`**：单条 `{text}`，或多条 `{items:[{text, voice}]}`。它要求 `projectId`，产出直接登记进工程并落轨——和音乐、音效走同一条路，不要绕去 `anyaudio_mix`。
 - 不要自己调 `edge-tts`、`ttsmaker` 或任何 Python/node 的 TTS 库：那样会绕过用户在 Settings → AnyAudio 里选的引擎和音色（例如 MiMo），用户改了默认引擎也不会生效。
-- 不传 `provider` 时用用户配置的默认引擎（Edge；用户切到 MiMo 就用 MiMo）。默认音色 `zh-CN-YunjianNeural`；Edge 可选 `zh-CN-XiaoxiaoNeural`、`zh-CN-YunxiNeural`、`zh-CN-XiaoyiNeural`、`en-US-AriaNeural` 等。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
-- Edge TTS 是网络服务（非官方接口），失败先查网络/代理再重试，必要时给 `proxy`；需要 ffmpeg 把 MP3 转成 WAV。连续试听过多会触发限流（429），等一分钟或换 MiMo。
-- 长旁白按分句拆成多条，每条单独放置，便于和分镜时间轴精确对齐。已有旁白音频时不要重复生成。
+- 不传 `provider` 时用用户配置的默认引擎（Edge；用户切到 MiMo 就用 MiMo）。默认音色 `zh-CN-YunjianNeural`；Edge 可选 `zh-CN-XiaoxiaoNeural`、`zh-CN-YunxiNeural`、`zh-CN-XiaoyiNeural`、`en-US-AriaNeural` 等。`voice`/`rate`/`pitch`/`provider` 写在顶层会应用到这一批的每一句，单个 item 写了就以 item 为准。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
+- Edge TTS 是网络服务（非官方接口），失败先查网络/代理再重试，必要时给 `proxy`；需要 ffmpeg 把 MP3 转成 WAV。连续试听过多会触发限流（429），等一分钟或换 MiMo。**批量中途失败时这一批已经落下的片段会被回滚**，工程保持原样，改好再整批重来即可——不要因为一次失败就另建工程。
+- 长旁白按分句拆成多条**是为了对齐时间轴，不是为了分轨**：它们仍然落在同一条旁白轨上，只是各自有不同的 `startSec`。已有旁白音频时不要重复生成。
 
 ## 音符怎么发音（ADSR）
 
