@@ -33,6 +33,87 @@ function describeError(error) {
   return raw
 }
 
+/**
+ * Take back the clips this call already attached, after a later item failed.
+ *
+ * The clip goes first and the material second, because a material still
+ * referenced by a clip refuses to delete — which is the right order of
+ * operations, not an obstacle. Errors here are swallowed on purpose: the caller
+ * is already reporting the synthesis failure, and a rollback that throws would
+ * hide it behind a second, less useful message.
+ */
+async function rollbackAttached(workspaceRoot, projectId, attachedFiles) {
+  if (!Array.isArray(attachedFiles) || attachedFiles.length === 0) return
+  const { readProject, saveProject } = await import('../project/store.js')
+  const { deleteMaterial } = await import('../project/materials.js')
+  for (const entry of attachedFiles) {
+    const attached = entry?.attached
+    if (!attached?.clipId) continue
+    try {
+      const project = await readProject(workspaceRoot, projectId)
+      const track = project.tracks.find((candidate) => candidate.id === attached.trackId)
+      if (track) {
+        const before = track.items.length
+        track.items = track.items.filter((item) => item.id !== attached.clipId)
+        if (track.items.length !== before) {
+          await saveProject(workspaceRoot, project, { by: 'agent', note: '回滚：这一批配音没有全部成功' })
+        }
+      }
+      if (attached.materialId) await deleteMaterial(workspaceRoot, projectId, attached.materialId)
+    } catch {
+      // A half-rolled-back project is still better than one carrying duplicates,
+      // and the synthesis error is what the caller needs to see.
+    }
+  }
+}
+
+/**
+ * Fold the top-level arguments into every item, once.
+ *
+ * This exists because the alternative — reading `item.voice ?? args.voice` at
+ * each use site — is what made the top-level `voice` do nothing at all: the
+ * schema advertised it, `items` batches ignored it, and the reply never said so.
+ * A call asking for 晓晓 came back in the configured voice and nothing anywhere
+ * mentioned the request had been dropped.
+ *
+ * Exported so the merge can be asserted without synthesising anything.
+ */
+export function resolveItems(args) {
+  if (Array.isArray(args.items) && args.items.length > 0) {
+    return args.items.map((item, index) => ({
+      // `...item` first: a field present on the item always wins, including one
+      // explicitly set to null, which is a caller saying "not this one".
+      ...item,
+      provider: item?.provider ?? args.provider,
+      voice: item?.voice ?? args.voice,
+      rate: item?.rate ?? args.rate,
+      pitch: item?.pitch ?? args.pitch,
+      volume: item?.volume ?? args.volume,
+      style: item?.style ?? args.style,
+      proxy: item?.proxy ?? args.proxy,
+      startSec: item?.startSec ?? args.startSec,
+      trackName: item?.trackName ?? args.trackName,
+      text: String(item?.text ?? '').trim(),
+      output: item?.output,
+      label: `item #${index + 1}`,
+    }))
+  }
+  return [{
+    text: String(args.text ?? '').trim(),
+    provider: args.provider,
+    voice: args.voice,
+    rate: args.rate,
+    pitch: args.pitch,
+    volume: args.volume,
+    style: args.style,
+    proxy: args.proxy,
+    startSec: args.startSec,
+    trackName: args.trackName,
+    output: args.output,
+    label: 'text',
+  }]
+}
+
 function styleFromLegacy({ rate, pitch }) {
   const parts = []
   if (rate !== undefined && rate !== null && String(rate).trim()) parts.push(`语速 ${String(rate).trim()}`)
@@ -106,13 +187,13 @@ export const ttsToolDefinition = finalizeTool({
       projectId: { type: 'string', description: 'The clip bay project this narration belongs to. Required: run anyaudio_project mode:"create" first when the task has no project yet. Each line is added as material and placed on a track.' },
       trackName: { type: 'string', description: 'Optional role/character name. Lines are grouped by voice, so every line of one voice lands on one track even when two overlap; naming a speaker adds it to the label ("旁白 · 晓晓") and starts a separate family, which is what you want for a real role split. An item may override it with its own trackName.' },
       startSec: { type: 'number', description: 'Where the first line starts on the project timeline. Later lines follow the previous one; an item may set its own startSec.' },
-      provider: { type: 'string', enum: ['edge', 'mimo'], description: 'TTS engine. Defaults to the value in Settings → AnyAudio (edge).' },
-      voice: { type: 'string', description: 'Voice name. Each name belongs to one engine — pick one from the list for the engine you are using. Defaults to Settings → AnyAudio.' },
-      rate: { type: 'string', description: 'Edge speaking rate, e.g. "-12%".' },
-      pitch: { type: 'string', description: 'Edge pitch shift, e.g. "-3Hz".' },
-      volume: { type: 'string', description: 'Edge volume, e.g. "+0%".' },
-      style: { type: 'string', description: 'MiMo style/emotion instruction (not spoken).' },
-      proxy: { type: 'string', description: 'Optional proxy override, e.g. "http://127.0.0.1:7890". Defaults to the per-engine proxy configured in Settings → AnyAudio.' },
+      provider: { type: 'string', enum: ['edge', 'mimo'], description: 'TTS engine. Defaults to the value in Settings → AnyAudio (edge). Applies to every item; an item may override it.' },
+      voice: { type: 'string', description: 'Voice name, applied to every item (an item may override it). Each name belongs to one engine — pick one from the list for the engine you are using. Defaults to Settings → AnyAudio.' },
+      rate: { type: 'string', description: 'Edge speaking rate, e.g. "-12%". Applies to every item.' },
+      pitch: { type: 'string', description: 'Edge pitch shift, e.g. "-3Hz". Applies to every item.' },
+      volume: { type: 'string', description: 'Edge volume, e.g. "+0%". Applies to every item.' },
+      style: { type: 'string', description: 'MiMo style/emotion instruction (not spoken). Applies to every item.' },
+      proxy: { type: 'string', description: 'Optional proxy override, e.g. "http://127.0.0.1:7890". Defaults to the per-engine proxy configured in Settings → AnyAudio. Applies to every item.' },
       output: { type: 'string', description: "Optional extra copy of the WAV at this path. Relative paths resolve against the user's project. The project's own copy is always written under the project folder." },
     },
     required: ['projectId'],
@@ -151,9 +232,7 @@ export const ttsToolDefinition = finalizeTool({
     const warnings = []
     const sampleRate = 48000
 
-    const items = Array.isArray(args.items) && args.items.length > 0
-      ? args.items.map((item, index) => ({ ...item, text: String(item?.text ?? '').trim(), output: item?.output, label: `item #${index + 1}` }))
-      : [{ text: String(args.text ?? '').trim(), output: args.output, label: 'text' }]
+    const items = resolveItems(args)
     if (items.length === 1 && !items[0].text) throw new Error('anyaudio_tts needs "text" or a non-empty "items" array')
 
     const { switches } = resolveProviders(items, provider, { explicitFallback: args.provider !== undefined && args.provider !== null })
@@ -218,7 +297,16 @@ export const ttsToolDefinition = finalizeTool({
           signal: exec?.signal,
         })
       } catch (error) {
-        throw new Error(`${itemInfo.label} failed for ${label}: ${describeError(error)}`)
+        // Roll back what this call already attached before rethrowing.
+        //
+        // Without this, a batch that fails at item #2 leaves item #1 on the
+        // timeline. In the session that prompted this, the retry then produced a
+        // *second* copy of item #1, the project held two overlapping copies of the
+        // same line, and the agent — with no way to clean it — started a new
+        // project instead. Four projects came out of one 429. A failure has to
+        // leave the project exactly as it was.
+        await rollbackAttached(workspaceRoot, projectId, files)
+        throw new Error(`${itemInfo.label} failed for ${label} (${files.length > 0 ? `${files.length} clip${files.length === 1 ? '' : 's'} from this call were removed again` : 'nothing was added'}): ${describeError(error)}`)
       }
       const wav = encodeWav({ sampleRate: audio.sampleRate, channels: audio.channels, bitDepth: 16 })
       await (await import('node:fs/promises')).writeFile(target, wav)

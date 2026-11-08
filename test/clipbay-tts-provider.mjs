@@ -18,7 +18,7 @@ process.env.ANYAUDIO_CONFIG = `${root}/.anyaudio/test-tmp-tts/config.json`
 process.env.ANYAUDIO_STATE = `${root}/.anyaudio/test-tmp-tts/state.json`
 process.env.ANYAUDIO_FONT_DIR = `${root}/.anyaudio/test-tmp-tts/fonts`
 
-const { resolveProviders } = await import(new URL('../src/tools/tts.js', import.meta.url).href)
+const { resolveProviders, resolveItems } = await import(new URL('../src/tools/tts.js', import.meta.url).href)
 const { providerForVoice, resolveVoice } = await import(new URL('../src/audio/tts-providers.js', import.meta.url).href)
 
 let passed = 0
@@ -161,6 +161,67 @@ test('an unknown voice keeps the engine it was given', () => {
   )
   assert.deepEqual(items.map((item) => item.provider), ['mimo'])
   assert.equal(switches.length, 0)
+})
+
+// --- top-level defaults reach every item ------------------------------------
+//
+// The bug this covers: `anyaudio_tts` advertised a top-level `voice`, and `items`
+// batches ignored it outright — the field was read from the item only. A call
+// asking for 晓晓 came back in the configured voice, and nothing in the reply
+// mentioned that the request had been dropped. Every optional field a batch may
+// override is now merged in one place, so this cannot drift again.
+
+test('a top-level voice reaches every item in a batch', () => {
+  const items = resolveItems({
+    voice: 'zh-CN-XiaoxiaoNeural',
+    items: [{ text: 'a' }, { text: 'b' }, { text: 'c' }],
+  })
+  assert.deepEqual(items.map((item) => item.voice), ['zh-CN-XiaoxiaoNeural', 'zh-CN-XiaoxiaoNeural', 'zh-CN-XiaoxiaoNeural'])
+})
+
+test('an item field wins over the top-level default', () => {
+  const items = resolveItems({
+    voice: 'zh-CN-XiaoxiaoNeural',
+    rate: '+0%',
+    items: [{ text: 'a' }, { text: 'b', voice: 'zh-CN-YunxiNeural', rate: '-10%' }],
+  })
+  assert.equal(items[0].voice, 'zh-CN-XiaoxiaoNeural', 'the default applies')
+  assert.equal(items[1].voice, 'zh-CN-YunxiNeural', 'the item overrides it')
+  assert.equal(items[1].rate, '-10%')
+  assert.equal(items[0].rate, '+0%')
+})
+
+test('every field a batch may override is carried down', () => {
+  // One assertion per field: a new field that forgets the merge fails here
+  // rather than silently doing nothing in production.
+  const [item] = resolveItems({
+    provider: 'edge', voice: 'v', rate: 'r', pitch: 'p', volume: 'vol',
+    style: 's', proxy: 'http://x', trackName: 'n', startSec: 4,
+    items: [{ text: 'a' }],
+  })
+  assert.deepEqual(
+    { provider: item.provider, voice: item.voice, rate: item.rate, pitch: item.pitch, volume: item.volume, style: item.style, proxy: item.proxy, trackName: item.trackName, startSec: item.startSec },
+    { provider: 'edge', voice: 'v', rate: 'r', pitch: 'p', volume: 'vol', style: 's', proxy: 'http://x', trackName: 'n', startSec: 4 },
+  )
+})
+
+test('a single-shot call still produces one item with its own fields', () => {
+  const items = resolveItems({ text: '  hello  ', voice: 'v' })
+  assert.equal(items.length, 1)
+  assert.equal(items[0].text, 'hello', 'the text is trimmed')
+  assert.equal(items[0].voice, 'v')
+  assert.equal(items[0].label, 'text')
+})
+
+test('an empty items array falls back to the single-shot shape', () => {
+  const items = resolveItems({ text: 'hi', voice: 'v', items: [] })
+  assert.equal(items.length, 1)
+  assert.equal(items[0].text, 'hi')
+})
+
+test('items are labelled by position so a warning names the right line', () => {
+  const items = resolveItems({ items: [{ text: 'a' }, { text: 'b' }] })
+  assert.deepEqual(items.map((item) => item.label), ['item #1', 'item #2'])
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

@@ -404,7 +404,14 @@ export const projectToolDefinition = finalizeTool({
       if (value.mode === 'create') {
         return [
           `Created project "${value.name}" (${value.projectId}) in ${value.folder}`,
-          'Add material with mode "add_material": give each generated file its own track so the person can mix them apart.',
+          'Add material with mode "add_material", or let anyaudio_music / anyaudio_tts / anyaudio_sfx place what they generate on their own tracks.',
+          // "give each generated file its own track" used to sit here, and it is
+          // what split eleven narration lines across eleven tracks in the session
+          // that prompted this: the first thing an agent reads after creating a
+          // project told it to do exactly that. Tracks follow what the person will
+          // want to move — one per stem, one per voice, one per ambience/foley
+          // family — not one per file.
+          'Put each instrument stem on its own track, keep every line of one voice on a single narration track (a second voice gets a second track), and keep ambience apart from foley. Do not open a track per sentence.',
         ].join('\n')
       }
       if (value.mode === 'add_material') {
