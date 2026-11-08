@@ -428,10 +428,10 @@ export const projectToolDefinition = finalizeTool({
         // that carries no audio stream legitimately produces no material and no
         // clip. Declaring only `object` made the host reject the whole call with
         // "returned invalid output: value.clip must be an object" — on exactly the
-        // path I-05 sends people down to get a finished MP4. Found in a real
-        // session, where the agent then had to work around importing its picture.
-        clip: { type: ['object', 'null'], additionalProperties: true },
-        material: { type: ['object', 'null'], additionalProperties: true },
+        // path I-05 sends people down to get a finished MP4. The host's schema
+        // subset does not accept type arrays, so the nullable form is oneOf.
+        clip: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
+        material: { oneOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }] },
       },
     },
     render: textRenderer((_args, value) => {
