@@ -1,3 +1,5 @@
+import { toStereoChannels } from '../client/clipbay/mix-params.js'
+
 const FORMAT_PCM = 1
 const FORMAT_FLOAT = 3
 const FORMAT_EXTENSIBLE = 0xfffe
@@ -205,17 +207,26 @@ export function fromDb(db) {
   return Number.isFinite(db) ? Math.pow(10, db / 20) : 0
 }
 
-/** Mix every input channel set down to the given channel count. */
+/**
+ * Mix every input channel set down to the given channel count.
+ *
+ * Two channels delegates to `toStereoChannels` in `mix-params.js`, because that
+ * is the rule the browser has to follow too: a mono TTS WAV has to come out of
+ * both speakers in the preview and in the export, and the two engines must agree
+ * on what "mono" means. Keeping a second copy of that decision here is how the
+ * preview ended up playing narration on the left channel only while the export
+ * was centred.
+ */
 export function conformChannels(channels, target = 2) {
   if (channels.length === target) return channels
-  if (channels.length === 1 && target === 2) return [channels[0], channels[0]]
+  if (target === 2) return toStereoChannels(channels)
+  if (channels.length === 1) return channels
   const mono = new Float32Array(channels[0].length)
   const scale = 1 / channels.length
   for (const channel of channels) {
     for (let i = 0; i < mono.length; i++) mono[i] += channel[i] * scale
   }
-  if (target === 1) return [mono]
-  return Array.from({ length: target }, () => Float32Array.from(mono))
+  return [mono]
 }
 
 export function padOrTrim(channels, frames) {

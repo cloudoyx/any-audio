@@ -113,7 +113,23 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
   }
 
   const track = project.tracks.find((entry) => entry.id === trackId)
-  if (!track) throw new Error(`no such track: ${trackId}`)
+  if (!track) {
+    // An id that exists, but as a clip, is a mistake worth naming. The agent in
+    // the session that prompted this passed `itm_oqpdqa` as a trackId and got
+    // back "no such track", which says nothing about what to do next — it
+    // retried with the same value. A message that names the confusion ends it.
+    const owner = project.tracks.find((entry) => entry.items?.some((item) => item.id === trackId))
+    if (owner) {
+      const item = owner.items.find((entry) => entry.id === trackId)
+      throw new Error(
+        `"${trackId}" is a clip id, not a track id: it belongs to clip "${item?.label || trackId}" on track "${owner.name}" (${owner.id}). `
+        + 'For a clip, set target:"clip" and pass trackId plus clipId; for the track itself use target:"track" with the track id. '
+        + 'mode:"read" lists both ids for every track.',
+      )
+    }
+    const ids = project.tracks.map((entry) => `${entry.id} "${entry.name}"`).join(', ')
+    throw new Error(`no such track: ${trackId}. This project tracks: ${ids || '(none)'}`)
+  }
 
   if (target === 'track') {
     switch (field) {
@@ -126,12 +142,31 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
         track.fx = validateFxChain(value, 'fx')
         return `设置轨道「${track.name}」效果链（${describeChain(track.fx)}）`
       }
-      default: throw new Error(`unknown track field "${field}"; use name, volumeDb, pan, muted, solo or fx`)
+      case 'delete': {
+        // Deleting a track is how a person cleans up after a re-render that
+        // appended a second copy instead of replacing the first. Without it the
+        // only way out was to start a new project — which is what turned one
+        // bad call into four projects in the session that prompted this.
+        const count = track.items.length
+        project.tracks = project.tracks.filter((entry) => entry.id !== trackId)
+        return count > 0
+          ? `删除轨道「${track.name}」及其 ${count} 个片段`
+          : `删除轨道「${track.name}」`
+      }
+      default: throw new Error(`unknown track field "${field}"; use name, volumeDb, pan, muted, solo, fx or delete`)
     }
   }
 
   const clip = track.items.find((entry) => entry.id === clipId)
-  if (!clip) throw new Error(`no such clip: ${clipId}`)
+  if (!clip) {
+    const ids = track.items.map((item) => `${item.id} "${item.label || ''}"`).join(', ')
+    throw new Error(`no such clip: ${clipId}. Track "${track.name}" has: ${ids || '(no clips on it)'}`)
+  }
+  if (field === 'delete') {
+    track.items = track.items.filter((entry) => entry.id !== clipId)
+    return `删除片段「${clip.label || clip.id}」（轨道「${track.name}」）`
+  }
+
   switch (field) {
     case 'startSec': clip.startSec = Number(value); break
     case 'inSec': clip.inSec = Number(value); break
@@ -355,9 +390,9 @@ export const projectToolDefinition = finalizeTool({
         items: {
           type: 'object',
           properties: {
-            target: { type: 'string', enum: ['project', 'track', 'clip'], description: 'project: name or masterFaderDb (no trackId needed). track: name, volumeDb, pan, muted, solo. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label.' },
+            target: { type: 'string', enum: ['project', 'track', 'clip'], description: 'project: name, masterFaderDb or masterFx (no trackId needed). track: name, volumeDb, pan, muted, solo, fx, or "delete" to remove the whole track. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label, fx, or "delete" to remove that one clip.' },
             trackId: { type: 'string', description: 'Required for target:"track" and target:"clip"; ignored for target:"project".' },
-            clipId: { type: 'string' },
+            clipId: { type: 'string', description: 'Required for target:"clip".' },
             field: { type: 'string' },
             value: {},
           },
@@ -389,8 +424,14 @@ export const projectToolDefinition = finalizeTool({
         materials: { type: 'array', items: { type: 'object', additionalProperties: true } },
         projects: { type: 'array', items: { type: 'object', additionalProperties: true } },
         applied: { type: 'array', items: { type: 'string' } },
-        clip: { type: 'object', additionalProperties: true },
-        material: { type: 'object', additionalProperties: true },
+        // `null` is a real answer here, not a missing field: importing a picture
+        // that carries no audio stream legitimately produces no material and no
+        // clip. Declaring only `object` made the host reject the whole call with
+        // "returned invalid output: value.clip must be an object" — on exactly the
+        // path I-05 sends people down to get a finished MP4. Found in a real
+        // session, where the agent then had to work around importing its picture.
+        clip: { type: ['object', 'null'], additionalProperties: true },
+        material: { type: ['object', 'null'], additionalProperties: true },
       },
     },
     render: textRenderer((_args, value) => {

@@ -100,7 +100,38 @@ export function audibleTracks(tracks) {
   return pool.filter((track) => track?.muted !== true)
 }
 
-/** The fade shape both engines follow: cosine, so it starts and ends flat. */
+/**
+ * Bring any channel count to the two the clip bay mixes in.
+ *
+ * This is the third rule that has to be shared, next to the gain, the pan and
+ * the fade. It was not, and the result was the same class of defect the rest of
+ * this module exists to prevent: TTS writes mono WAVs, the renderer duplicated
+ * the channel and exported a centred mix, while the preview handed the mono
+ * buffer straight to a `ChannelSplitter(2)` — and WebAudio fills only output 0
+ * from a mono input, so every narration line came out of the left speaker only
+ * (measured: left −6 dB, right −180 dB). The person heard a broken preview and
+ * an export that did not match it.
+ *
+ * Mono duplicates to both sides rather than being panned or halved, which is
+ * what `conformChannels` has always done on the import path. More than two
+ * channels average down, so a 5.1 file cannot silently lose its centre.
+ */
+export function toStereoChannels(channels) {
+  if (!Array.isArray(channels) || channels.length === 0) return null
+  const [first] = channels
+  if (channels.length === 1) return [first, first]
+  if (channels.length === 2) return [channels[0], channels[1]]
+  const frames = first.length
+  const mono = new Float32Array(frames)
+  for (const channel of channels) {
+    for (let index = 0; index < frames; index++) mono[index] += channel[index] / channels.length
+  }
+  return [mono, mono]
+}
+
+/**
+ * The fade shape both engines follow: cosine, so it starts and ends flat.
+ */
 export function fadeShape(progress) {
   const value = Math.max(0, Math.min(1, Number(progress) || 0))
   return 0.5 - 0.5 * Math.cos(Math.PI * value)

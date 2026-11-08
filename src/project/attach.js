@@ -141,6 +141,26 @@ export function overlappingTrack(project, { name, category }) {
   return trackFamily(project, base)[0] ?? ensureTrack(project, { name: base, category })
 }
 
+/**
+ * Remove a whole name family, clips and all, so a re-render replaces rather than
+ * appends.
+ *
+ * Regenerating a score to fix its balance is the ordinary case, and it used to
+ * leave the old stems behind: `freeTrack` saw the family busy on the same span,
+ * opened `钟琴旋律 2`, and the project ended up with two of everything. Eight
+ * tracks where four were meant, from a single re-render. Materials are left on
+ * disk — a material may be referenced from another track, and deleting files is
+ * not an edit of the arrangement.
+ */
+export function removeTrackFamily(project, base) {
+  const family = trackFamily(project, base)
+  if (family.length === 0) return []
+  const ids = new Set(family.map((track) => track.id))
+  const names = family.map((track) => track.name)
+  project.tracks = project.tracks.filter((track) => !ids.has(track.id))
+  return names
+}
+
 function assertWithinLimits(project) {
   const end = contentEndSec(project)
   if (end > LIMITS.durationSec) {

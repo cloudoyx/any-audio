@@ -44,6 +44,7 @@ export const musicToolDefinition = finalizeTool({
       peakDb: { type: 'number', description: 'Normalisation peak in dBFS, default -3. Pass null to keep the raw level.' },
       stems: { type: 'boolean', description: 'Also write one WAV per track next to the mix. Stems keep the master\'s relative levels (they are not peak-normalised), so they can be inspected or re-balanced later.' },
       analyze: { type: 'boolean', description: 'Render every track separately only to report its peak/RMS level (no stem files). Use this to check the balance between melody and accompaniment.' },
+      replace: { type: 'boolean', description: 'Replace instead of append. When this music is a second pass at a score the project already holds (you rebalanced the parts and are rendering again), pass true: the track family named after this score is cleared first, so the project keeps one set of stems rather than gaining a second. Without it a re-render appends, which is how a project ends up with "钟琴旋律" and "钟琴旋律 2" side by side.' },
     },
     required: ['score', 'projectId'],
   },
@@ -122,6 +123,37 @@ export const musicToolDefinition = finalizeTool({
     const target = stagePath(workspaceRoot, `score-${nowStamp()}.wav`)
     const rendered = await renderCompiled(compiled, { banks: plan.banks, layout: plan.layout, sampleRate, durationSec, peakDb, normalize })
     const written = await writeWavFile(target, rendered.channels, sampleRate)
+    // Replace or append, decided before anything is written.
+    //
+    // Re-rendering a score to fix its balance is the ordinary case, and it used
+    // to append: `freeTrack` found the family busy on the same span, opened
+    // `钟琴旋律 2`, and the project gained a second set of stems beside the
+    // first. Eight tracks where four were meant, from one rebalance. `replace`
+    // is the intended path; without it the append still happens (a person may
+    // genuinely want a second take side by side) but the reply says so.
+    const wantedNames = args.stems === true
+      ? compiled.tracks.map((entry) => entry.name)
+      : [args.trackName || String(score.title ?? '').trim() || '音乐']
+    const layoutNotes = []
+    {
+      const { readProject, saveProject } = await import('../project/store.js')
+      const { trackFamily, removeTrackFamily } = await import('../project/attach.js')
+      const project = await readProject(workspaceRoot, projectId)
+      const occupied = wantedNames.filter((name) => trackFamily(project, name).length > 0)
+      if (occupied.length > 0 && args.replace === true) {
+        const removed = []
+        for (const name of occupied) removed.push(...removeTrackFamily(project, name))
+        await saveProject(workspaceRoot, project, { by: 'agent', note: `替换配乐：移除旧轨道 ${removed.join('、')}` })
+        layoutNotes.push(`replace: removed the previous ${removed.length} track(s) — ${removed.join('、')} — before adding this render.`)
+      } else if (occupied.length > 0) {
+        layoutNotes.push(
+          `this project already had ${occupied.join('、')}; this call APPENDED a second copy, so the timeline now holds both. `
+          + 'If this render was meant to replace the old one, remove the old tracks (anyaudio_project mode:"update", target:"track", field:"delete") '
+          + 'or pass replace:true next time.',
+        )
+      }
+    }
+
     const stems = []
     const stemFiles = []
     const levels = new Map()
@@ -190,7 +222,7 @@ export const musicToolDefinition = finalizeTool({
         ...(level ? { peakDb: Number(level.peakDb.toFixed(2)), rmsDb: Number(level.rmsDb.toFixed(2)) } : {}),
       }
     })
-    const warnings = [...compiled.warnings, ...plan.warnings]
+    const warnings = [...compiled.warnings, ...plan.warnings, ...layoutNotes]
     if (defaultNote) warnings.push(defaultNote)
     if (args.durationSec !== undefined && compiled.durationSec > durationSec + 0.001) {
       warnings.push(`score runs to ${compiled.durationSec.toFixed(2)}s but durationSec is ${durationSec.toFixed(2)}s — notes past the end are cut; add tail or end the music earlier`)

@@ -11,7 +11,7 @@
  * left to play on its own. The element is seeked when the difference grows past a
  * few frames and scrubbed during a paused seek.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { h, S, C } from '../ui.js'
 import { t } from '../i18n.js'
 import { API } from '../api.js'
@@ -25,9 +25,32 @@ export function previewUrl(root, projectId) {
 export function Preview({ root, projectId, project, transport }) {
   const videoRef = useRef(null)
   const [videoError, setVideoError] = useState('')
+  const [seekError, setSeekError] = useState('')
+  const failedSeeks = useRef(0)
   const hasVideo = Boolean(project?.video?.path)
   const positionSec = transport?.positionSec ?? 0
   const playing = Boolean(transport?.playing)
+
+  /**
+   * Seek the picture, and say so when it will not go.
+   *
+   * A `currentTime` assignment throws while `readyState` is still HAVE_NOTHING,
+   * which is what a file with its `moov` atom after `mdat` looks like before the
+   * browser has all of it. Swallowing that silently is how the picture sat on
+   * frame one for a whole playback while nothing anywhere said why. Three
+   * consecutive failures become a visible line, because a person who cannot see
+   * the picture move needs to know it is the file's layout and not their work.
+   */
+  const seekTo = useCallback((node, target) => {
+    try {
+      node.currentTime = target
+      failedSeeks.current = 0
+      setSeekError('')
+    } catch {
+      failedSeeks.current += 1
+      if (failedSeeks.current >= 3) setSeekError('画面读得比声音慢，播放时可能停住；导出完整成片后播放即可。')
+    }
+  }, [])
 
   // Follow the audio clock. While playing, a small drift is ignored so the two
   // clocks do not fight; a large one re-seeks. While paused, the picture follows
@@ -37,19 +60,15 @@ export function Preview({ root, projectId, project, transport }) {
     if (!node || !hasVideo) return
     const target = Math.max(0, positionSec)
     if (!playing) {
-      if (Math.abs(node.currentTime - target) > 0.03) {
-        try { node.currentTime = target } catch { /* seek before metadata is harmless */ }
-      }
+      if (Math.abs(node.currentTime - target) > 0.03) seekTo(node, target)
       return
     }
-    if (Math.abs(node.currentTime - target) > DRIFT_LIMIT_SEC) {
-      try { node.currentTime = target } catch { /* ignore */ }
-    }
+    if (Math.abs(node.currentTime - target) > DRIFT_LIMIT_SEC) seekTo(node, target)
     if (typeof node.play === 'function') {
       const started = node.play()
       if (started && typeof started.catch === 'function') started.catch(() => {})
     }
-  }, [positionSec, playing, hasVideo])
+  }, [positionSec, playing, hasVideo, seekTo])
 
   // Starting the audio transport should also start the picture; pausing should
   // freeze it, otherwise the two drift apart while the person reads the timeline.
@@ -90,6 +109,12 @@ export function Preview({ root, projectId, project, transport }) {
       ),
     videoError && hasVideo
       ? h('div', { style: { ...S.notice('warn'), position: 'absolute', bottom: 8, left: 8, right: 8 } }, videoError)
+      : null,
+    // The picture will not seek, so it is standing still while the sound runs.
+    // Saying so is the difference between "the plugin is broken" and "this file
+    // needs a full export first".
+    seekError && hasVideo && !videoError
+      ? h('div', { style: { ...S.notice('warn'), position: 'absolute', bottom: 8, left: 8, right: 8 } }, seekError)
       : null,
   )
 }

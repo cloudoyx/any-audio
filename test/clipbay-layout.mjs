@@ -93,17 +93,21 @@ test('the preview row is capped so the tracks keep most of the height', () => {
 
 test('clip properties sit beside the preview, not below the timeline', () => {
   // The user was explicit: the item properties belong to the right of the video,
-  // the way 剪映 lays them out.
+  // the way 剪映 lays them out, and the column has to be wide enough for an EQ row
+  // (type / Hz / dB / Q / delete) — "右侧固定加宽一些，剩余的给左侧的视频窗口区".
   const previewAt = panel.indexOf('h(Preview')
-  const columnAt = panel.indexOf("flex: '0 1 220px'")
+  const columnAt = panel.indexOf("flex: fxEditor ? '0 0 420px' : '0 0 340px'")
   const timelineAt = panel.indexOf('h(Timeline')
   assert.ok(previewAt > 0 && columnAt > 0 && timelineAt > 0, 'all three render')
   assert.ok(columnAt > previewAt, 'the properties column comes after the preview in document order')
   assert.ok(columnAt < timelineAt, 'and before the timeline, so they share its row')
-  // On a squeezed panel (wide right sidebar on a 16:9 screen) the column has to
-  // give way, otherwise the picture is pushed down to a 124px thumbnail.
-  const column = panel.slice(columnAt - 700, columnAt + 200)
-  assert.match(column, /minWidth: 132/, 'and has a floor so the fields stay usable')
+  // The column is a fixed width and the picture takes the rest. It also has to
+  // yield on a squeezed panel (wide right sidebar), or the picture becomes a
+  // thumbnail — hence the `maxWidth` valve rather than a hard width.
+  const row = panel.slice(panel.indexOf('h(Preview') - 700, timelineAt)
+  assert.match(row, /flex: '1 1 0'/, 'the picture takes the space the column does not')
+  assert.match(row, /flex: fxEditor \? '0 0 420px' : '0 0 340px'/, 'the column is a fixed width, wider while a chain is open')
+  assert.match(row, /maxWidth: '55%'/, 'and it yields instead of squeezing the picture to nothing')
   // The column holds one editor at a time: the clip's own fields, or a chain.
   // Both have to be inside the row, between the picture and the timeline.
   const body = panel.slice(columnAt, timelineAt)
@@ -144,8 +148,22 @@ test('the track head is never taller than the track it labels', () => {
   // The head stacked four rows of controls (name / M·S·段·✕ / volume / pan) and
   // grew to 81px, stretching every 52px row to 82px — 30px wasted per track.
   const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 900)
-  assert.match(head, /width: HEAD_WIDTH, height,/, 'the head takes its height from the row instead of its content')
+  assert.match(head, /width: headWidth, height,/, 'the head takes its height from the row instead of its content')
   assert.equal(/flexDirection: 'column', gap: 4/.test(head), false, 'the controls are no longer four stacked rows')
+})
+
+test('the head width is adjustable, and the divider is the only place it drags', () => {
+  // The user found an `↔` cursor between the head and the waveform and expected
+  // it to resize the head. It was a clip's trim handle: a clip starting at 0s has
+  // its left edge exactly against the head. So the width became adjustable, and
+  // the grip lives on the ruler corner — above the tracks, where no clip edge can
+  // be mistaken for it.
+  assert.match(timeline, /const HEAD_MIN = \d+/, 'a floor, so a drag cannot erase the head')
+  assert.match(timeline, /const HEAD_MAX = \d+/, 'a ceiling, so a drag cannot hide the timeline')
+  assert.match(timeline, /cursor: 'col-resize'/, 'the divider says it can be dragged')
+  assert.match(timeline, /onPointerDown: startHeadDrag/, 'and it is wired to the drag')
+  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 900)
+  assert.equal(/cursor: 'ew-resize'/.test(head), false, 'the head itself must not offer a resize cursor: that is what misled the person')
 })
 
 test('the head is narrow enough to leave the waveform its space', () => {

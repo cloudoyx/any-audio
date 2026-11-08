@@ -10,7 +10,7 @@
  * being replaced by "import failed" (plan M1).
  */
 import { spawn } from 'node:child_process'
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, resolve } from 'node:path'
 import { computePeaks, writePeaks } from '../audio/peaks.js'
 import { conformChannels, parseWav, resample } from '../audio/wav.js'
@@ -177,6 +177,27 @@ export async function importFile(workspaceRoot, projectId, sourcePath, { findFfm
     const videoCopy = resolveInside(dir, `${VIDEO_DIR}/${videoName}`)
     await mkdir(resolve(dir, VIDEO_DIR), { recursive: true })
     await copyFile(from, videoCopy)
+    // Faststart, at import: a file whose `moov` sits after `mdat` cannot be
+    // seeked until the browser has the whole thing, and the preview drives the
+    // picture by seeking it to the audio clock. An agent-built MP4 straight out
+    // of ffmpeg has the atom at the end (measured: 8 MB file, `moov` at byte
+    // 7 998 742), which is exactly when the picture appears frozen on frame one
+    // while the transport runs. Re-muxing copies the streams, so it costs a
+    // rewrite of the file and no re-encode. Best effort: a container ffmpeg
+    // cannot re-mux still imports, and the preview falls back to what it can do.
+    try {
+      const remux = `${videoCopy}.faststart.mp4`
+      await run(ffmpeg.command, [
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-i', videoCopy,
+        '-map', '0', '-c', 'copy',
+        '-movflags', '+faststart',
+        remux,
+      ], { signal })
+      await rename(remux, videoCopy)
+    } catch {
+      // Leave the original in place; seeking may be slower but nothing breaks.
+    }
     const durationSec = await probeMediaDuration(ffmpeg.command, videoCopy, { signal })
     if (!durationSec) throw new ImportError(`could not read the duration of "${basename(from)}"`)
 

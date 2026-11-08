@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
 import { buildDuckCurve } from '../../audio/fx.js'
-import { fadeCurve, itemParams, masterParams, panGains, resolveTrackGain } from './mix-params.js'
+import { fadeCurve, itemParams, masterParams, panGains, resolveTrackGain, toStereoChannels } from './mix-params.js'
 import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
 
 /**
@@ -210,10 +210,33 @@ function materialUrl(root, projectId, materialId) {
   return `${API}/clipbay/media?root=${encodeURIComponent(root)}&project=${encodeURIComponent(projectId)}&id=${encodeURIComponent(materialId)}`
 }
 
-/** Decode once per material and keep it while the panel lives. */
+/**
+ * Decode once per material and keep it while the panel lives.
+ *
+ * Mono material is up-mixed to stereo here, before it reaches the graph, because
+ * the graph splits two channels by hand to reproduce the renderer's pan law. A
+ * mono buffer handed to `ChannelSplitter(2)` fills output 0 only — WebAudio's
+ * up-mix rule, not ours — so every narration line (TTS writes mono WAVs) played
+ * out of the left speaker alone while the export was correctly centred. Measured
+ * in the browser before the fix: left −6 dB, right −180 dB.
+ *
+ * `toStereoChannels` is the same function the renderer uses, so this cannot drift
+ * into two different up-mix rules the way the pan law once did.
+ */
 function createBufferCache(context, root, projectId) {
   const buffers = new Map()
   const pending = new Map()
+  /** Wrap a decoded buffer as stereo when it is not already. */
+  const asStereo = (buffer) => {
+    if (buffer.numberOfChannels === 2) return buffer
+    const channels = []
+    for (let index = 0; index < buffer.numberOfChannels; index++) channels.push(buffer.getChannelData(index))
+    const [left, right] = toStereoChannels(channels)
+    const stereo = context.createBuffer(2, left.length, buffer.sampleRate)
+    stereo.copyToChannel(left, 0)
+    stereo.copyToChannel(right, 1)
+    return stereo
+  }
   return {
     get(materialId) {
       if (buffers.has(materialId)) return Promise.resolve(buffers.get(materialId))
@@ -224,6 +247,7 @@ function createBufferCache(context, root, projectId) {
           return response.arrayBuffer()
         })
         .then((data) => context.decodeAudioData(data))
+        .then(asStereo)
         .then((buffer) => {
           buffers.set(materialId, buffer)
           pending.delete(materialId)

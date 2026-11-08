@@ -472,24 +472,27 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
     mentionNotice ? h(Notice, null, mentionNotice) : null,
     exporter.error ? h(Notice, { tone: 'error' }, exporter.error) : null,
     exporter.job ? h(Notice, exporter.job.status === 'error' ? { tone: 'error' } : null, describeJob(exporter.job)) : null,
-    // The preview row: picture on the left, clip properties on the right, the way
-    // 剪映 puts them. The row takes at most 38% of the panel so the tracks keep
-    // the rest.
+    // The preview row: picture on the left, properties on the right, the way
+    // 剪映 puts them.
+    //
+    // The properties column was 220px, which cannot lay out an EQ band (type, Hz,
+    // dB, Q, delete) — that is the crowding the person reported. It gets a fixed
+    // width now and the picture takes whatever is left, which is the split they
+    // asked for: "右侧固定加宽一些，剩余的给左侧的视频窗口区". A chain editor needs
+    // more room than a gain field, so the width follows which one is open.
+    //
+    // `maxWidth` is the safety valve: on a panel squeezed by a wide right sidebar
+    // the column yields instead of pushing the picture into a thumbnail.
     h('div', { style: { display: 'flex', gap: 10, minHeight: 0, flex: '0 0 auto', maxHeight: '38%' } },
-      h('div', { style: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex' } },
+      h('div', { style: { flex: '1 1 0', minWidth: 0, minHeight: 0, display: 'flex' } },
         h(Preview, { root, projectId, project, transport }),
       ),
       h('div', {
         style: {
-          // 220px beside the picture, but it gives way before the picture does.
-          // `flex-shrink` alone does not achieve that: the preview is `flex: 1 1 0`,
-          // so it happily absorbs the leftover space and the row never overflows,
-          // which leaves this column at 220px and the video a 124px thumbnail when
-          // a wide right sidebar squeezes the workstation to ~390px. `maxWidth`
-          // is what actually yields: on a wide panel 45% is far more than 220px so
-          // nothing changes, and on a narrow one the column shrinks to its 132px
-          // floor while the picture keeps the rest.
-          flex: '0 1 220px', minWidth: 132, maxWidth: '45%', boxSizing: 'border-box',
+          flex: fxEditor ? '0 0 420px' : '0 0 340px',
+          minWidth: 260,
+          maxWidth: '55%',
+          boxSizing: 'border-box',
           overflow: 'auto',
           border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px',
           background: C.softer,

@@ -198,6 +198,7 @@ export const EN = {
   '加入失败：{0}': 'Could not add it: {0}',
   '这个工程只有音频，没有画面。': 'This project is audio only — there is no picture.',
   '读不出这个工程的视频，时间轴还能用。': 'The video could not be read; the timeline still works.',
+  '画面读得比声音慢，播放时可能停住；导出完整成片后播放即可。': 'The picture cannot keep up with the sound and may stand still while playing. Play the exported file instead.',
   '导出': 'Export',
   '总线音量': 'Bus',
   '总线音量：整条混音的推子，作用在总线效果之前': 'Bus level: the whole mix, applied before the bus effects',

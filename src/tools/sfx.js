@@ -110,6 +110,10 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
   const usedFonts = new Set()
   const materials = []
   const taken = new Set()
+  // One decision per track family, not per item: a batch of six whooshes asks
+  // "was this family already here?" once, and a `replace` clears it once.
+  const replacedFamilies = new Set()
+  const layoutNotes = []
 
   for (const [index, item] of items.entries()) {
     const gainDb = Number.isFinite(Number(item.gainDb)) ? Number(item.gainDb) : 0
@@ -160,9 +164,38 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
     // limit. Effects that never overlap still share a track (spec §5.2), because
     // an effect overlapping another one is an error, not an arrangement choice.
     const wantedStart = Number(item.startSec ?? item.start ?? args.startSec)
+    const wantedTrackName = item.trackName || args.trackName || `音效 · ${category}`
+    // Replace-or-append, decided per family before the first clip of that family
+    // lands. Re-running a batch after changing levels is the ordinary case, and
+    // it used to append: the family was busy on the same span, so `freeTrack`
+    // opened `音效 · 动效 2` and the project kept both sets. `replace` clears the
+    // family first; without it the append still happens (a second take beside the
+    // first is a legitimate want) but the reply says what it did.
+    if (args.replace === true && !replacedFamilies.has(wantedTrackName)) {
+      replacedFamilies.add(wantedTrackName)
+      const { readProject, saveProject } = await import('../project/store.js')
+      const { trackFamily, removeTrackFamily } = await import('../project/attach.js')
+      const project = await readProject(workspaceRoot, projectId)
+      if (trackFamily(project, wantedTrackName).length > 0) {
+        const removed = removeTrackFamily(project, wantedTrackName)
+        await saveProject(workspaceRoot, project, { by: 'agent', note: `替换音效：移除旧轨道 ${removed.join('、')}` })
+        layoutNotes.push(`replace: removed the previous ${removed.join('、')} before adding this batch.`)
+      }
+    } else if (!replacedFamilies.has(wantedTrackName) && args.replace !== true) {
+      replacedFamilies.add(wantedTrackName)
+      const { readProject } = await import('../project/store.js')
+      const { trackFamily } = await import('../project/attach.js')
+      const project = await readProject(workspaceRoot, projectId)
+      if (trackFamily(project, wantedTrackName).length > 0) {
+        layoutNotes.push(
+          `this project already had ${wantedTrackName}; this call APPENDED to it rather than replacing. `
+          + 'If the batch was meant to replace the old one, pass replace:true next time, or remove the old clips with anyaudio_project mode:"update" field:"delete".',
+        )
+      }
+    }
     const attached = await attachMaterialFile(workspaceRoot, projectId, written.path, {
       kind: category === '环境音' ? 'ambience' : 'sfx',
-      trackName: item.trackName || args.trackName || `音效 · ${category}`,
+      trackName: wantedTrackName,
       category: SFX_TRACK_CATEGORY[category] ?? 'other',
       snapshot: entry ? { preset: entry.id, durationSec: lengthSec, gainDb } : { type: item.type ?? item.name, params: item.params ?? {}, seed: Number.isFinite(Number(item.seed)) ? Number(item.seed) : undefined, durationSec: lengthSec, gainDb },
       snapshotKind: 'sfx',
@@ -192,7 +225,7 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
     const fontPath = paths.get(fontId)
     if (fontPath) calibration.push(await fontCalibration(fontId, fontPath))
   }
-  const warnings = calibration.filter((item) => item.note).map((item) => item.note)
+  const warnings = [...calibration.filter((item) => item.note).map((item) => item.note), ...layoutNotes]
   // A per-file peak target cannot be applied here without silently rebalancing
   // the mix relative to what the caller asked for, and the manifest already
   // reports each peak, so materials mode keeps the raw levels.
@@ -277,6 +310,7 @@ export const sfxToolDefinition = finalizeTool({
       peakDb: { type: 'number', description: 'Ignored, with a warning: normalising each file separately would change the relative balance between effects. Set each item\'s gainDb instead, or adjust the clip gain in the project.' },
       group: { type: 'string', description: 'Catalog filter: noise, weather, animals, home, traffic, crowd or weapons.' },
       query: { type: 'string', description: 'Catalog search text (name, Chinese name or tag).' },
+      replace: { type: 'boolean', description: 'Replace instead of append. When this is a second pass over effects the project already holds (you changed levels or swapped presets and are generating again), pass true: the track family these effects land in is cleared first, so the project keeps one set rather than gaining a second. Without it a re-run appends, which is how "音效 · 动效" and "音效 · 动效 2" end up side by side.' },
     },
     required: [],
   },

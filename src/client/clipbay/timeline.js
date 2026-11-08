@@ -25,7 +25,14 @@ import { itemLength, itemEnd } from './edit.js'
 // that read as a bug, not as emphasis (and it fired on Alt-drag range selection
 // too, so selecting a range silently changed the row height).
 const TRACK_HEIGHT = 52
+// The track head's starting width. It is a default, not a constant: the head
+// holds a name, M/S/FX/✕ and two faders, which does not fit in 148px once the
+// numbers reach two digits, and the person can drag the divider to whatever they
+// want. What is fixed is the range, so a drag cannot hide the timeline or squeeze
+// the head down to nothing.
 const HEAD_WIDTH = 148
+const HEAD_MIN = 120
+const HEAD_MAX = 340
 const RULER_HEIGHT = 22
 const EDGE_GRAB = 6
 
@@ -161,7 +168,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, onPointerD
   )
 }
 
-function TrackHead({ track, active, height, onSelect, onEdit, onFx }) {
+function TrackHead({ track, active, height, headWidth = HEAD_WIDTH, onSelect, onEdit, onFx }) {
   const [name, setName] = useState(track.name)
   const [editing, setEditing] = useState(false)
 
@@ -181,7 +188,7 @@ function TrackHead({ track, active, height, onSelect, onEdit, onFx }) {
       // rows of controls grew to 81px and stretched every 52px row to 82px,
       // wasting 30px per track — the head is a header for the waveform, not a
       // mixer strip, so it must not be the tallest thing in the row.
-      width: HEAD_WIDTH, height, flex: '0 0 auto', padding: '2px 6px', boxSizing: 'border-box',
+      width: headWidth, height, flex: '0 0 auto', padding: '2px 6px', boxSizing: 'border-box',
       display: 'flex', flexDirection: 'column', gap: 1, justifyContent: 'center',
       borderRight: `1px solid ${C.border}`, cursor: 'pointer',
       overflow: 'hidden',
@@ -263,13 +270,13 @@ function TrackHead({ track, active, height, onSelect, onEdit, onFx }) {
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, onFx, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
+function TrackRow({ track, peaksById, scale, active, headWidth, onSelect, onEdit, onFx, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
   const height = TRACK_HEIGHT
   const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h(TrackHead, { track, active, height, onSelect, onEdit, onFx }),
+    h(TrackHead, { track, active, height, headWidth, onSelect, onEdit, onFx }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -313,6 +320,7 @@ function TrackRow({ track, peaksById, scale, active, onSelect, onEdit, onFx, dra
 export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange, onClearSelection, onFx }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
+  const [headWidth, setHeadWidth] = useState(HEAD_WIDTH)
   const peaksById = usePeaks(root, projectId, materials)
   const duration = Math.max(contentEndSec(project), 1)
   const positionSec = transport?.positionSec ?? 0
@@ -320,6 +328,8 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const dragRef = useRef(null)
   const rangeRef = useRef(null)
   const [rangeDrag, setRangeDrag] = useState(false)
+  const headDragRef = useRef(null)
+  const [headDragging, setHeadDragging] = useState(false)
 
   /**
    * Dragging across a track selects a time range on that track — one of the three
@@ -343,6 +353,46 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
     setRangeDrag(true)
     onRange?.({ trackId: track.id, fromSec: at, toSec: at })
   }, [duration, scale, onRange])
+
+  /**
+   * Dragging the divider between a track head and its waveform changes how wide
+   * the heads are.
+   *
+   * The heads were a fixed 148px, which is enough for a short name but not for
+   * `M/S/FX/✕` plus two faders once the numbers grow — and the user asked for it,
+   * having found the `↔` cursor there. That cursor was a clip's trim handle: a
+   * clip starting at 0s has its left edge exactly against the head, so the handle
+   * sat where a divider would be. Giving the divider its own hit area above the
+   * tracks (the ruler corner) makes the gesture honest instead of a misfire.
+   */
+  const startHeadDrag = useCallback((event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    headDragRef.current = { startX: event.clientX, startWidth: headWidth }
+    setHeadDragging(true)
+  }, [headWidth])
+
+  useEffect(() => {
+    if (!headDragging) return undefined
+    const move = (event) => {
+      const head = headDragRef.current
+      if (!head) return
+      const next = Math.max(HEAD_MIN, Math.min(HEAD_MAX, head.startWidth + (event.clientX - head.startX)))
+      setHeadWidth(next)
+    }
+    const finish = () => {
+      headDragRef.current = null
+      setHeadDragging(false)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+  }, [headDragging])
 
   useEffect(() => {
     if (!rangeDrag) return undefined
@@ -533,7 +583,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
         flex: 1, minHeight: 0, background: C.softer,
       },
     },
-      h('div', { style: { width: HEAD_WIDTH + duration * scale, minWidth: '100%', position: 'relative' } },
+      h('div', { style: { width: headWidth + duration * scale, minWidth: '100%', position: 'relative' } },
         h('div', {
           // Sticky ruler: it is the one thing that must stay visible while the
           // tracks scroll under it (the "frozen pane" the user asked for).
@@ -546,9 +596,12 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             // The ruler's corner stays put on both axes, or the labels would
             // slide under it when the timeline scrolls sideways.
             style: {
-              width: HEAD_WIDTH, flex: '0 0 auto', borderRight: `1px solid ${C.border}`,
+              width: headWidth, flex: '0 0 auto', borderRight: `1px solid ${C.border}`,
               position: 'sticky', left: 0, zIndex: 3, background: 'rgb(28,28,30)',
+              cursor: 'col-resize',
             },
+            title: t('拖动调整轨道头宽度'),
+            onPointerDown: startHeadDrag,
           }),
           h('div', { style: { flex: 1, position: 'relative' } },
             h(Ruler, { scale, durationSec: duration, onSeek: seekTo }),
@@ -561,6 +614,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             track,
             peaksById,
             scale,
+            headWidth,
             active: track.id === activeTrackId,
             onSelect: () => setActiveTrackId(track.id),
             onEdit: (request) => onEdit?.({ ...request, trackId: track.id }),
