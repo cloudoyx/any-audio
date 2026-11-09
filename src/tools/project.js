@@ -25,8 +25,31 @@ import { ensureTrack, placeClip } from '../project/attach.js'
 import { projectDir, resolveInside } from '../project/paths.js'
 import { findFfmpeg, finalizeTool, nowStamp, outputDir, relativeToWorkspace, resolveOutputPath, textBlocks, textRenderer, workspaceRootOf } from './shared.js'
 import { readConfig } from '../config.js'
+import { providerInfo, voiceDisplayName } from '../audio/tts-providers.js'
 
 const MODES = ['create', 'add_material', 'read', 'update', 'render']
+
+/**
+ * The narration engine and voice the person picked in Settings → AnyAudio.
+ *
+ * It has to reach the Agent *before* it calls anyaudio_tts, because the value is
+ * invisible otherwise: no tool returns it, and an Agent that cannot see the
+ * configured engine has to guess. In the session that prompted this it reasoned
+ * "用户配置的默认引擎未知", passed provider:"edge" for control, and silently
+ * overrode a MiMo setting (improvement plan 04).
+ */
+function narrationDefault(config) {
+  const provider = String(config?.tts?.provider ?? 'edge').trim() || 'edge'
+  const info = providerInfo(provider)
+  const voice = String(config?.tts?.[provider]?.voice ?? info?.voices?.[0] ?? '').trim()
+  if (!info) return null
+  return {
+    provider,
+    label: info.label,
+    voice: voiceDisplayName(voice) ?? voice,
+    voiceId: voice,
+  }
+}
 
 function requireWorkspace(exec) {
   return workspaceRootOf(exec).then((root) => {
@@ -260,7 +283,13 @@ async function runCreate(workspaceRoot, args) {
     by: 'agent',
     note: args.note || '创建工程',
   })
-  return { ok: true, mode: 'create', ...(await projectSummary(workspaceRoot, project)) }
+  const { config } = await readConfig()
+  return {
+    ok: true,
+    mode: 'create',
+    ...(await projectSummary(workspaceRoot, project)),
+    narration: narrationDefault(config),
+  }
 }
 
 async function runAddMaterial(workspaceRoot, args, exec) {
@@ -562,7 +591,14 @@ export const projectToolDefinition = finalizeTool({
           // material is measured when it lands, and rebalancing is a clip field,
           // not a second render (improvement plan 03, I-42).
           'Every material is measured as it enters the project (peakDb / rmsDb in the material index, shown by mode:"read"). To change the balance, set the clip gain (target:"clip", field:"gainDb") — changing a clip never re-renders the material, so do not re-generate what is already here.',
-        ].join('\n')
+          // The configured narration engine is invisible to the Agent until it
+          // runs a TTS call, and by then it has already chosen one. Naming it
+          // here is the difference between "leave it out" and "guess the engine
+          // and override the person's setting" (improvement plan 04).
+          value.narration
+            ? `Narration default right now: ${value.narration.label} (${value.narration.provider}) with voice ${value.narration.voice} [${value.narration.voiceId}]. Leave provider and voice out unless the person asked for a particular engine or voice — passing them overrides this setting.`
+            : null,
+        ].filter(Boolean).join('\n')
       }
       if (value.mode === 'add_material') {
         const summary = `Project now has ${value.tracks.length} tracks, ${Number(value.durationSec).toFixed(2)}s long.`
@@ -601,10 +637,20 @@ export const projectToolDefinition = finalizeTool({
       ]
       for (const track of value.tracks) {
         const clips = track.clips ?? []
-        lines.push(`- ${track.name} [${track.category}]${track.muted ? ' (muted)' : ''}${track.solo ? ' (solo)' : ''} ${clips.length ? `(${clips.length} clips)` : '(empty)'}`)
+        // The id comes first because it is the only handle a caller has: without
+        // it the reply names a track the Agent cannot address, so renaming,
+        // muting or deleting one was impossible even though `update` supports all
+        // three (measured on a real session: the Agent read the project, saw
+        // "旁白 · 晓晓 · 晓晓", wrote "read 返回轨道名但无 id", and gave up).
+        lines.push(`- ${track.id} "${track.name}" [${track.category}]${track.muted ? ' (muted)' : ''}${track.solo ? ' (solo)' : ''} ${clips.length ? `(${clips.length} clips)` : '(empty)'}`)
         for (const item of clips) {
           const end = Number(item.startSec) + (Number(item.outSec) - Number(item.inSec))
-          lines.push(`    ${item.id} "${item.label}" ${Number(item.startSec).toFixed(2)}–${end.toFixed(2)}s, material ${item.material}`)
+          // The gain is reported for the same reason: a change is absolute, not
+          // relative, so an Agent that cannot see the current value has to
+          // overwrite it — and would silently undo a level the person set in the
+          // clip bay by hand.
+          const gain = Number(item.gainDb) || 0
+          lines.push(`    ${item.id} "${item.label}" ${Number(item.startSec).toFixed(2)}–${end.toFixed(2)}s, gain ${gain >= 0 ? '+' : ''}${gain.toFixed(1)} dB, material ${item.material}`)
         }
       }
       if (value.video) lines.push(`Video: ${value.video.path} (${Number(value.video.durationSec).toFixed(2)}s)`)

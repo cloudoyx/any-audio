@@ -132,9 +132,14 @@ await test('project read with an id renders tracks and clips', async () => {
   const text = await renderOf('anyaudio_project', { mode: 'read', projectId })
   assert.match(text, /Project "渲染器检查"/)
   assert.match(text, /Tracks \(1 of/)
-  assert.match(text, /- 鼓 \[music\]/)
+  // The id leads the line: without it the reply names a track the Agent cannot
+  // address, so renaming or muting one was impossible (improvement plan 04).
+  assert.match(text, /- trk_[a-z0-9]+ "鼓" \[music\]/)
   assert.match(text, /\(1 clips\)/)
   assert.match(text, /鼓 A/)
+  // A change is absolute, so the current gain has to be visible or the Agent
+  // overwrites a level the person set by hand.
+  assert.match(text, /gain \+0\.0 dB/)
 })
 
 await test('project read with an id renders an empty track honestly', async () => {

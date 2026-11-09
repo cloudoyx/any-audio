@@ -74,7 +74,7 @@
 - **两个引擎各有自己的音色，名字不能混用**（传了不属于该引擎的名字，服务端会报错或干脆不理你）：
   - `edge`：`zh-CN-XiaoxiaoNeural`、`zh-CN-YunxiNeural`、`zh-CN-YunjianNeural`、`zh-CN-XiaoyiNeural`、`zh-CN-YunyangNeural`、`zh-CN-liaoning-XiaobeiNeural`、`zh-CN-shaanxi-XiaoniNeural`、`en-US-AriaNeural`、`en-US-JennyNeural`、`en-US-GuyNeural`、`ja-JP-NanamiNeural`。**网络服务、不需要 key**，中文旁白常用的默认音色是 `zh-CN-YunjianNeural`。
   - `mimo`：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。`mimo_default` 由服务端集群决定，不同集群可能不同。**需要在 Settings → AnyAudio 里配好 MiMo API Key**；没配 key 就不要选它。
-- 不传 `provider` 就用用户配置的默认引擎（两个都可能），不传 `voice` 就用该引擎的默认音色——两者都不是固定值。**不确定用户用哪个引擎时不要传 `provider`**，让它用配置值；确有必要换引擎再显式传。`voice`/`rate`/`pitch`/`provider` 写在顶层会应用到这一批的每一句，单个 item 写了就以 item 为准。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
+- 不传 `provider` 就用用户配置的默认引擎（两个都可能），不传 `voice` 就用该引擎的默认音色——两者都不是固定值。**默认就是用户的设置：只有用户在这一轮明确要求某个引擎或音色时才传，其它情况一律不传。**「我觉得这个音色更好听」不是覆盖的理由——那会把用户自己在设置里选的引擎悄悄换掉（真实事故：用户设了 MiMo，Agent 为了"音色可控"传了 edge，用户听到的是完全不同的声音）。`anyaudio_project` 的 create 回包会写明当前默认引擎与音色，照着它判断。`voice`/`rate`/`pitch`/`provider` 写在顶层会应用到这一批的每一句，单个 item 写了就以 item 为准。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
 - Edge TTS 是网络服务（非官方接口），失败先查网络/代理再重试，必要时给 `proxy`；需要 ffmpeg 把 MP3 转成 WAV。连续试听过多会触发限流（429）：等一分钟重试，或传 `provider:"mimo"` 换引擎（前提是用户配了 key）。**批量中途失败时这一批已经落下的片段会被回滚**，工程保持原样，改好再整批重来即可——不要因为一次失败就另建工程。
 - 长旁白按分句拆成多条**是为了对齐时间轴，不是为了分轨**：它们仍然落在同一条旁白轨上，只是各自有不同的 `startSec`。已有旁白音频时不要重复生成。
 

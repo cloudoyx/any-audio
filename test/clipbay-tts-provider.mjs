@@ -247,7 +247,12 @@ test('nothing tells the Agent that Edge is the default', () => {
 
   const index = readFileSync(join(root, 'src', 'index.js'), 'utf8')
   assert.doesNotMatch(index, /\(Edge, or MiMo-V2\.5-TTS when selected\)/, 'the system prompt no longer puts Edge first')
-  assert.match(index, /default to what the user configured in Settings → AnyAudio/, 'it names the setting only')
+  assert.match(index, /come from what the user configured in Settings → AnyAudio/, 'it names the setting only')
+  // Passing them was described as a normal choice ("pass voice to choose another")
+  // and the model did exactly that, overriding a configured MiMo engine with edge
+  // (improvement plan 04). The rule now names the only legitimate reason.
+  assert.match(index, /leave provider and voice out unless the person asked/, 'it says when overriding is allowed')
+  assert.doesNotMatch(index, /tool arguments always override those defaults/, 'overriding is no longer the default behaviour')
 })
 
 test('a 429 sends the Agent to the other engine, not to the settings page', () => {
