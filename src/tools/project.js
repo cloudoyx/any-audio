@@ -17,7 +17,7 @@
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS, validateFxChain } from '../project/schema.js'
-import { createProject, listProjects, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
+import { createProject, listProjects, readDraft, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
 import { ensureMaterialLevels, findMaterial, registerMaterial, deleteMaterial, referencesFor } from '../project/materials.js'
 import { importFile, importGeneratedMaterial } from '../project/import.js'
 import { exportProject, renderProject } from '../project/render.js'
@@ -84,10 +84,15 @@ async function projectSummary(workspaceRoot, project) {
   // from then on (improvement plan 03, I-37). The measuring lives in the material
   // module because the clip bay's own read route needs exactly the same pass.
   const index = await ensureMaterialLevels(workspaceRoot, project.id, await readMaterialIndex(workspaceRoot, project.id))
+  // The clip bay's unsaved work is not part of this arrangement (improvement
+  // plan 05). Saying so keeps the Agent from "fixing" a state the person is
+  // still auditioning, and from being surprised when the panel saves over it.
+  const draft = await readDraft(workspaceRoot, project.id).catch(() => null)
   return {
     projectId: project.id,
     name: project.name,
     durationSec: contentEndSec(project),
+    ...(draft ? { draft: true } : {}),
     folder: relativeToWorkspace(workspaceRoot, projectDir(workspaceRoot, project.id)),
     masterFaderDb: project.masterFaderDb,
     ...(project.masterFx?.length ? { masterFx: project.masterFx } : {}),
@@ -635,6 +640,9 @@ export const projectToolDefinition = finalizeTool({
         `Project "${value.name}" (${value.projectId}), ${Number(value.durationSec).toFixed(2)}s`,
         `Tracks (${value.tracks.length} of ${LIMITS.tracks}):`,
       ]
+      if (value.draft) {
+        lines.push('Note: the clip bay has unsaved changes (project.draft.json); the arrangement below is the last saved one. Ask before assuming the person wants those changes kept.')
+      }
       for (const track of value.tracks) {
         const clips = track.clips ?? []
         // The id comes first because it is the only handle a caller has: without

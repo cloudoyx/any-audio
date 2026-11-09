@@ -124,6 +124,40 @@ export async function saveProject(workspaceRoot, project, { by = 'user', note = 
   return stamped
 }
 
+/**
+ * The clip bay's unsaved work (improvement plan 05).
+ *
+ * A person editing the timeline is auditioning: they try a gain, a reverb, a
+ * split, and only some of it is meant to stay. Writing every attempt straight
+ * into project.json made "试听" and "提交" the same act, and the only way back was
+ * an undo trail that died with the panel. The draft is that separation: edits go
+ * here, `保存` promotes it, `放弃` deletes it, and the Agent keeps reading the
+ * committed project.json.
+ *
+ * It is a file rather than memory so a crash does not lose the work; a normal
+ * discard deletes it, so the next open is the last saved arrangement.
+ */
+export function draftFile(workspaceRoot, projectId) {
+  return join(projectDirOf(workspaceRoot, projectId), 'project.draft.json')
+}
+
+export async function readDraft(workspaceRoot, projectId) {
+  try {
+    const raw = await readJson(draftFile(workspaceRoot, projectId))
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null
+  } catch {
+    return null
+  }
+}
+
+export async function writeDraft(workspaceRoot, projectId, project) {
+  await atomicWriteJson(draftFile(workspaceRoot, projectId), project)
+}
+
+export async function deleteDraft(workspaceRoot, projectId) {
+  await rm(draftFile(workspaceRoot, projectId), { force: true })
+}
+
 export async function readMaterialIndex(workspaceRoot, projectId) {
   const path = join(projectDirOf(workspaceRoot, projectId), MATERIAL_INDEX)
   try {

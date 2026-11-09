@@ -83,7 +83,9 @@ export function useExport(root, projectId, { name, beforeStart } = {}) {
       if (beforeStart) await beforeStart()
       const data = await api(`/clipbay/render?root=${encodeURIComponent(root)}&project=${encodeURIComponent(projectId)}`, {
         method: 'POST',
-        body: { format, output: exportName({ name }, format), normalize },
+        // Render the draft: what the person hears is what they export, even when
+        // they have not pressed 保存 yet (improvement plan 05).
+        body: { format, output: exportName({ name }, format), normalize, draft: true },
       })
       setJob(data.job)
       stoppedRef.current = false

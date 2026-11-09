@@ -1,11 +1,13 @@
 /**
- * Saving (plan M5.7, spec §8.4).
+ * Saving (plan M5.7, spec §8.4; draft model in improvement plan 05).
  *
- * The panel unmounts when the user switches tabs, so a debounce alone would lose
- * whatever was typed in the last few hundred milliseconds. Hence two behaviours:
+ * A person editing the timeline is auditioning, so an edit is not a commit: it
+ * goes to `project.draft.json`, and only `保存` writes project.json. The draft is
+ * still written on a debounce (and flushed on unmount) so a crash or a tab switch
+ * cannot lose the work — the difference is what the Agent reads, not whether the
+ * bytes reach disk.
  *
- *   ① every edit schedules a write 250 ms later, collapsing a burst of edits into
- *      one request;
+ *   ① every edit schedules a draft write 250 ms later, collapsing a burst;
  *   ② unmount flushes synchronously — the request is already on its way, and an
  *      aborted fetch would drop the edit exactly when the user leaves.
  *
@@ -27,6 +29,10 @@ export function saveUrl(root, projectId) {
   return `/clipbay/project?root=${encodeURIComponent(root)}&id=${encodeURIComponent(projectId)}`
 }
 
+export function draftUrl(root, projectId) {
+  return `/clipbay/draft?root=${encodeURIComponent(root)}&id=${encodeURIComponent(projectId)}`
+}
+
 /**
  * Save one project.
  *
@@ -40,13 +46,21 @@ export async function saveProject(root, project) {
   })
 }
 
+/** Write the unsaved arrangement. Never touches project.json. */
+export async function saveDraft(root, project) {
+  await api(draftUrl(root, project.id), {
+    method: 'POST',
+    body: { project: serializeProject(project) },
+  })
+}
+
 /**
- * Wire a project to debounced, flush-on-unmount saving.
+ * Wire a project to debounced, flush-on-unmount draft saving.
  *
  * `onError` is called with a message when a write fails; the in-memory project is
  * left untouched so the user can retry rather than losing the edit.
  */
-export function useAutosave(root, project, { enabled = true, onSaved, onError } = {}) {
+export function useDraftAutosave(root, project, { enabled = true, onError } = {}) {
   const timerRef = useRef(0)
   const pendingRef = useRef(null)
   const mountedRef = useRef(true)
@@ -59,12 +73,9 @@ export function useAutosave(root, project, { enabled = true, onSaved, onError } 
       clearTimeout(timerRef.current)
       timerRef.current = 0
     }
-    // The returned promise matters to callers that need the file on disk before
-    // doing something else — an export renders from project.json, not from memory.
-    return saveProject(root, queued)
-      .then(() => { if (mountedRef.current) onSaved?.() })
+    return saveDraft(root, queued)
       .catch((caught) => { if (mountedRef.current) onError?.(caught.message) })
-  }, [root, onSaved, onError])
+  }, [root, onError])
 
   useEffect(() => {
     if (!enabled || !project) return undefined
@@ -87,7 +98,7 @@ export function useAutosave(root, project, { enabled = true, onSaved, onError } 
     }
     if (queued) {
       pendingRef.current = null
-      void saveProject(root, queued).catch(() => {})
+      void saveDraft(root, queued).catch(() => {})
     }
     mountedRef.current = false
   }, [root])

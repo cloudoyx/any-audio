@@ -18,7 +18,7 @@ import { api } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
 import { usePlayback } from './audio.js'
-import { useAutosave } from './saving.js'
+import { useDraftAutosave } from './saving.js'
 import { useExport, availableFormats, describeJob } from './exporter.js'
 import { Timeline } from './timeline.js'
 import { MaterialBin } from './material-bin.js'
@@ -188,13 +188,16 @@ function useComposerInset() {
 }
 
 function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
-  const { status, error, project, materials, dirty, reload, update, undo, redo, canUndo, canRedo, markSaved } = useProject(root, projectId)
+  const { status, error, project, materials, dirty, hasDraft, reload, update, undo, redo, save, discard, canUndo, canRedo } = useProject(root, projectId)
   const transport = usePlayback(root, projectId)
   const setTransportProject = transport.setProject
   const [selection, setSelection] = useState(null)
   const [range, setRange] = useState(null)
   const [editError, setEditError] = useState('')
   const [saveError, setSaveError] = useState('')
+  // Leaving with unsaved work is the one moment the person can lose it, so the
+  // back button asks instead of guessing (improvement plan 05).
+  const [leavePrompt, setLeavePrompt] = useState(false)
   const [mentionNotice, setMentionNotice] = useState('')
   // Which effect chain the right-hand column is showing, if any (I-07). Null means
   // "show the selected clip": the panel is one column, so opening a track or the
@@ -212,16 +215,26 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const useInputState = typeof useInput === 'function' ? useInput : useNoInput
   const draft = useInputState((state) => state)?.draft ?? ''
 
-  // Debounced write plus a flush on unmount: switching to 对话 destroys this
-  // component, and the last few hundred milliseconds must still reach the file.
-  // Autosave is gated on `dirty` rather than on "a project is loaded": mounting
-  // the panel must not write a file the person has not changed, because that
-  // write would put this panel's copy over whatever the Agent just wrote.
-  const { flush } = useAutosave(root, project, {
+  // Debounced draft write plus a flush on unmount: switching to 对话 destroys
+  // this component, and the last few hundred milliseconds must still reach the
+  // draft. Gated on `dirty` rather than on "a project is loaded": mounting the
+  // panel must not write a draft the person has not changed.
+  const { flush } = useDraftAutosave(root, project, {
     enabled: Boolean(project) && dirty,
-    onSaved: () => { setSaveError(''); markSaved() },
     onError: (message) => setSaveError(message),
   })
+
+  // Closing the window is the other way to lose unsaved work; the browser's own
+  // prompt is the only one that can stop a close, so it is used here.
+  useEffect(() => {
+    if (!dirty) return undefined
+    const onBeforeUnload = (event) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty])
 
   // An export renders from project.json on disk, so anything still inside the
   // debounce window has to be written before the job starts.
@@ -407,11 +420,20 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
     // area scrolls, so the picture and the tools never scroll away (improvement
     // plan 01, I-05 — the "frozen pane" the user asked for).
     h('div', { style: S.header },
-      h(Btn, { onClick: onBack }, t('← 返回')),
+      h(Btn, { onClick: () => (dirty ? setLeavePrompt(true) : onBack()) }, t('← 返回')),
       h('h2', { style: S.title }, project.name),
       h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
       h('span', { style: { flex: 1 } }),
+      // 保存 is the commit point (improvement plan 05): edits go to the draft, and
+      // only this writes project.json. 放弃 throws the draft away.
+      h(Btn, {
+        onClick: () => { void save().then(() => setSaveError('')).catch((caught) => setSaveError(caught.message)) },
+        disabled: !dirty,
+        kind: dirty ? 'primary' : undefined,
+        title: t('保存到工程文件'),
+      }, t('保存')),
+      dirty ? h(Btn, { onClick: () => { void discard() }, title: t('放弃未保存的修改') }, t('放弃')) : null,
       h(Btn, { onClick: addToConversation, kind: (selection || range) ? 'primary' : undefined, disabled: !selection && !range }, t('添加到对话')),
       // The bus fader (spec §10.2's 总推子). It sits beside the bus chain button
       // because the two act on the whole mix, and it stays a slider rather than a
@@ -458,6 +480,7 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           }, t('导出')),
         ),
     ),
+    hasDraft ? h(Notice, null, t('有未保存的修改：导出会使用当前画面，Agent 读到的是上次保存的版本。')) : null,
     editError ? h(Notice, { tone: 'error' }, editError) : null,
     saveError ? h(Notice, { tone: 'error' }, `${t('保存失败')}：${saveError} ${t('编辑仍在这里，可以重试。')}`) : null,
     mentionNotice ? h(Notice, null, mentionNotice) : null,
@@ -540,6 +563,41 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       onRange: setRange,
       onClearSelection: clearSelection,
     }),
+    // The leave prompt is a modal, not a toast: it is the only moment the person
+    // can lose an evening of edits, and a corner message is easy to miss
+    // (improvement plan 05).
+    leavePrompt ? h('div', {
+      style: {
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50,
+      },
+    },
+      h('div', {
+        style: {
+          background: 'rgb(32,32,36)', border: `1px solid ${C.border}`, borderRadius: 10,
+          padding: 18, width: 380, display: 'flex', flexDirection: 'column', gap: 10,
+        },
+      },
+        h('div', { style: { fontWeight: 600 } }, t('工程有未保存的修改')),
+        h('div', { style: S.desc }, t('保存后离开，或放弃这些修改回到上次保存的版本。')),
+        h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
+          h(Btn, { onClick: () => setLeavePrompt(false) }, t('取消')),
+          h(Btn, { onClick: async () => { await discard(); setLeavePrompt(false); onBack() } }, t('放弃并离开')),
+          h(Btn, {
+            kind: 'primary',
+            onClick: async () => {
+              try {
+                await save()
+                setLeavePrompt(false)
+                onBack()
+              } catch (caught) {
+                setSaveError(caught.message)
+              }
+            },
+          }, t('保存并离开')),
+        ),
+      ),
+    ) : null,
   )
 }
 

@@ -26,7 +26,7 @@ import { ProjectPathError, MATERIALS_DIR, projectDir, projectFile, resolveInside
 import { MaterialError, deleteMaterial, findMaterial, materialPath } from '../project/materials.js'
 import { ProjectSchemaError } from '../project/schema.js'
 import { exportProject } from '../project/render.js'
-import { listProjects, projectExists, readMaterialIndex, readProject, saveProject } from '../project/store.js'
+import { deleteDraft, listProjects, projectExists, readDraft, readMaterialIndex, readProject, saveProject, writeDraft } from '../project/store.js'
 import { outputDir } from '../tools/shared.js'
 import { describeError, json, readJsonBody, serveFile } from './http.js'
 
@@ -215,6 +215,34 @@ async function handle(req, res, { url, method, path, ctx }) {
     throw new RouteError(405, 'method not allowed')
   }
 
+  if (path === '/clipbay/draft') {
+    // The clip bay's unsaved work (improvement plan 05). Kept apart from
+    // project.json so the Agent always reads a committed arrangement, and so
+    // "放弃" is a delete rather than a rewrite.
+    const root = workspaceRootOf(ctx, url)
+    const projectId = projectIdOf(url)
+    if (method === 'GET') {
+      return json(res, 200, { ok: true, draft: await readDraft(root, projectId) })
+    }
+    if (method === 'POST') {
+      const body = await readJsonBody(req)
+      const project = body?.project ?? body
+      if (!project || typeof project !== 'object' || Array.isArray(project)) {
+        throw new RouteError(400, 'request body must be a project object')
+      }
+      if (project.id !== projectId) {
+        throw new RouteError(400, `project id in the body (${String(project.id)}) does not match the request (${projectId})`)
+      }
+      await writeDraft(root, projectId, project)
+      return json(res, 200, { ok: true })
+    }
+    if (method === 'DELETE') {
+      await deleteDraft(root, projectId)
+      return json(res, 200, { ok: true })
+    }
+    throw new RouteError(405, 'method not allowed')
+  }
+
   if (path === '/clipbay/media') {
     if (method !== 'GET') throw new RouteError(405, 'method not allowed')
     const root = workspaceRootOf(ctx, url)
@@ -276,7 +304,10 @@ async function handle(req, res, { url, method, path, ctx }) {
     if (method !== 'POST') throw new RouteError(405, 'method not allowed')
     const body = await readJsonBody(req)
     const projectId = projectIdOf(url, 'project')
-    const project = await requireProject(root, projectId)
+    // An export renders what the person hears, and what they hear is the draft
+    // (improvement plan 05). Falling back to project.json keeps the old behaviour
+    // for a project with no unsaved work.
+    const project = (body?.draft === true ? await readDraft(root, projectId) : null) ?? await requireProject(root, projectId)
     const format = String(body?.format ?? (project.video ? 'mp4' : 'wav')).toLowerCase()
     if (!['wav', 'mp3', 'mp4'].includes(format)) {
       throw new RouteError(400, `unknown export format "${format}"; use wav, mp3 or mp4`)
@@ -334,7 +365,7 @@ async function handle(req, res, { url, method, path, ctx }) {
  * one fixed file from the plugin itself and accepts no path from the request.
  */
 export function needsClientHeader(path) {
-  return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/render' || path === '/clipbay/render/cancel' || path === '/clipbay/material'
+  return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/draft' || path === '/clipbay/render' || path === '/clipbay/render/cancel' || path === '/clipbay/material'
 }
 
 /**

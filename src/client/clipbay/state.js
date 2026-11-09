@@ -16,10 +16,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { contentEndSec } from './serialize.js'
+import { saveProject } from './saving.js'
 import { createHistory, pushHistory, canUndo, canRedo, undo as undoStep, redo as redoStep } from './undo.js'
 
 function nowIso() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
+function draftUrl(root, projectId) {
+  return `/clipbay/draft?root=${encodeURIComponent(root)}&id=${encodeURIComponent(projectId)}`
 }
 
 /**
@@ -35,6 +40,7 @@ export function useProject(root, projectId) {
   const [project, setProject] = useState(null)
   const [materials, setMaterials] = useState([])
   const [dirty, setDirty] = useState(false)
+  const [hasDraft, setHasDraft] = useState(false)
   const [trailVersion, setTrailVersion] = useState(0)
 
   const projectRef = useRef(null)
@@ -49,10 +55,18 @@ export function useProject(root, projectId) {
     setStatus('loading')
     setError('')
     try {
-      const data = await api(`/clipbay/project?root=${encodeURIComponent(root)}&id=${encodeURIComponent(projectId)}`)
-      adopt(data.project)
+      // The draft is the person's unsaved work (improvement plan 05). It wins on
+      // open: a crash must not silently throw away an evening of edits, and the
+      // panel says plainly that the arrangement on screen is not saved yet.
+      const [data, draftData] = await Promise.all([
+        api(`/clipbay/project?root=${encodeURIComponent(root)}&id=${encodeURIComponent(projectId)}`),
+        api(draftUrl(root, projectId)).catch(() => ({ draft: null })),
+      ])
+      const draft = draftData?.draft ?? null
+      adopt(draft ?? data.project)
       setMaterials(data.materials ?? [])
-      setDirty(false)
+      setDirty(Boolean(draft))
+      setHasDraft(Boolean(draft))
       // Whatever the file now holds is the new baseline; the trail behind it
       // describes an arrangement that no longer exists.
       trailRef.current = createHistory()
@@ -104,7 +118,27 @@ export function useProject(root, projectId) {
     setDirty(true)
   }, [adopt])
 
-  const markSaved = useCallback(() => setDirty(false), [])
+  /**
+   * Commit the draft: write project.json, then delete the draft.
+   *
+   * The order matters — a crash between the two leaves a draft that equals the
+   * saved file, which the next open simply adopts; the reverse order would lose
+   * the work.
+   */
+  const save = useCallback(async () => {
+    const current = projectRef.current
+    if (!current) return
+    await saveProject(root, current)
+    await api(draftUrl(root, projectId), { method: 'DELETE' })
+    setDirty(false)
+    setHasDraft(false)
+  }, [root, projectId])
+
+  /** Throw the draft away and go back to the last saved arrangement. */
+  const discard = useCallback(async () => {
+    await api(draftUrl(root, projectId), { method: 'DELETE' })
+    await reload()
+  }, [root, projectId, reload])
 
   // `trailVersion` is read so the flags recompute whenever the trail changed.
   void trailVersion
@@ -115,11 +149,13 @@ export function useProject(root, projectId) {
     project,
     materials,
     dirty,
+    hasDraft,
     reload,
     update,
     undo,
     redo,
-    markSaved,
+    save,
+    discard,
     canUndo: canUndo(trailRef.current),
     canRedo: canRedo(trailRef.current),
   }
