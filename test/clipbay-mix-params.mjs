@@ -32,7 +32,7 @@ const read = (rel) => readFileSync(join(repoRoot, rel), 'utf8').replace(/\r\n/g,
 
 const {
   dbToGain, panGains, itemParams, masterParams,
-  resolveTrackGain, audibleTracks, fadeShape, fadeCurve,
+  resolveTrackGain, audibleTracks, fadeShape, fadeCurve, clipMixGain,
 } = await import('../src/client/clipbay/mix-params.js')
 
 let passed = 0
@@ -262,6 +262,28 @@ await test('the rendered samples equal the preview schedule applied to the same 
   // The parameters really are non-trivial: this would pass trivially at unity.
   assert.ok(Math.abs(entry.pan) > 1e-3, 'the clip is panned, so the parity check means something')
   assert.ok(Math.abs(entry.gain - 1) > 1e-3, 'and carries a gain')
+})
+
+await test('mute and solo silence a clip through the same rule before and during playback', () => {
+  // The regression this covers: the scheduled path multiplied the track gain in,
+  // the live path did not, so pressing M while the transport ran changed nothing
+  // until the next play (improvement plan 04).
+  const track = { id: 'trk_a', muted: false, solo: false, items: [] }
+  const clip = { gainDb: -6, muted: false }
+  close(clipMixGain(track, clip, false), dbToGain(-6), 'audible clip keeps its own gain')
+  assert.equal(clipMixGain({ ...track, muted: true }, clip, false), 0, 'a muted track silences its clips')
+  assert.equal(clipMixGain(track, clip, true), 0, 'another track being soloed silences this one')
+  close(clipMixGain({ ...track, solo: true }, clip, true), dbToGain(-6), 'a soloed track stays audible')
+  assert.equal(clipMixGain(track, { ...clip, muted: true }, false), 0, 'a muted clip is silent on an audible track')
+})
+
+await test('the live path uses clipMixGain instead of restating the arithmetic', () => {
+  const audio = read(join('src', 'client', 'clipbay', 'audio.js'))
+  const start = audio.indexOf('const applyMix = useCallback')
+  assert.ok(start > 0, 'applyMix is still where the live graph is pushed')
+  const applyMix = audio.slice(start, audio.indexOf('\n  }, [])', start))
+  assert.match(applyMix, /clipMixGain\(track, item, anySolo\)/, 'the live path asks the shared rule')
+  assert.doesNotMatch(applyMix, /resolveTrackGain\(/, 'and does not compute its own track gain')
 })
 
 await rm(scratch, { recursive: true, force: true })

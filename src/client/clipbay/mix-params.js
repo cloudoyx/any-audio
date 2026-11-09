@@ -125,6 +125,20 @@ export function resolveTrackGain(track, anySolo) {
   return 1
 }
 
+/**
+ * The gain one clip is heard at right now: its own gain times whether its track
+ * can be heard at all.
+ *
+ * This is one expression for two moments — scheduling playback and pushing a
+ * change onto a graph that is already running. They drifted apart once: the
+ * scheduled path multiplied the track in, the live path did not, so pressing M
+ * during playback muted nothing until the next play (improvement plan 04).
+ */
+export function clipMixGain(track, item, anySolo) {
+  if (!item || item.muted === true) return 0
+  return resolveTrackGain(track, anySolo) * itemParams(item, track).gain
+}
+
 /** Tracks that can be heard at all: solo wins over everything, then mute. */
 export function audibleTracks(tracks) {
   const list = tracks ?? []

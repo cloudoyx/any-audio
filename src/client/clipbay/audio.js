@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
 import { buildDuckCurve, needsTail } from '../../audio/fx.js'
-import { fadeCurve, itemParams, masterParams, panGains, playbackStart, resolveTrackGain, toStereoChannels } from './mix-params.js'
+import { clipMixGain, fadeCurve, itemParams, masterParams, panGains, playbackStart, resolveTrackGain, toStereoChannels } from './mix-params.js'
 import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
 
 /**
@@ -151,8 +151,7 @@ export function mixedGain(project, trackId, itemId) {
   const anySolo = tracks.some((track) => track.solo)
   const track = tracks.find((entry) => entry.id === trackId)
   const item = track?.items?.find((entry) => entry.id === itemId)
-  if (!track || !item || item.muted) return 0
-  return resolveTrackGain(track, anySolo) * itemParams(item, track).gain
+  return clipMixGain(track, item, anySolo)
 }
 
 /**
@@ -592,7 +591,12 @@ export function usePlayback(root, projectId) {
       const track = tracks.find((entry) => entry.id === node.trackId)
       const item = track?.items?.find((entry) => entry.id === node.itemId)
       const params = itemParams(item, track)
-      node.itemLevel?.gain.setTargetAtTime(item && !item.muted ? params.gain : 0, now, TARGET_TAU_SEC)
+      // Mute and solo live on the track, so a silenced track has to multiply the
+      // clip's gain — the track has no fader of its own any more (improvement plan
+      // 03, I-41), and without this a mute pressed during playback only took
+      // effect on the next play: the person pressed M, heard nothing change, and
+      // concluded the button was dead (improvement plan 04).
+      node.itemLevel?.gain.setTargetAtTime(clipMixGain(track, item, anySolo), now, TARGET_TAU_SEC)
       // Pan moves ramp on the same path as the faders, on the two gains the
       // renderer's law produces.
       const [gainLeft, gainRight] = panGains(params.pan)
