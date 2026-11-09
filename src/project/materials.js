@@ -111,7 +111,17 @@ export async function deleteMaterial(workspaceRoot, projectId, materialId, { del
   const used = referencesFor(project, materialId)
   if (used.length > 0) {
     const plural = used.length === 1 ? 'clip' : 'clips'
-    throw new MaterialError(`this material is still used by ${used.length} ${plural}; remove those clips first`)
+    // Naming the clips is the difference between "refused" and "here is what to
+    // do next": an Agent that is told only the count sends the same call again
+    // (improvement plan 03, I-40).
+    const where = used
+      .slice(0, 6)
+      .map((row) => `${row.label || row.itemId} on "${row.trackName}"`)
+      .join(', ')
+    const more = used.length > 6 ? ` and ${used.length - 6} more` : ''
+    throw new MaterialError(
+      `this material is still used by ${used.length} ${plural} (${where}${more}); remove or re-point those clips first, then delete it`,
+    )
   }
   const index = await readMaterialIndex(workspaceRoot, projectId)
   const entry = findMaterial(index, materialId)

@@ -18,7 +18,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS, validateFxChain } from '../project/schema.js'
 import { createProject, listProjects, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
-import { findMaterial, registerMaterial, deleteMaterial } from '../project/materials.js'
+import { findMaterial, registerMaterial, deleteMaterial, referencesFor } from '../project/materials.js'
 import { importFile, importGeneratedMaterial, readWavChannels } from '../project/import.js'
 import { analyzeChannels } from '../audio/peaks.js'
 import { exportProject, renderProject } from '../project/render.js'
@@ -119,6 +119,9 @@ async function projectSummary(workspaceRoot, project) {
       // it must never read as 0 dB, which would be a claim about the file.
       peakDb: material.peakDb ?? null,
       rmsDb: material.rmsDb ?? null,
+      // How many clips point at it — 0 means it is an orphan, and orphans were
+      // 398 MB of one real project with no way to see them (I-40).
+      referencedBy: referencesFor(project, material.id).length,
       source: material.source?.tool ?? material.source?.kind ?? 'unknown',
     })),
     video: project.video ?? null,
@@ -375,10 +378,45 @@ async function runRead(workspaceRoot, args) {
   return { ok: true, mode: 'read', ...(await projectSummary(workspaceRoot, project)) }
 }
 
+/**
+ * `target:"material"` — the one update that reaches outside project.json.
+ *
+ * A material is not a field on an arrangement, it is a file plus its record, so
+ * deleting one cannot be a field assignment. `deleteMaterial` already refuses to
+ * remove something a clip still points at, which is the rule spec §6.5 asks for;
+ * what was missing was any way to reach it (improvement plan 03, I-40 — the
+ * function was imported and never called, so 398 MB of orphans in one project
+ * had neither a door nor a list).
+ */
+async function applyMaterialUpdate(workspaceRoot, project, { materialId, field }) {
+  if (field !== 'delete') {
+    throw new Error(`unknown material field "${field}"; the only one is "delete" — a material's audio can never be edited, only removed`)
+  }
+  const id = typeof materialId === 'string' ? materialId.trim() : ''
+  if (!id) throw new Error('target:"material" needs materialId')
+  try {
+    await deleteMaterial(workspaceRoot, project.id, id)
+    return `删除素材「${id}」`
+  } catch (error) {
+    const index = await readMaterialIndex(workspaceRoot, project.id)
+    const known = index.materials.map((entry) => entry.id).join(', ')
+    throw new Error(
+      `${error.message}. ${known ? `This project holds: ${known}` : 'This project holds no materials'}.`,
+    )
+  }
+}
+
 async function runUpdate(workspaceRoot, args) {
   const project = await readProject(workspaceRoot, args.projectId)
   const notes = []
   for (const change of args.changes ?? []) {
+    // Material deletes touch the index and the disk, so they are awaited in
+    // order with the rest instead of being handed to the synchronous field
+    // setter that every other target uses.
+    if (change?.target === 'material') {
+      notes.push(await applyMaterialUpdate(workspaceRoot, project, change))
+      continue
+    }
     notes.push(applyUpdate(project, change))
   }
   if (notes.length === 0) throw new Error('changes must contain at least one edit')
@@ -469,9 +507,10 @@ export const projectToolDefinition = finalizeTool({
         items: {
           type: 'object',
           properties: {
-            target: { type: 'string', enum: ['project', 'track', 'clip'], description: 'project: name, masterFaderDb or masterFx (no trackId needed). track: name, volumeDb, pan, muted, solo, fx, or "delete" to remove the whole track. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label, fx, or "delete" to remove that one clip.' },
+            target: { type: 'string', enum: ['project', 'track', 'clip', 'material'], description: 'project: name, masterFaderDb or masterFx (no trackId needed). track: name, volumeDb, pan, muted, solo, fx, or "delete" to remove the whole track. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label, fx, or "delete" to remove that one clip. material: "delete" to remove a material file — refused while any clip still uses it.' },
             trackId: { type: 'string', description: 'Required for target:"track". For target:"clip" it may be left out: the clip id is unique across the project, so the host works out which track owns it.' },
             clipId: { type: 'string', description: 'Required for target:"clip".' },
+            materialId: { type: 'string', description: 'Required for target:"material". mode:"read" lists every material id with its measured level and how many clips use it.' },
             field: { type: 'string' },
             value: {},
           },
@@ -586,6 +625,24 @@ export const projectToolDefinition = finalizeTool({
         }
       }
       if (value.video) lines.push(`Video: ${value.video.path} (${Number(value.video.durationSec).toFixed(2)}s)`)
+      const materials = value.materials ?? []
+      if (materials.length > 0) {
+        // The material list is the ledger the mix reads (I-37) and the place an
+        // orphan finally becomes visible (I-40): before this, 34 of one
+        // project's 46 materials were 398 MB nobody could see or remove.
+        const orphans = materials.filter((material) => !material.referencedBy)
+        const level = (material) => (material.rmsDb === null || material.rmsDb === undefined
+          ? 'level unknown'
+          : `${Number(material.rmsDb).toFixed(1)} dBFS RMS`)
+        lines.push(`Materials (${materials.length}, ${orphans.length} unused):`)
+        for (const material of materials) {
+          const used = material.referencedBy ? `${material.referencedBy} clip${material.referencedBy === 1 ? '' : 's'}` : 'unused'
+          lines.push(`- ${material.id} [${material.kind}] ${Number(material.durationSec).toFixed(2)}s, ${level(material)}, ${used}${material.source ? `, ${material.source}` : ''}`)
+        }
+        if (orphans.length > 0) {
+          lines.push(`Remove unused material with mode:"update", target:"material", field:"delete", materialId:"..." — ${orphans.map((material) => material.id).join(', ')}`)
+        }
+      }
       return lines.join('\n')
     }),
   },

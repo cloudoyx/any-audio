@@ -6,6 +6,7 @@
  * project exactly the way the Agent would and then check the result on disk.
  */
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -194,6 +195,110 @@ await test('read reports an unmeasurable material as unknown, not as 0 dB', asyn
     restored.materials[0].rmsDb = keptRms
     await writeMaterialIndex(workspaceRoot, projectId, restored)
   }
+})
+
+await test('read reports how many clips use each material', async () => {
+  // Improvement plan 03, I-40. 34 of one real project's 46 materials were 398 MB
+  // of orphans, and nothing on screen or in the reply said so. The count is what
+  // makes an orphan visible at all.
+  const result = await call({ mode: 'read', projectId })
+  const used = result.materials.filter((material) => material.referencedBy > 0)
+  assert.ok(used.length > 0, 'a project with clips must report used material')
+  for (const material of used) {
+    const expected = result.tracks
+      .flatMap((track) => track.clips)
+      .filter((clip) => clip.material === material.id).length
+    assert.equal(material.referencedBy, expected, `the count for ${material.id} must match the clips pointing at it`)
+  }
+})
+
+await test('mode:"read" lists materials and points at the ones nobody uses', async () => {
+  // An orphan gets a name and an instruction, or the Agent has no way to clean up.
+  const tone = await writeTone('orphan-hint.wav', 1, 780)
+  const added = await call({ mode: 'add_material', projectId, sourcePath: tone, kind: 'foley' })
+  assert.equal(added.ok, true, added.error)
+  const orphanId = added.materials.at(-1).id
+
+  try {
+    const definition = projectToolDefinition
+    const value = await definition.execute({ mode: 'read', projectId }, makeExec())
+    const text = definition.output.render({ mode: 'read' }, value).map((block) => block.text).join('\n')
+    assert.match(text, /Materials \(\d+/, 'the reply lists the materials')
+    assert.match(text, /dBFS RMS|level unknown/, 'with their measured level or an honest "unknown"')
+    assert.match(text, /unused/, 'an orphan is marked as unused')
+    assert.match(text, /target:"material"/, 'and the reply names the update that removes it')
+    assert.ok(text.includes(orphanId), 'and it names the orphan by id, so the call can be made from the reply alone')
+  } finally {
+    await call({
+      mode: 'update',
+      projectId,
+      changes: [{ target: 'material', materialId: orphanId, field: 'delete' }],
+    })
+  }
+})
+
+await test('target:"material" deletes an unused material and its files', async () => {
+  const tone = await writeTone('orphan-a.wav', 1, 700)
+  const added = await call({
+    mode: 'add_material',
+    projectId,
+    sourcePath: tone,
+    kind: 'foley',
+  })
+  assert.equal(added.ok, true)
+  const materialId = added.materials.at(-1).id
+  const file = join(workspaceRoot, '.anyaudio', 'projects', projectId, 'materials', `${materialId}.wav`)
+  assert.equal(existsSync(file), true, 'the file is on disk before the delete')
+
+  const removed = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'material', materialId, field: 'delete' }],
+  })
+  assert.equal(removed.ok, true, removed.error)
+  assert.match(removed.applied[0], /删除素材/)
+  assert.equal(existsSync(file), false, 'the audio file goes with it')
+
+  const after = await readMaterialIndex(workspaceRoot, projectId)
+  assert.equal(after.materials.some((row) => row.id === materialId), false, 'and the index loses the record')
+  // The delete is a write like any other, so it leaves a history line.
+  const project = await readProject(workspaceRoot, projectId)
+  assert.match(project.history.at(-1).note, /删除素材/)
+})
+
+await test('target:"material" refuses to delete a material a clip still uses', async () => {
+  const project = await readProject(workspaceRoot, projectId)
+  const clip = project.tracks.flatMap((track) => track.items)[0]
+  const result = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'material', materialId: clip.material, field: 'delete' }],
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /still used by \d+ clip/)
+  // The message has to name the clips, or the Agent sends the same call again.
+  assert.match(result.error, /on "/, 'the refusal names the clips that hold it')
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  assert.ok(index.materials.some((row) => row.id === clip.material), 'nothing was removed')
+})
+
+await test('target:"material" rejects an unknown id and any field but delete', async () => {
+  const missing = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'material', materialId: 'mat_nope', field: 'delete' }],
+  })
+  assert.equal(missing.ok, false)
+  assert.match(missing.error, /not in project/)
+
+  const wrongField = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'material', materialId: 'mat_whatever', field: 'gainDb' }],
+  })
+  assert.equal(wrongField.ok, false)
+  assert.match(wrongField.error, /material/)
+  assert.match(wrongField.error, /never be edited/, 'the refusal explains that audio is not editable')
 })
 
 await test('add_material reuses an existing track with the same name', async () => {
