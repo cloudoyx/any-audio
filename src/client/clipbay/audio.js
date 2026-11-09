@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
 import { buildDuckCurve, needsTail } from '../../audio/fx.js'
-import { clipMixGain, fadeCurve, itemParams, masterParams, panGains, playbackStart, resolveTrackGain, toStereoChannels } from './mix-params.js'
+import { clipMixGain, contentEnd, fadeCurve, itemParams, masterParams, panGains, playbackStart, resolveTrackGain, toStereoChannels } from './mix-params.js'
 import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
 
 /**
@@ -300,6 +300,13 @@ export function usePlayback(root, projectId) {
   const frameRef = useRef(0)
   const projectRef = useRef(null)
   const tokenRef = useRef(0)
+  // `startedAtRef > 0` is not a reliable "is playing" test: a fresh AudioContext
+  // starts at currentTime 0, so the first play of a session records 0 and a seek
+  // would take the paused path. This ref is the honest flag.
+  const playingRef = useRef(false)
+  // `seek` is defined before `play` (it is the simpler of the two), but a seek
+  // during playback has to restart the schedule, so it needs the latest `play`.
+  const playRef = useRef(null)
 
   const ensureContext = useCallback(() => {
     if (!contextRef.current) {
@@ -336,6 +343,7 @@ export function usePlayback(root, projectId) {
     tokenRef.current++
     stopSources()
     startedAtRef.current = 0
+    playingRef.current = false
     fromRef.current = at
     setPlaying(false)
     setPositionEverywhere(at)
@@ -343,11 +351,20 @@ export function usePlayback(root, projectId) {
 
   const seek = useCallback((seconds) => {
     const next = Math.max(0, Number(seconds) || 0)
+    // While the transport runs, moving the playhead has to move the sound too.
+    // The old schedule kept playing, and the clock — which counts from the play
+    // start — added the elapsed time on top of the new position, so a click at
+    // 0:30 after 25s of playback showed 0:57 and pushed the picture past its end
+    // (improvement plan 05). Restarting the schedule resets both.
+    if (playingRef.current && contextRef.current && playRef.current) {
+      void playRef.current(next, { wrap: false })
+      return
+    }
     fromRef.current = next
     setPositionEverywhere(next)
   }, [setPositionEverywhere])
 
-  const play = useCallback(async (fromSeconds) => {
+  const play = useCallback(async (fromSeconds, { wrap = true } = {}) => {
     const project = projectRef.current
     if (!project) return
     let context
@@ -366,17 +383,21 @@ export function usePlayback(root, projectId) {
     // A press at or past the end replays from the start. Without this the
     // schedule below comes back empty and the button just blinked — see
     // `playbackStart` for why that hit every second press, not an odd one.
-    const start = playbackStart(project, asked)
+    // A seek is different: it must land where the person clicked, so it clamps
+    // to the content end instead of wrapping to zero (improvement plan 05).
+    const start = wrap ? playbackStart(project, asked) : Math.min(asked, contentEnd(project))
     const entries = scheduleClips(project, start)
     fromRef.current = start
     setPositionEverywhere(start)
 
     if (entries.length === 0) {
+      playingRef.current = false
       setPlaying(false)
       return
     }
 
     startedAtRef.current = context.currentTime
+    playingRef.current = true
     const master = context.createGain()
     // The master is the frozen normalisation plus the person's fader, exactly as
     // the renderer applies it (spec §10.2). Hard-coding 1 here was why a bus
@@ -543,6 +564,7 @@ export function usePlayback(root, projectId) {
       if (at >= fromRef.current + total) {
         stopSources()
         startedAtRef.current = 0
+        playingRef.current = false
         // Back to the start, not parked on the last frame. Stopping where the
         // sound stopped left the playhead in a stretch with nothing in it, so
         // the next press scheduled nothing and the button appeared dead. Landing
@@ -558,6 +580,10 @@ export function usePlayback(root, projectId) {
     }
     frameRef.current = requestAnimationFrame(tick)
   }, [ensureContext, setPositionEverywhere, stopSources])
+
+  // `seek` needs the latest `play` to restart the schedule while the transport
+  // runs; a ref keeps the two from depending on each other's declaration order.
+  useEffect(() => { playRef.current = play }, [play])
 
   /**
    * Push the current mix onto the live graph.

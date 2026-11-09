@@ -379,7 +379,7 @@ test('playback rewinds when it runs out, so the press is never dead', () => {
   // Both halves of I-44 are load-bearing: rewinding on natural stop removes the
   // bad state, and the guard in play() handles a playhead dragged into it.
   const raw = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
-  assert.match(raw, /const start = playbackStart\(project, asked\)/, 'play() asks the shared helper where to start')
+  assert.match(raw, /const start = wrap \? playbackStart\(project, asked\) : Math\.min\(asked, contentEnd\(project\)\)/, 'play() asks the shared helper where to start, and a seek clamps instead of wrapping')
   const tail = raw.slice(raw.indexOf('if (at >= fromRef.current + total)'))
   assert.match(tail.slice(0, 900), /fromRef\.current = 0/, 'running out resets the playhead')
   assert.match(tail.slice(0, 900), /setPositionEverywhere\(0\)/, 'and the visible position with it')
