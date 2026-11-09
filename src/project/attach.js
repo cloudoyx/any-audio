@@ -254,6 +254,8 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
   pan = 0,
   fadeInSec = 0,
   fadeOutSec = 0,
+  peakDb,
+  rmsDb,
   note,
 } = {}) {
   const { material } = await importGeneratedMaterial(workspaceRoot, projectId, {
@@ -263,6 +265,10 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
     snapshot,
     tool,
     label: label ?? trackName,
+    // A caller that already measured the samples hands the numbers over instead
+    // of making the import walk them again (improvement plan 03, I-36).
+    peakDb,
+    rmsDb,
   })
   const placed = await attachClip(workspaceRoot, projectId, material, {
     trackName,

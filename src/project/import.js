@@ -287,7 +287,7 @@ export async function importFile(workspaceRoot, projectId, sourcePath, { findFfm
  * internal format). The caller supplies the creation snapshot contents.
  */
 export async function importGeneratedMaterial(workspaceRoot, projectId, {
-  sourcePath, kind, snapshotKind, snapshot, tool, label,
+  sourcePath, kind, snapshotKind, snapshot, tool, label, peakDb, rmsDb,
 }) {
   const dir = projectDir(workspaceRoot, projectId)
   await assertReadableFile(sourcePath)
@@ -318,8 +318,10 @@ export async function importGeneratedMaterial(workspaceRoot, projectId, {
     channels: IMPORT_CHANNELS,
     kind,
     bytes: (await stat(materialCopy)).size,
-    peakDb: analysis.peakDb,
-    rmsDb: analysis.rmsDb,
+    // A caller that already walked these samples hands its numbers over; the
+    // import measures only when it was given none (improvement plan 03, I-36).
+    peakDb: peakDb === undefined ? analysis.peakDb : peakDb,
+    rmsDb: rmsDb === undefined ? analysis.rmsDb : rmsDb,
     source: { kind: 'generated', snapshot: snapshotRel, tool: tool ?? null, label: label ?? null },
   })
   return { material, peaks: peaksRel }

@@ -202,6 +202,81 @@ await test('music renders', async () => {
   assert.ok(text.trim().length > 0)
 })
 
+await test('a plain music call still reports every track level', async () => {
+  // Improvement plan 03, I-35. Level used to depend on `analyze`/`stems`, so the
+  // ordinary call reported nothing and an Agent had to spend N more syntheses to
+  // learn the balance — the first turn of the "render four times" loop.
+  const definition = tools.get('anyaudio_music')
+  const value = await definition.execute({
+    projectId,
+    score: {
+      title: '电平检查曲',
+      tracks: [
+        { name: 'lead', instrument: 'piano', notes: [[0, 0.5, 'C5', 100], [0.5, 0.5, 'E5', 100]] },
+        { name: 'pad', instrument: 'strings', gainDb: -14, notes: [[0, 1, 'C3', 80]] },
+      ],
+    },
+    durationSec: 1.2,
+    tailSec: 0.2,
+  }, makeExec())
+  assert.equal(value.tracks.length, 2, 'both tracks are reported')
+  for (const track of value.tracks) {
+    assert.equal(typeof track.peakDb, 'number', `${track.name} has a peak without analyze:true`)
+    assert.equal(typeof track.rmsDb, 'number', `${track.name} has an RMS without analyze:true`)
+  }
+  // The quieter part must actually measure quieter: a number that is merely
+  // present would pass the check above while proving nothing.
+  const lead = value.tracks.find((track) => track.name === 'lead')
+  const pad = value.tracks.find((track) => track.name === 'pad')
+  assert.ok(pad.rmsDb < lead.rmsDb - 3, `the -14 dB pad must measure below the lead: ${pad.rmsDb} vs ${lead.rmsDb}`)
+
+  // And the reply says so, or an Agent will call the tool again to find out.
+  const text = definition.output.render({}, value).map((block) => block.text).join('\n')
+  assert.match(text, /measured during this render/, 'the reply says the levels are already here')
+  assert.match(text, /do not render the score again/i, 'and sends the Agent to the clip gain instead')
+})
+
+await test('the per-track pass runs once per track, not twice', async () => {
+  // `stems:true` needs each track's audio written out; the levels come from that
+  // same pass. Two separate loops would double the most expensive part of the
+  // call, and nothing in the reply would reveal it.
+  const { eachTrackStem } = await import('../src/tools/music.js')
+  const compiled = {
+    tracks: [
+      { name: 'a', notes: [1] },
+      { name: 'b', notes: [1] },
+      { name: 'empty', notes: [] },
+    ],
+  }
+  const calls = []
+  const { levels, rendered } = await eachTrackStem(compiled, {
+    gain: 1,
+    renderOne: async (track) => {
+      calls.push(track.name)
+      return { channels: [new Float32Array([0])], peakDb: -3, rmsDb: -9 }
+    },
+    onStem: async () => {},
+  })
+  assert.deepEqual(calls, ['a', 'b'], 'one synthesis per track that has notes')
+  assert.equal(rendered, 2)
+  assert.equal(levels.get('a').rmsDb, -9, 'the level comes from that same render')
+  assert.equal(levels.has('empty'), false, 'a track with no notes is not measured: it can only report silence')
+})
+
+await test('the master gain is applied to every measured level exactly once', async () => {
+  // Stems are rendered un-normalised and then shifted by the master's gain, so
+  // the numbers describe what will actually be heard.
+  const { eachTrackStem } = await import('../src/tools/music.js')
+  const compiled = { tracks: [{ name: 'a', notes: [1] }] }
+  const { levels } = await eachTrackStem(compiled, {
+    gain: 10 ** (-3 / 20),
+    renderOne: async () => ({ channels: [new Float32Array([0])], peakDb: -6, rmsDb: -12 }),
+  })
+  const level = levels.get('a')
+  assert.ok(Math.abs(level.peakDb - -9) < 0.001, `peak should shift by the master gain, got ${level.peakDb}`)
+  assert.ok(Math.abs(level.rmsDb - -15) < 0.001, `RMS should shift too, got ${level.rmsDb}`)
+})
+
 await test('sfx materials mode renders', async () => {
   const text = await renderOf('anyaudio_sfx', {
     projectId,

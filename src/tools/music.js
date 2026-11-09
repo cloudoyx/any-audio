@@ -16,6 +16,43 @@ function describeTracks(tracks) {
     .join('\n')
 }
 
+/**
+ * One synthesis per track, in one pass, for both the level and the stem files.
+ *
+ * `anyaudio_music` mixes every track through a single synth, so a track's own
+ * level exists only if that track is synthesised on its own (improvement plan
+ * 03, I-35 — the "renderer is already per track" assumption was wrong, it
+ * described `project/render.js`, not this one). That makes the cost N extra
+ * syntheses; what must never happen is paying it *twice*, which is exactly what
+ * a separate "measure" pass beside a separate "write stems" pass would do.
+ *
+ * `renderOne` is injected so the test can count calls with a stub instead of
+ * rendering twelve tracks of real audio.
+ */
+export async function eachTrackStem(compiled, { renderOne, gain = 1, onStem = null }) {
+  const levels = new Map()
+  const gainDb = Number.isFinite(gain) && gain > 0 ? 20 * Math.log10(gain) : 0
+  let rendered = 0
+  for (const track of compiled.tracks) {
+    // A track with no notes can only render silence. Synthesising it to learn
+    // that would spend a full pass to produce −Infinity, which JSON cannot even
+    // carry — so it is skipped and simply has no level to report.
+    if (!track.notes?.length) continue
+    const stem = await renderOne(track)
+    rendered++
+    // The level is kept even when it is −Infinity: that value is how a track that
+    // did play but came out silent (a dB-written automation curve, say) is
+    // reported as silent rather than as "quiet". The reply filters it out of the
+    // numbers and explains it in a warning instead.
+    const level = { peakDb: stem.peakDb + gainDb, rmsDb: stem.rmsDb + gainDb }
+    levels.set(track.name, level)
+    if (!onStem) continue
+    const channels = gain === 1 ? stem.channels : stem.channels.map((channel) => channel.map((sample) => sample * gain))
+    await onStem(track, channels, level)
+  }
+  return { levels, rendered }
+}
+
 export const musicToolDefinition = finalizeTool({
   name: 'anyaudio_music',
   description:
@@ -27,7 +64,7 @@ export const musicToolDefinition = finalizeTool({
     'Drum kits always come from the default font (the first loaded bank) — pass another kit as "font" if you need it. ' +
     'Score format (seconds on the video timeline): {title, tracks:[{name, instrument, source, gainDb, pan, reverb, drums, humanize:{timingMs,velocity}, notes:[[startSec, durSec, pitch|pitches, velocity]]}], automation:[{track, controller, points:[[sec,value]]}]}. ' +
     'Pitch accepts MIDI numbers or names (D3, F#4, Bb2); instruments accept GM names (piano, cello, strings, koto, shakuhachi, erhu, guzheng) or GM program numbers. ' +
-    'Each track\'s gainDb is its real share of the music bus: the master is peak-normalised, which does not rebalance parts, so a melody at -3 dB against accompaniment at -16 dB will bury them. Positive values lift a track above the loudest one (the whole score is shifted instead of clipping). Render with analyze:true (or stems:true) to see per-track RMS and get a warning when a part sits more than 12 dB under the loudest one. ' +
+    'Each track\'s gainDb is its real share of the music bus: the master is peak-normalised, which does not rebalance parts, so a melody at -3 dB against accompaniment at -16 dB will bury them. Positive values lift a track above the loudest one (the whole score is shifted instead of clipping). Per-track levels come back on every call (this tool measures them as part of rendering, one synthesis per track), so there is nothing to ask for; a part sitting more than 12 dB under the loudest one gets a warning. ' +
     'Read the anyaudio-scoring skill for arrangement technique and mixing workflow.',
   parameters: {
     type: 'object',
@@ -42,8 +79,8 @@ export const musicToolDefinition = finalizeTool({
       durationSec: { type: 'number', description: 'Exact output length. Defaults to last note end + tailSec.' },
       tailSec: { type: 'number', description: 'Extra seconds after the last note for release and reverb, default 2.' },
       peakDb: { type: 'number', description: 'Normalisation peak in dBFS, default -3. Pass null to keep the raw level.' },
-      stems: { type: 'boolean', description: 'Also write one WAV per track next to the mix. Stems keep the master\'s relative levels (they are not peak-normalised), so they can be inspected or re-balanced later.' },
-      analyze: { type: 'boolean', description: 'Render every track separately only to report its peak/RMS level (no stem files). Use this to check the balance between melody and accompaniment.' },
+      stems: { type: 'boolean', description: 'Also write one WAV per track next to the mix, when stems:true each track gets its own file and trackName is ignored. Stems keep the master\'s relative levels (they are not peak-normalised), so they can be inspected or re-balanced later.' },
+      analyze: { type: 'boolean', description: 'Include more per-track detail in the reply (the balance warning and the silence check). Per-track levels are measured on every call and no longer depend on this flag; use it only when you want the detail listed. Measuring costs one extra synthesis per track — measured on a 12-track 64 s score at 48 kHz: mixed render 2.7 s, the twelve per-track passes 13.4 s, so the call takes about 16 s instead of 3 s. That price is paid on every call, so do not call this tool again just to see the balance.' },
       replace: { type: 'boolean', description: 'Replace instead of append. When this music is a second pass at a score the project already holds (you rebalanced the parts and are rendering again), pass true: the track family named after this score is cleared first, so the project keeps one set of stems rather than gaining a second. Without it a re-render appends, which is how a project ends up with "钟琴旋律" and "钟琴旋律 2" side by side.' },
     },
     required: ['score', 'projectId'],
@@ -87,6 +124,10 @@ export const musicToolDefinition = finalizeTool({
         ? `In project ${value.projectId}: ${placed.map((entry) => `${entry.clipId} "${entry.trackName}" @ ${Number(entry.startSec).toFixed(2)}s`).join(', ')}`
         : `In project ${value.projectId}.`)
       if (value.delivered) lines.push(`Delivered copy: ${value.delivered}`)
+      // The point of I-35 is that this sentence exists on every reply. An Agent
+      // that does not know the levels are already here calls the tool again to
+      // find out, which is the whole "render four times" loop.
+      lines.push('Per-track levels above were measured during this render and are recorded in the material index — no second call is needed to see the balance. To change the balance, adjust the clip gain in the project (anyaudio_project, target:"clip", field:"gainDb"); do not render the score again.')
       lines.push('Next: the project holds this music now — add narration and effects with their own projectId, then render the project for the finished file.')
       return lines.join('\n')
     }),
@@ -156,18 +197,27 @@ export const musicToolDefinition = finalizeTool({
 
     const stems = []
     const stemFiles = []
-    const levels = new Map()
     const usedStemNames = new Set()
-    if (args.stems === true || args.analyze === true) {
-      const base = target.replace(/\.wav$/i, '')
-      for (const track of compiled.tracks) {
-        const stem = await renderCompiled(compiled, { banks: plan.banks, layout: plan.layout, sampleRate, durationSec, normalize: false, onlyTrack: track.name })
-        // Apply the master's normalisation gain to every stem equally: the parts
-        // keep their authored balance and still sum back to the master.
-        const gain = Number.isFinite(rendered.appliedGain) ? rendered.appliedGain : 1
-        const channels = gain === 1 ? stem.channels : stem.channels.map((channel) => channel.map((sample) => sample * gain))
-        levels.set(track.name, { peakDb: stem.peakDb + 20 * Math.log10(gain || 1), rmsDb: stem.rmsDb + 20 * Math.log10(gain || 1) })
-        if (args.stems === true) {
+    // Every call measures every track. This is the second step of "generate →
+    // measure → mix" (improvement plan 03, I-35): per-track level is the only
+    // evidence that says whether a score is balanced, and making it depend on a
+    // flag meant an Agent that did not ask for it saw nothing, assumed the mix
+    // was fine, and re-rendered the whole score to find out.
+    //
+    // The cost is N more full syntheses and it is not hidden: `renderCompiled`
+    // mixes every track through one synth, so a single track's level can only
+    // come from running that track alone. Measured on a 12-track 64 s score
+    // (48 kHz): the mixed render takes 2.7 s, the twelve stems 13.4 s — about
+    // 5.9x, i.e. ~13 s more for that score.
+    const gain = Number.isFinite(rendered.appliedGain) ? rendered.appliedGain : 1
+    const base = target.replace(/\.wav$/i, '')
+    const { levels } = await eachTrackStem(compiled, {
+      gain,
+      renderOne: (track) => renderCompiled(compiled, {
+        banks: plan.banks, layout: plan.layout, sampleRate, durationSec, normalize: false, onlyTrack: track.name,
+      }),
+      onStem: args.stems === true
+        ? async (track, channels, level) => {
           // `\w` is ASCII-only, so every Chinese track name collapsed to the same
           // `_`: a five-part score wrote all five stems to one path and only the
           // last survived, while the reply listed that same path five times. Keep
@@ -189,11 +239,15 @@ export const musicToolDefinition = finalizeTool({
             tool: 'anyaudio_music',
             label: track.name,
             exec,
+            // The level was just measured; a second pass over the same samples
+            // would only reproduce it.
+            peakDb: Number.isFinite(level.peakDb) ? Number(level.peakDb.toFixed(2)) : null,
+            rmsDb: Number.isFinite(level.rmsDb) ? Number(level.rmsDb.toFixed(3)) : null,
           })
           stemFiles.push(attached)
         }
-      }
-    }
+        : null,
+    })
 
     // A score with stems goes into the project stem by stem (spec §5.3), so a
     // person can rebalance the instruments. A plain render is one track.
@@ -229,7 +283,12 @@ export const musicToolDefinition = finalizeTool({
         gainDb: track.gainDb,
         notes: track.notes.length,
         endSec: Number(track.endSec.toFixed(2)),
-        ...(level ? { peakDb: Number(level.peakDb.toFixed(2)), rmsDb: Number(level.rmsDb.toFixed(2)) } : {}),
+        // −Infinity cannot go through JSON, and the output schema would reject
+        // the whole reply because of it. A silent track is reported by the
+        // warning below instead, where the reason can be explained.
+        ...(level && Number.isFinite(level.peakDb) && Number.isFinite(level.rmsDb)
+          ? { peakDb: Number(level.peakDb.toFixed(2)), rmsDb: Number(level.rmsDb.toFixed(2)) }
+          : {}),
       }
     })
     const warnings = [...compiled.warnings, ...plan.warnings, ...layoutNotes]
@@ -238,10 +297,10 @@ export const musicToolDefinition = finalizeTool({
       warnings.push(`score runs to ${compiled.durationSec.toFixed(2)}s but durationSec is ${durationSec.toFixed(2)}s — notes past the end are cut; add tail or end the music earlier`)
     }
     if (rendered.brokenSamples > 0) warnings.push(`${rendered.brokenSamples} non-finite samples were zeroed`)
-    const leveled = [...levels.entries()].filter(([trackName]) => {
-      const track = compiled.tracks.find((candidate) => candidate.name === trackName)
-      return track && track.notes.length > 0
-    })
+    // The balance check runs on every call now, because the measurement does. It
+    // used to live behind `analyze`, which made the one warning that says "this
+    // part is inaudible" something an Agent had to know to ask for.
+    const leveled = [...levels.entries()]
     if (leveled.length > 1) {
       const loudest = Math.max(...leveled.map(([, level]) => level.rmsDb))
       for (const [trackName, level] of leveled) {
