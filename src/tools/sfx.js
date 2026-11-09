@@ -193,6 +193,11 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
         )
       }
     }
+    // The level is measured here for the reply. It goes into the index too, so a
+    // person asking a week later — or the clip bay's own meter — reads the same
+    // number instead of re-reading the file (improvement plan 03, I-36).
+    const peakDb = Number(toDb(peakOf(channels)).toFixed(2))
+    const rmsDb = Number(toDb(rmsOf(channels)).toFixed(3))
     const attached = await attachMaterialFile(workspaceRoot, projectId, written.path, {
       kind: category === '环境音' ? 'ambience' : 'sfx',
       trackName: wantedTrackName,
@@ -203,14 +208,16 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
       label,
       startSec: Number.isFinite(wantedStart) ? Number(wantedStart) : undefined,
       autoStart: !Number.isFinite(wantedStart),
+      peakDb,
+      rmsDb,
     })
     materials.push({
       file: relativeToWorkspace(workspaceRoot, written.path),
       absolutePath: written.path,
       category,
       durationSec: Number(lengthSec.toFixed(3)),
-      peakDb: Number(toDb(peakOf(channels)).toFixed(2)),
-      rmsDb: Number(toDb(rmsOf(channels)).toFixed(3)),
+      peakDb,
+      rmsDb,
       ...(entry
         ? { preset: entry.id, presetName: `${entry.name}（${entry.zh}）`, font: entry.font, program: entry.program, bank: entry.bank }
         : { type: item.type ?? item.name }),

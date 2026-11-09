@@ -286,6 +286,38 @@ await test('sfx materials mode renders', async () => {
   assert.ok(text.trim().length > 0)
 })
 
+await test('sfx levels reach the material index, not just the reply', async () => {
+  // Improvement plan 03, I-36. The sound-effect path measured every file it made
+  // and then dropped the numbers on the floor: they existed for one reply and
+  // nowhere else, while the same field on a music stem was being written down.
+  const { readMaterialIndex } = await import('../src/project/store.js')
+  const definition = tools.get('anyaudio_sfx')
+  const value = await definition.execute({
+    projectId,
+    mode: 'materials',
+    items: [
+      { type: 'impact', durationSec: 0.3, gainDb: 0 },
+      { type: 'impact', durationSec: 0.3, gainDb: -6 },
+      { type: 'impact', durationSec: 0.3, gainDb: -12 },
+    ],
+  }, makeExec())
+
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const byId = new Map(index.materials.map((entry) => [entry.id, entry]))
+  const levels = []
+  for (const material of value.materials) {
+    const entry = byId.get(material.attached.materialId)
+    assert.ok(entry, `${material.attached.materialId} must be in the index`)
+    assert.equal(entry.rmsDb, material.rmsDb, `the index must carry the reply's RMS for ${material.file}`)
+    assert.equal(entry.peakDb, material.peakDb, 'and its peak')
+    levels.push(entry.rmsDb)
+  }
+  // The three were rendered 6 dB apart: identical numbers would mean the level
+  // was recorded but not measured.
+  assert.ok(levels[0] > levels[1] + 4 && levels[1] > levels[2] + 4,
+    `each -6 dB step must show up in the recorded level: ${levels.map((db) => db.toFixed(1)).join(' / ')}`)
+})
+
 await test('sfx timeline mode renders', async () => {
   const text = await renderOf('anyaudio_sfx', {
     projectId,
