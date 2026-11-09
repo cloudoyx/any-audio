@@ -78,6 +78,26 @@ function FontsTab({ state, reload, notify }) {
     }
   }
 
+  // Choosing the default bank had no control at all: the page only showed the
+  // path a render would use, which is the fallback when nothing is configured —
+  // so a person could read "默认音源：GeneralUser" and believe they had chosen it
+  // while every tool still reported "not set" (improvement plan 04).
+  async function setDefault(font) {
+    const value = font.recommendedId || font.path
+    setBusy(`default:${font.path}`)
+    try {
+      await api('/config', { method: 'POST', body: { patch: { music: { font: value } } } })
+      notify(t('已设为默认音源'))
+      await reload()
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const isDefault = (font) => Boolean(fonts.configured) && (fonts.configured === font.recommendedId || fonts.configured === font.path)
+
   async function runPreview(path, program) {
     setBusy(`preview:${path}:${program}`)
     try {
@@ -157,6 +177,7 @@ function FontsTab({ state, reload, notify }) {
               installed ? null : h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装')),
               installed ? h(Btn, { onClick: () => openPreview(installed.path) }, t('试听')) : null,
               installed ? h(Btn, { onClick: () => act('verify', { path: installed.path }) }, t('校验')) : null,
+              installed ? h(Btn, { kind: isDefault(installed) ? 'primary' : 'plain', onClick: () => setDefault(installed) }, isDefault(installed) ? t('当前默认') : t('设为默认')) : null,
               installed ? h(Btn, { onClick: () => act('remove', { path: installed.path, removeFile: false }) }, t('移除记录')) : null,
               installed ? h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', installed.name))) act('remove', { path: installed.path, removeFile: true }) } }, t('删除文件')) : null,
             ),
@@ -191,6 +212,7 @@ function FontsTab({ state, reload, notify }) {
             h('span', { style: S.mono }, bytes(row.bytes)),
             h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
             h(Btn, { onClick: () => act('verify', { path: row.path }) }, t('校验')),
+            h(Btn, { kind: isDefault(row) ? 'primary' : 'plain', onClick: () => setDefault(row) }, isDefault(row) ? t('当前默认') : t('设为默认')),
             h(Btn, { onClick: () => act('remove', { path: row.path, removeFile: true }) }, t('删除文件')),
           ),
           h('div', { style: S.mono }, row.path),
@@ -198,7 +220,12 @@ function FontsTab({ state, reload, notify }) {
     ),
     h(Card, { title: t('音源目录'), desc: t('整台机器共用这一个音源库；环境变量 ANYAUDIO_FONTS 可以追加目录。') },
       h('div', { style: S.mono }, fonts.directories.join('\n')),
-      h('div', { style: S.desc }, t('默认音源：{0}', fonts.defaultPath || t('未安装音源'))),
+      // "默认音源" used to show the path a render would land on, which is the
+      // fallback when nothing was chosen. Naming both makes "did I set one?"
+      // answerable from this page (improvement plan 04).
+      h('div', { style: S.desc }, fonts.configured
+        ? t('你选的默认音源：{0}', fonts.configured)
+        : t('你选的默认音源：未选择（没选时使用 {0}）', fonts.fallbackPath || t('未安装音源'))),
     ),
   )
 }
@@ -410,7 +437,7 @@ function DiagnosticsTab({ state, reload, notify }) {
         h('div', { style: S.row }, h('span', { style: S.label }, t('插件版本')), h('span', { style: S.mono }, state.version)),
         h('div', { style: S.row }, h('span', { style: S.label }, t('配置文件')), h('span', { style: S.mono }, state.configPath)),
         h('div', { style: S.row }, h('span', { style: S.label }, 'ffmpeg'), h('span', { style: S.mono }, state.ffmpeg ? `${state.ffmpeg.path} (${state.ffmpeg.version})` : t('未找到：TTS 转 WAV 与视频封装会失败，纯 WAV 混音不受影响'))),
-        h('div', { style: S.row }, h('span', { style: S.label }, t('默认音源')), h('span', { style: S.mono }, state.fonts.defaultPath || t('未安装音源'))),
+        h('div', { style: S.row }, h('span', { style: S.label }, t('默认音源')), h('span', { style: S.mono }, state.fonts.configured || t('未选择（用 {0}）', state.fonts.fallbackPath || t('未安装音源')))),
         h('div', { style: S.row }, h('span', { style: S.label }, 'Node'), h('span', { style: S.mono }, state.platform.node)),
       ),
       h('div', { style: S.row },

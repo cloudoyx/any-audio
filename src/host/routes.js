@@ -135,8 +135,18 @@ async function fontState(workspaceRoot) {
       status: row?.status ?? 'missing',
     }
   })
-  const defaultPath = await configuredDefaultPath(workspaceRoot).catch(() => null)
-  return { rows, available, defaultPath, directories: fontSearchDirs(), libraryDir: userFontDir() }
+  // Two different things answer to "default" in this page: the bank the person
+  // actually chose (music.font), and the bank a render falls back to when they
+  // chose nothing. Showing only the resolved path made the fallback look like a
+  // setting, so "默认音源：GeneralUser" read as "I configured this" while the
+  // tools kept reporting "not set" (improvement plan 04).
+  const { config } = await readConfig()
+  const resolved = await resolveConfiguredDefault(config.music.font, { workspaceRoot }).catch(() => null)
+  const defaultPath = resolved?.path ?? null
+  const configured = resolved?.configured ?? ''
+  const stale = resolved?.stale === true
+  const fallbackPath = (await resolveConfiguredDefault('', { workspaceRoot }).catch(() => null))?.path ?? null
+  return { rows, available, defaultPath, configured, stale, fallbackPath, directories: fontSearchDirs(), libraryDir: userFontDir() }
 }
 
 /**

@@ -36,10 +36,11 @@ function dbLabel(value) {
  */
 function LevelStrip({ material, item }) {
   const sourceDb = typeof material?.rmsDb === 'number' && Number.isFinite(material.rmsDb) ? material.rmsDb : null
+  const peakDb = typeof material?.peakDb === 'number' && Number.isFinite(material.peakDb) ? material.peakDb : null
   const gainDb = Number(item?.gainDb) || 0
   const actualDb = sourceDb === null ? null : sourceDb + gainDb
   return h('div', {
-    title: t('素材电平 → 片段增益 → 实际电平'),
+    title: t('素材平均电平 → 片段增益 → 实际平均电平；峰值是素材里最高的那一个采样'),
     style: {
       display: 'flex', alignItems: 'baseline', gap: 4, flexWrap: 'wrap',
       border: `1px solid ${C.border}`, borderRadius: 6, padding: '2px 6px',
@@ -47,13 +48,20 @@ function LevelStrip({ material, item }) {
     },
   },
     h('span', { style: { color: '#9fc0ff', fontSize: 12, fontWeight: 600 } }, dbLabel(sourceDb)),
-    h('span', { style: { color: C.muted } }, t('素材 dBFS')),
+    // "dBFS" alone invited a peak-versus-RMS comparison, and the two differed by
+    // 16 dB on a spoken line (measured: -20.3 RMS, -3.9 peak) — the number read as
+    // wrong. Name the measure, and show the peak that was already recorded next
+    // to it so the gap explains itself.
+    h('span', { style: { color: C.muted } }, t('素材平均 dBFS')),
+    peakDb === null
+      ? null
+      : h('span', { style: { color: C.muted } }, `· ${t('峰值')} ${dbLabel(peakDb)}`),
     h('span', { style: { color: C.muted } }, '→'),
     h('span', { style: { color: '#ffd08a', fontSize: 12, fontWeight: 600 } }, `${gainDb >= 0 ? '+' : ''}${gainDb.toFixed(1)}`),
     h('span', { style: { color: C.muted } }, t('片段 dB')),
     h('span', { style: { color: C.muted } }, '→'),
     h('span', { style: { color: C.good, fontSize: 12, fontWeight: 600 } }, dbLabel(actualDb)),
-    h('span', { style: { color: C.muted } }, t('实际 dBFS')),
+    h('span', { style: { color: C.muted } }, t('实际平均 dBFS')),
     sourceDb === null
       ? h('span', { style: { color: C.muted } }, `· ${t('素材电平未知')}`)
       : null,

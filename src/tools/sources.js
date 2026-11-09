@@ -117,10 +117,17 @@ export const sourcesToolDefinition = finalizeTool({
         }
         return [
           value.fonts.length ? 'Installed SoundFont banks:' : 'No SoundFont installed yet — run anyaudio_sources with action "install".',
-          ...value.fonts.map((font) => `- ${font.name} (${font.source}, ${formatBytes(font.bytes)})${font.default ? ' [default]' : font.recommended ? ' [recommended]' : ''} → ${font.path}`),
+          ...value.fonts.map((font) => `- ${font.name} (${font.source}, ${formatBytes(font.bytes)})${font.default ? ' [fallback]' : font.recommended ? ' [recommended]' : ''} → ${font.path}`),
           `Scores (1-10 by family): ${value.fonts.map(withScores).join(' | ') || 'none'}`,
           `Families: ${Object.keys(CATEGORY_LABELS).join(', ')}`,
-          `Default source: ${value.defaultSource ?? 'not set (uses the installed default bank)'}`,
+          // Two different things answer to "default": the bank the person chose
+          // with action "use" (music.font), and the bank used when they chose
+          // nothing. Calling both "default" is what made a person believe they
+          // had configured one, while the tool kept saying "not set"
+          // (improvement plan 04).
+          value.defaultSource
+            ? `Configured default source: ${value.defaultSource}`
+            : `Configured default source: not set — renders fall back to ${value.fonts.find((font) => font.default)?.name ?? 'the installed default bank'}`,
           `Search directories: ${value.directories.join(' | ')}`,
           ...(value.legacy?.length
             ? [
@@ -129,7 +136,7 @@ export const sourcesToolDefinition = finalizeTool({
               ]
             : []),
           `Source kinds: ${value.kinds.map((kind) => `${kind.id}:${kind.status}`).join(', ')}`,
-          `Recommended: ${RECOMMENDED_FONTS.map((font) => `${font.id} (${formatBytes(font.bytes)}, ${font.license})${font.suggested ? ' [suggested]' : ''}${font.default ? ' [default]' : ''}`).join('; ')}`,
+          `Recommended: ${RECOMMENDED_FONTS.map((font) => `${font.id} (${formatBytes(font.bytes)}, ${font.license})${font.suggested ? ' [suggested]' : ''}${font.default ? ' [fallback]' : ''}`).join('; ')}`,
         ].join('\n')
       }
       return value.message ?? 'done'
