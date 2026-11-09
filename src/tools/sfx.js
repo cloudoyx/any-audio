@@ -5,10 +5,11 @@ import { renderSfxMaterial, SFX_TYPES, categoryOf } from '../audio/sfx.js'
 import { listSfxPresets, resolveSfxPreset, SFX_FONTS, SFX_GROUPS } from '../audio/sfx-presets.js'
 import { padOrTrim, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { basename, dirname, join, resolve } from 'node:path'
-import { mkdir, stat, writeFile } from 'node:fs/promises'
-import { finalizeTool, deliverCopy, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, resolveOutputPath, seconds as clampSeconds, stagePath, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { finalizeTool, deliverCopy, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, resolveOutputPath, scratchPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 import { readConfig } from '../config.js'
 import { attachMaterialFile } from '../project/attach.js'
+import { projectDir } from '../project/paths.js'
 
 /** Effect categories map onto the project's track categories (spec §5.2). */
 const SFX_TRACK_CATEGORY = { 环境音: 'ambience', 动效: 'foley', 其他: 'other' }
@@ -100,9 +101,12 @@ async function renderPresetItem(item, { sampleRate, durationSec, paths, bankCach
 
 async function renderMaterials(args, projectId, items, { workspaceRoot, config, paths }) {
   const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.sfx.sampleRate, config.sfx.sampleRate)) || config.sfx.sampleRate
-  // Materials are written into `.anyaudio/out/` first: the project copy is what
-  // the person edits, so it must exist before anything is delivered elsewhere.
-  const directory = stagePath(workspaceRoot, `sfx-materials-${nowStamp()}`)
+  // Scratch, not `out/`: every file here is copied into the project before the
+  // call returns, so a second copy in `out/` was a duplicate — measured on a real
+  // project as 12.8 MB of non-deliverables, of which the narration WAVs were
+  // byte-identical to `materials/` (improvement plan 04). `out/` is where a person
+  // looks for what a tool produced, so only a delivered copy belongs there.
+  const directory = scratchPath(workspaceRoot, `sfx-materials-${nowStamp()}`)
   await mkdir(directory, { recursive: true })
 
   const fallbackLength = Number.isFinite(Number(args.durationSec)) ? Number(args.durationSec) : null
@@ -211,9 +215,12 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
       peakDb,
       rmsDb,
     })
+    // The project's copy is what the clip bay plays and what the reply has to
+    // name: the scratch file is removed once the batch is done.
+    const projectCopy = join(projectDir(workspaceRoot, projectId), attached.file)
     materials.push({
-      file: relativeToWorkspace(workspaceRoot, written.path),
-      absolutePath: written.path,
+      file: relativeToWorkspace(workspaceRoot, projectCopy),
+      absolutePath: projectCopy,
       category,
       durationSec: Number(lengthSec.toFixed(3)),
       peakDb,
@@ -275,14 +282,20 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
     }
   }
 
+  // Only a delivered copy is a deliverable; the scratch folder exists so the
+  // project can take its copy and the manifest can be handed over, then it goes.
+  await rm(directory, { recursive: true, force: true })
   return {
     ok: true,
     projectId,
     mode: 'materials',
-    directory: relativeToWorkspace(workspaceRoot, directory),
-    absoluteDirectory: directory,
-    ...(deliveredDir ? { deliveredDirectory: relativeToWorkspace(workspaceRoot, deliveredDir), deliveredDirectoryAbsolutePath: deliveredDir } : {}),
-    manifest: relativeToWorkspace(workspaceRoot, manifestPath),
+    ...(deliveredDir
+      ? {
+          deliveredDirectory: relativeToWorkspace(workspaceRoot, deliveredDir),
+          deliveredDirectoryAbsolutePath: deliveredDir,
+          manifest: relativeToWorkspace(workspaceRoot, join(deliveredDir, 'manifest.json')),
+        }
+      : {}),
     sampleRate,
     materials,
     calibration,
@@ -373,7 +386,7 @@ export const sfxToolDefinition = finalizeTool({
       }
       if (value.mode === 'materials') {
         const lines = [
-          `Wrote ${value.materials.length} sound material(s) to ${value.directory} → manifest ${value.manifest}`,
+          `Wrote ${value.materials.length} sound material(s) into project ${value.projectId}${value.deliveredDirectory ? `; a delivered copy is in ${value.deliveredDirectory}` : ''}`,
           'Materials (each starts at t=0):',
           ...value.materials.map((entry) => `- ${entry.file} · ${entry.category} · ${entry.durationSec.toFixed(2)}s · peak ${entry.peakDb.toFixed(1)} dBFS${entry.attached ? ` → track "${entry.attached.trackName}" @ ${Number(entry.attached.startSec).toFixed(2)}s` : ''}`),
           `In project ${value.projectId}: each effect is its own clip, so one can be moved or dropped without re-rendering the others.`,

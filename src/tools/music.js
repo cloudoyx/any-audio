@@ -1,4 +1,4 @@
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 import { rm } from 'node:fs/promises'
 import { planFonts, resolveConfiguredDefault } from '../audio/banks.js'
 import { compileScore } from '../audio/score.js'
@@ -6,7 +6,7 @@ import { renderCompiled } from '../audio/synth.js'
 import { readConfig } from '../config.js'
 import { attachMaterialFile } from '../project/attach.js'
 import { projectDir } from '../project/paths.js'
-import { deliverCopy, deliveryPath, finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, scratchPath, seconds as clampSeconds, stagePath, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
+import { deliverCopy, deliveryPath, finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, scratchPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 
 function describeTracks(tracks) {
   return tracks
@@ -163,7 +163,12 @@ export const musicToolDefinition = finalizeTool({
     // Render into `.anyaudio/out/` first: this file is not the deliverable, it is
     // the material that is about to join the project. `output` only says where a
     // delivered copy goes once the project owns the material (I-10).
-    const target = stagePath(workspaceRoot, `score-${nowStamp()}.wav`)
+    // Render into scratch space: the mixdown is either copied into the project
+    // (no stems) or a byproduct of a stems render — either way the copy a person
+    // keeps lives in the project, and `out/` should only hold what they asked
+    // for (improvement plan 04; measured: 9.5 MB of a 49.6s score sat in `out/`
+    // with nothing in the project referencing it).
+    const target = scratchPath(workspaceRoot, `score-${nowStamp()}.wav`)
     const rendered = await renderCompiled(compiled, { banks: plan.banks, layout: plan.layout, sampleRate, durationSec, peakDb, normalize })
     const written = await writeWavFile(target, rendered.channels, sampleRate)
     // Replace or append, decided before anything is written.
@@ -287,6 +292,13 @@ export const musicToolDefinition = finalizeTool({
       requested: args.output,
       stagedPath: written.path,
     }))
+    // The copy that matters is the one the project owns (or the delivered copy
+    // when the caller asked for one). A stems render has no project copy of the
+    // mixdown, so the reply names the first stem rather than a scratch file that
+    // no longer exists (improvement plan 04).
+    await rm(written.path, { force: true })
+    const primary = delivered
+      ?? (attached[0]?.file ? join(projectDir(workspaceRoot, projectId), attached[0].file) : null)
 
     const tracks = compiled.tracks.map((track) => {
       const assignment = plan.layout.get(track.name)
@@ -347,8 +359,7 @@ export const musicToolDefinition = finalizeTool({
     return {
       ok: true,
       projectId,
-      file: relativeToWorkspace(workspaceRoot, written.path),
-      absolutePath: written.path,
+      ...(primary ? { file: relativeToWorkspace(workspaceRoot, primary), absolutePath: primary } : {}),
       ...(delivered ? { delivered: relativeToWorkspace(workspaceRoot, delivered), deliveredAbsolutePath: delivered } : {}),
       bytes: written.bytes,
       durationSec: Number(rendered.durationSec.toFixed(3)),

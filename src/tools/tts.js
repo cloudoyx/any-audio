@@ -1,10 +1,11 @@
-import { mkdir } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { readConfig } from '../config.js'
 import { EDGE_VOICES, MIMO_VOICES, TTS_PROVIDERS, providerInfo, resolveVoice, synthesizeSpeech, voiceDisplayName } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { attachMaterialFile } from '../project/attach.js'
-import { deliverCopy, deliveryPath, finalizeTool, nowStamp, relativeToWorkspace, requireProjectId, stagePath, textRenderer, workspaceRootOf } from './shared.js'
+import { projectDir } from '../project/paths.js'
+import { deliverCopy, deliveryPath, finalizeTool, nowStamp, relativeToWorkspace, requireProjectId, scratchPath, textRenderer, workspaceRootOf } from './shared.js'
 
 let credentialResolver = null
 
@@ -274,7 +275,11 @@ export const ttsToolDefinition = finalizeTool({
       const style = itemProvider === 'mimo'
         ? [config.tts.mimo.style, item.style, styleFromLegacy({ rate: edgeRate, pitch: edgePitch })].filter((part) => typeof part === 'string' && part.trim()).join('。')
         : undefined
-      const target = stagePath(workspaceRoot, items.length > 1 ? `speech-${stamp}-${index + 1}.wav` : `speech-${stamp}.wav`)
+      // Scratch, not `out/`: the line the person keeps is the project's copy, and
+      // `out/` is where they go looking for what a tool produced. Measured on a
+      // real 49.6s project: eight narration WAVs in `out/` were byte-identical to
+      // the ones already in `materials/` (improvement plan 04).
+      const target = scratchPath(workspaceRoot, items.length > 1 ? `speech-${stamp}-${index + 1}.wav` : `speech-${stamp}.wav`)
       await mkdir(dirname(target), { recursive: true })
       let audio
       try {
@@ -323,8 +328,16 @@ export const ttsToolDefinition = finalizeTool({
       // visible second track without anyone having to name it.
       const speaker = String(item.trackName ?? args.trackName ?? '').trim()
       const voiceLabel = voiceDisplayName(voice)
+      // A caller that already put the voice in the name ("旁白 · 晓晓") must not get
+      // it twice: the reply read `旁白 · 晓晓 · 晓晓` in a real session, which is
+      // only cosmetic but makes the track hard to address by name.
+      const namedAlready = Boolean(voiceLabel) && (
+        speaker === voiceLabel
+        || speaker.endsWith(`· ${voiceLabel}`)
+        || speaker.endsWith(` ${voiceLabel}`)
+      )
       const trackName = speaker
-        ? (voiceLabel ? `${speaker} · ${voiceLabel}` : speaker)
+        ? (voiceLabel && !namedAlready ? `${speaker} · ${voiceLabel}` : speaker)
         : (voiceLabel ? `旁白 · ${voiceLabel}` : '旁白')
       const attached = await attachMaterialFile(workspaceRoot, projectId, target, {
         kind: 'tts',
@@ -344,9 +357,13 @@ export const ttsToolDefinition = finalizeTool({
         requested: item.output,
         stagedPath: target,
       }))
+      // The reply points at the copy the project owns and the clip bay plays: the
+      // scratch file is gone by the time the Agent reads the reply.
+      const projectCopy = join(projectDir(workspaceRoot, projectId), attached.file)
+      await rm(target, { force: true })
       files.push({
-        file: relativeToWorkspace(workspaceRoot, target),
-        absolutePath: target,
+        file: relativeToWorkspace(workspaceRoot, projectCopy),
+        absolutePath: projectCopy,
         ...(delivered ? { delivered: relativeToWorkspace(workspaceRoot, delivered), deliveredAbsolutePath: delivered } : {}),
         durationSec: Number((pcm[0].length / audio.sampleRate).toFixed(3)),
         sampleRate: audio.sampleRate,
