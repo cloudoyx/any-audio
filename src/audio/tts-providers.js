@@ -229,7 +229,7 @@ function runEdgeWorker(payload, output) {
 function describeEdgeError(error) {
   const message = String(error?.message ?? error)
   if (/429|too many requests|rate limit/i.test(message)) {
-    return new Error('Edge TTS is rate limiting this machine right now (HTTP 429). Wait a minute and retry, or switch the narration engine to MiMo in Settings -> AnyAudio.')
+    return new Error('Edge TTS is rate limiting this machine right now (HTTP 429). Wait a minute and retry, or pass provider:"mimo" to switch engines (the user needs a MiMo key configured for that).')
   }
   if (/unexpected server response:?\s*200|http\s*200/i.test(message)) {
     return new Error('Edge TTS was refused by the service (its WebSocket handshake returned HTTP 200, usually a network filter or throttling). Retry later, set a proxy in Settings -> AnyAudio, or switch the narration engine to MiMo.')

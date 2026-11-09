@@ -10,7 +10,8 @@
  * touched (synthesis is not part of this path).
  */
 import assert from 'node:assert/strict'
-import { dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -19,7 +20,8 @@ process.env.ANYAUDIO_STATE = `${root}/.anyaudio/test-tmp-tts/state.json`
 process.env.ANYAUDIO_FONT_DIR = `${root}/.anyaudio/test-tmp-tts/fonts`
 
 const { resolveProviders, resolveItems } = await import(new URL('../src/tools/tts.js', import.meta.url).href)
-const { providerForVoice, resolveVoice } = await import(new URL('../src/audio/tts-providers.js', import.meta.url).href)
+const { providerForVoice, resolveVoice, MIMO_VOICES } = await import(new URL('../src/audio/tts-providers.js', import.meta.url).href)
+const SCORING = readFileSync(join(root, 'src', 'skills', 'anyaudio-scoring.md'), 'utf8')
 
 let passed = 0
 let failed = 0
@@ -222,6 +224,41 @@ test('an empty items array falls back to the single-shot shape', () => {
 test('items are labelled by position so a warning names the right line', () => {
   const items = resolveItems({ items: [{ text: 'a' }, { text: 'b' }] })
   assert.deepEqual(items.map((item) => item.label), ['item #1', 'item #2'])
+})
+
+test('the tool description names both engines\u2019 voices, including all of MiMo\u2019s', () => {
+  // Improvement plan 03, I-46. The scoring skill listed only Edge voices while
+  // the user's config said `tts.provider = "mimo"`; the Agent thought in Edge
+  // names, sent provider:"edge" to override the person's setting, hit HTTP 429
+  // twice and only found the MiMo voices by reading the config file by hand.
+  for (const voice of MIMO_VOICES) {
+    assert.ok(SCORING.includes(voice), `the scoring skill must name the MiMo voice ${voice}`)
+  }
+  assert.match(SCORING, /mimo_default/, 'including the cluster-resolved default')
+})
+
+test('nothing tells the Agent that Edge is the default', () => {
+  // The parenthesised "(edge)" read as "the default is edge", which is exactly
+  // the wrong summary of a config that says mimo.
+  const tts = readFileSync(join(root, 'src', 'tools', 'tts.js'), 'utf8')
+  const providerField = tts.slice(tts.indexOf('provider: { type: \'string\''), tts.indexOf('voice: { type: \'string\''))
+  assert.doesNotMatch(providerField, /\(edge\)/, 'the provider description no longer suggests a default')
+  assert.match(providerField, /the provider the user configured/, 'it points at the setting instead')
+
+  const index = readFileSync(join(root, 'src', 'index.js'), 'utf8')
+  assert.doesNotMatch(index, /\(Edge, or MiMo-V2\.5-TTS when selected\)/, 'the system prompt no longer puts Edge first')
+  assert.match(index, /default to what the user configured in Settings → AnyAudio/, 'it names the setting only')
+})
+
+test('a 429 sends the Agent to the other engine, not to the settings page', () => {
+  // The old text said "switch the narration engine to MiMo in Settings -> AnyAudio",
+  // which is a dead end mid-task: the Agent cannot open the settings page, and the
+  // engine can be switched per call.
+  const providers = readFileSync(join(root, 'src', 'audio', 'tts-providers.js'), 'utf8')
+  const message = providers.split(/\r?\n/).find((line) => line.includes('Edge TTS is rate limiting'))
+  assert.ok(message, 'the 429 branch is still there')
+  assert.match(message, /provider:"mimo"/, 'it names the argument that switches engines')
+  assert.doesNotMatch(message, /Settings -> AnyAudio/, 'and stops pointing at a page the Agent cannot open')
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

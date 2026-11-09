@@ -187,7 +187,7 @@ export const ttsToolDefinition = finalizeTool({
       projectId: { type: 'string', description: 'The clip bay project this narration belongs to. Required: run anyaudio_project mode:"create" first when the task has no project yet. Each line is added as material and placed on a track.' },
       trackName: { type: 'string', description: 'Optional role/character name. Lines are grouped by voice, so every line of one voice lands on one track even when two overlap; naming a speaker adds it to the label ("旁白 · 晓晓") and starts a separate family, which is what you want for a real role split. An item may override it with its own trackName.' },
       startSec: { type: 'number', description: 'Where the first line starts on the project timeline. Later lines follow the previous one; an item may set its own startSec.' },
-      provider: { type: 'string', enum: ['edge', 'mimo'], description: 'TTS engine. Defaults to the value in Settings → AnyAudio (edge). Applies to every item; an item may override it.' },
+      provider: { type: 'string', enum: ['edge', 'mimo'], description: 'TTS engine. Defaults to the provider the user configured in Settings → AnyAudio. Pass "provider" to override it. Applies to every item; an item may also override it.' },
       voice: { type: 'string', description: 'Voice name, applied to every item (an item may override it). Each name belongs to one engine — pick one from the list for the engine you are using. Defaults to Settings → AnyAudio.' },
       rate: { type: 'string', description: 'Edge speaking rate, e.g. "-12%". Applies to every item.' },
       pitch: { type: 'string', description: 'Edge pitch shift, e.g. "-3Hz". Applies to every item.' },
