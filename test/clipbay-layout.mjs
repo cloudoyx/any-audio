@@ -199,5 +199,16 @@ test('a track silenced by someone else\u2019s solo is drawn as unhearable', () =
   assert.match(clip, /track\.muted \|\| item\.muted \|\| !audible/, 'the clip greys out too')
 })
 
+test('the playhead follows the head width the person dragged', () => {
+  // Improvement plan 03, I-43. The head width became draggable in I-25 and every
+  // row followed it except this one line, which kept the constant. Measured in
+  // the browser: head at 341px, click at ruler x 200 → playhead at 637 instead of
+  // 830, off by 193px ≈ 3.2 s, with nothing on screen to hint at it.
+  assert.equal(/left: HEAD_WIDTH \+ playheadX/.test(timeline), false, 'the constant is gone from the playhead')
+  assert.match(timeline, /left: headWidth \+ playheadX/, 'it uses the live width')
+  // The constant is still the default the state starts from, so it must remain.
+  assert.match(timeline, /useState\(HEAD_WIDTH\)/, 'the constant stays as the initial width')
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1

@@ -652,7 +652,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
         h('div', {
           style: {
             position: 'absolute', top: 0, bottom: 0, width: 1, zIndex: 1,
-            left: HEAD_WIDTH + playheadX, background: C.accent, pointerEvents: 'none',
+            left: headWidth + playheadX, background: C.accent, pointerEvents: 'none',
           },
         }),
       ),
