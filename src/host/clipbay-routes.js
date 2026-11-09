@@ -23,7 +23,7 @@
  */
 import { basename, join, resolve } from 'node:path'
 import { ProjectPathError, MATERIALS_DIR, projectDir, projectFile, resolveInside } from '../project/paths.js'
-import { MaterialError, findMaterial, materialPath } from '../project/materials.js'
+import { MaterialError, deleteMaterial, findMaterial, materialPath } from '../project/materials.js'
 import { ProjectSchemaError } from '../project/schema.js'
 import { exportProject } from '../project/render.js'
 import { listProjects, projectExists, readMaterialIndex, readProject, saveProject } from '../project/store.js'
@@ -226,6 +226,22 @@ async function handle(req, res, { url, method, path, ctx }) {
     return serveFile(req, res, file, { contentType: contentTypeOf(file) })
   }
 
+  if (path === '/clipbay/material') {
+    // Deleting a material is the one arrangement write the panel cannot express
+    // as a project.json save: the record lives in the material index and the
+    // audio file on disk. The reference check inside `deleteMaterial` is the
+    // guard, so a click on a used material gets a sentence, not a broken clip
+    // (improvement plan 03, I-40).
+    if (method !== 'POST') throw new RouteError(405, 'method not allowed')
+    const root = workspaceRootOf(ctx, url)
+    const projectId = projectIdOf(url, 'project')
+    const body = await readJsonBody(req)
+    const materialId = String(body?.id ?? '').trim()
+    if (!materialId) throw new RouteError(400, 'material id is required')
+    const result = await deleteMaterial(root, projectId, materialId)
+    return json(res, 200, { ok: true, ...result })
+  }
+
   if (path === '/clipbay/video') {
     if (method !== 'GET') throw new RouteError(405, 'method not allowed')
     const root = workspaceRootOf(ctx, url)
@@ -318,7 +334,7 @@ async function handle(req, res, { url, method, path, ctx }) {
  * one fixed file from the plugin itself and accepts no path from the request.
  */
 export function needsClientHeader(path) {
-  return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/render' || path === '/clipbay/render/cancel'
+  return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/render' || path === '/clipbay/render/cancel' || path === '/clipbay/material'
 }
 
 /**

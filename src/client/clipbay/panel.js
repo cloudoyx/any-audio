@@ -21,6 +21,7 @@ import { usePlayback } from './audio.js'
 import { useAutosave } from './saving.js'
 import { useExport, availableFormats, describeJob } from './exporter.js'
 import { Timeline } from './timeline.js'
+import { MaterialBin } from './material-bin.js'
 import { Preview } from './preview.js'
 import { ClipProperties } from './properties.js'
 import { FxEditor } from './fx-editor.js'
@@ -514,6 +515,16 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           }),
       ),
     ),
+    // The material bin sits between the property column and the timeline: it is a
+    // reference list, not an editing surface, so it folds away when the person is
+    // working on the tracks (improvement plan 03, I-40).
+    h(MaterialBin, {
+      root,
+      projectId,
+      materials,
+      project,
+      onDeleted: reload,
+    }),
     h(Timeline, {
       root,
       projectId,
