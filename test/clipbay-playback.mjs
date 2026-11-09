@@ -361,6 +361,20 @@ test('a press at or past the end plays from the start', () => {
   close(playbackStart(null, 3), 3, 'and a missing one too')
 })
 
+test('the picture is started once per play, not once per frame', () => {
+  // Improvement plan 03, I-47. The follow-the-clock effect runs on every position
+  // tick and used to call node.play() each time — measured 51 times a second on an
+  // already-playing element. It bought nothing (the second effect starts the
+  // picture) and it hid a real autoplay failure behind a retry storm.
+  const preview = readFileSync(join(root, 'src', 'client', 'clipbay', 'preview.js'), 'utf8')
+  const calls = preview.split('\n').filter((line) => line.includes('.play()') && !line.trim().startsWith('*'))
+  assert.equal(calls.length, 1, `exactly one play() call may remain, found ${calls.length}`)
+  const secondEffect = preview.slice(preview.indexOf('}, [playing, hasVideo])') - 400)
+  assert.ok(secondEffect.includes('.play()'), 'and it lives in the effect that depends on [playing, hasVideo]')
+  const firstEffect = preview.slice(preview.indexOf('}, [positionSec, playing, hasVideo, seekTo])') - 700, preview.indexOf('}, [positionSec, playing, hasVideo, seekTo])'))
+  assert.ok(!firstEffect.includes('.play()'), 'the per-frame effect must only seek')
+})
+
 test('playback rewinds when it runs out, so the press is never dead', () => {
   // Both halves of I-44 are load-bearing: rewinding on natural stop removes the
   // bad state, and the guard in play() handles a playhead dragged into it.

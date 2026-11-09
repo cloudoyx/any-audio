@@ -55,6 +55,12 @@ export function Preview({ root, projectId, project, transport }) {
   // Follow the audio clock. While playing, a small drift is ignored so the two
   // clocks do not fight; a large one re-seeks. While paused, the picture follows
   // every seek, which is what makes scrubbing usable.
+  //
+  // No `play()` here: this effect runs on every position tick, and calling
+  // `play()` on an already-playing element once per frame (measured 51 times a
+  // second) buys nothing — the second effect below is what starts the picture
+  // when the transport starts (improvement plan 03, I-47). It also hid a real
+  // failure: a rejected autoplay retried forever, so the error flashed past.
   useEffect(() => {
     const node = videoRef.current
     if (!node || !hasVideo) return
@@ -64,10 +70,6 @@ export function Preview({ root, projectId, project, transport }) {
       return
     }
     if (Math.abs(node.currentTime - target) > DRIFT_LIMIT_SEC) seekTo(node, target)
-    if (typeof node.play === 'function') {
-      const started = node.play()
-      if (started && typeof started.catch === 'function') started.catch(() => {})
-    }
   }, [positionSec, playing, hasVideo, seekTo])
 
   // Starting the audio transport should also start the picture; pausing should
