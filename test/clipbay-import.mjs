@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createProject, readMaterialIndex, readProject } from '../src/project/store.js'
 import { importFile, importGeneratedMaterial, ImportError, kindOfFile, IMPORT_SAMPLE_RATE } from '../src/project/import.js'
-import { BUCKETS_PER_SECOND, bucketCount, computePeaks, peaksPathFor, readPeaks } from '../src/audio/peaks.js'
+import { analyzeChannels, BUCKETS_PER_SECOND, bucketCount, computePeaks, peaksPathFor, readPeaks } from '../src/audio/peaks.js'
 import { encodeWav, parseWav } from '../src/audio/wav.js'
 import { findFfmpeg, runFfmpeg } from '../src/tools/shared.js'
 import { projectDir, materialsDir, sourcesDir } from '../src/project/paths.js'
@@ -263,6 +263,50 @@ await test('the project folder contains exactly the spec layout', async () => {
   assert(materialNames.some((name) => name.endsWith('.peaks.json')), 'a peak cache in materials/')
   const sourceNames = await readdir(sourcesDir(ws, project.id))
   assert(sourceNames.some((name) => name.includes('.orig.')), 'the original in sources/')
+})
+
+await test('an imported material records its measured level', async () => {
+  // Improvement plan 03, I-37. The index knew a material's length but not its
+  // loudness, so "how loud is this" had no answer for a file that cannot be
+  // re-rendered at all — a user's own library or a dropped-in file.
+  const project = await createProject(ws, { name: 'levels' })
+  const { material } = await importFile(ws, project.id, wavPath, { findFfmpeg })
+  assert(typeof material.peakDb === 'number', `peakDb missing: ${material.peakDb}`)
+  assert(typeof material.rmsDb === 'number', `rmsDb missing: ${material.rmsDb}`)
+
+  // The fixture is a steady tone at 0.5 amplitude: measure the copy directly and
+  // compare, so the test cannot pass on a number that was merely present.
+  const copy = join(materialsDir(ws, project.id), `${material.id}.wav`)
+  const decoded = parseWav(await readFile(copy))
+  const measured = analyzeChannels(decoded.channels, decoded.channels[0].length / decoded.sampleRate)
+  assert(Math.abs(material.peakDb - measured.peakDb) < 0.01, `peakDb ${material.peakDb} vs measured ${measured.peakDb}`)
+  assert(Math.abs(material.rmsDb - measured.rmsDb) < 0.01, `rmsDb ${material.rmsDb} vs measured ${measured.rmsDb}`)
+  assert(measured.peakDb > -12 && measured.peakDb < 0, `a 0.5 tone peaks near -6 dBFS, got ${measured.peakDb}`)
+
+  const entry = (await readMaterialIndex(ws, project.id)).materials.find((row) => row.id === material.id)
+  assert(entry.peakDb === material.peakDb && entry.rmsDb === material.rmsDb, 'the same numbers reach the index')
+})
+
+await test('a generated material records its level too', async () => {
+  const project = await createProject(ws, { name: 'generated levels' })
+  const { material } = await importGeneratedMaterial(ws, project.id, {
+    sourcePath: wavPath,
+    kind: 'music',
+    snapshotKind: 'score',
+    snapshot: { title: '测试' },
+    tool: 'anyaudio_music',
+    label: '测试',
+  })
+  assert(typeof material.peakDb === 'number' && typeof material.rmsDb === 'number', 'generated material has levels')
+})
+
+await test('analyzeChannels reports a silent file as null, not 0 dB', async () => {
+  // -Infinity is not JSON and 0 dB would be a claim that the file is loud.
+  const silent = new Float32Array(4800)
+  const result = analyzeChannels([silent], 0.1)
+  assert(result.peakDb === null, `a silent file has no peak, got ${result.peakDb}`)
+  assert(result.rmsDb === null, `a silent file has no RMS, got ${result.rmsDb}`)
+  assert(result.peaks.buckets > 0, 'the waveform is still a real series')
 })
 
 await rm(tmpDir, { recursive: true, force: true })

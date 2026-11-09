@@ -24,7 +24,7 @@ await mkdir(workspaceRoot, { recursive: true })
 const { encodeWav } = await import('../src/audio/wav.js')
 const { projectToolDefinition } = await import('../src/tools/project.js')
 const { parseTimelineMentions, describeReference, expandTimelineReferences, formatTime } = await import('../src/host/timeline-ref.js')
-const { readProject, readMaterialIndex } = await import('../src/project/store.js')
+const { readProject, readMaterialIndex, writeMaterialIndex } = await import('../src/project/store.js')
 
 let passed = 0
 let failed = 0
@@ -143,6 +143,57 @@ await test('add_material imports a file and places it on a new track', async () 
   assert.match(index.materials[0].file, /^materials\/.+\.wav$/)
   const materialStat = await stat(join(workspaceRoot, '.anyaudio', 'projects', projectId, index.materials[0].file))
   assert.ok(materialStat.size > 0, 'the material file must exist')
+  // Improvement plan 03, I-37: the level is measured when the material lands, so
+  // "how loud is this" is answerable later without touching the file again.
+  assert.equal(typeof index.materials[0].peakDb, 'number', 'the index records a peak')
+  assert.equal(typeof index.materials[0].rmsDb, 'number', 'and an RMS')
+  assert.equal(result.materials[0].peakDb, index.materials[0].peakDb, 'read reports the measured peak')
+  assert.equal(result.materials[0].rmsDb, index.materials[0].rmsDb, 'and the measured RMS')
+})
+
+await test('read measures a material that was registered before levels existed', async () => {
+  // Every project made before I-37 has materials with no level. Re-importing is
+  // not an option — an external file cannot be re-rendered at all — so the read
+  // path measures once and writes the numbers back.
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const first = index.materials[0]
+  const knownPeak = first.peakDb
+  delete first.peakDb
+  delete first.rmsDb
+  await writeMaterialIndex(workspaceRoot, projectId, index)
+
+  const result = await call({ mode: 'read', projectId })
+  assert.equal(result.ok, true)
+  assert.equal(result.materials[0].peakDb, knownPeak, 'the read measured the same peak the import had')
+
+  const repaired = await readMaterialIndex(workspaceRoot, projectId)
+  assert.equal(typeof repaired.materials[0].rmsDb, 'number', 'and wrote the level back to the index')
+})
+
+await test('read reports an unmeasurable material as unknown, not as 0 dB', async () => {
+  // A missing file must not fail the read: the project still describes an
+  // arrangement, and this call is how a person finds out what is wrong with it.
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const entry = index.materials[0]
+  const keptFile = entry.file
+  const keptPeak = entry.peakDb
+  const keptRms = entry.rmsDb
+  entry.file = 'materials/does-not-exist.wav'
+  entry.peakDb = null
+  entry.rmsDb = null
+  await writeMaterialIndex(workspaceRoot, projectId, index)
+
+  try {
+    const result = await call({ mode: 'read', projectId })
+    assert.equal(result.ok, true, 'a missing file does not break mode:"read"')
+    assert.equal(result.materials[0].rmsDb, null, 'an unmeasured material reads as unknown')
+  } finally {
+    const restored = await readMaterialIndex(workspaceRoot, projectId)
+    restored.materials[0].file = keptFile
+    restored.materials[0].peakDb = keptPeak
+    restored.materials[0].rmsDb = keptRms
+    await writeMaterialIndex(workspaceRoot, projectId, restored)
+  }
 })
 
 await test('add_material reuses an existing track with the same name', async () => {

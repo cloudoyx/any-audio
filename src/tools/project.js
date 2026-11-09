@@ -19,7 +19,8 @@ import { isAbsolute, resolve } from 'node:path'
 import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS, validateFxChain } from '../project/schema.js'
 import { createProject, listProjects, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
 import { findMaterial, registerMaterial, deleteMaterial } from '../project/materials.js'
-import { importFile, importGeneratedMaterial } from '../project/import.js'
+import { importFile, importGeneratedMaterial, readWavChannels } from '../project/import.js'
+import { analyzeChannels } from '../audio/peaks.js'
 import { exportProject, renderProject } from '../project/render.js'
 import { ensureTrack, placeClip } from '../project/attach.js'
 import { projectDir, resolveInside } from '../project/paths.js'
@@ -36,8 +37,45 @@ function requireWorkspace(exec) {
 }
 
 
+/**
+ * Give every material in the index a measured level, and write back the ones
+ * that had none.
+ *
+ * A material's loudness is a fact about the file, so it belongs in the file's
+ * record next to its length (improvement plan 03, I-37). Materials registered
+ * before this existed have no level, and re-importing them is not an option —
+ * an external file cannot be re-rendered at all. Measuring on read costs one
+ * pass over the samples, the same cost the peaks file already pays, and it makes
+ * every older project answer the question "how loud is this" from then on.
+ *
+ * A file that has gone missing keeps `null` instead of failing the read: the
+ * project still describes an arrangement, and mode:"read" is how a person finds
+ * out what is wrong with it.
+ */
+async function measureMissingLevels(workspaceRoot, project, index) {
+  const missing = (index.materials ?? []).filter((material) => material.rmsDb === undefined || material.rmsDb === null || material.peakDb === undefined || material.peakDb === null)
+  if (missing.length === 0) return index
+  const dir = projectDir(workspaceRoot, project.id)
+  let changed = false
+  for (const material of missing) {
+    let decoded
+    try {
+      decoded = await readWavChannels(resolveInside(dir, material.file))
+    } catch {
+      continue
+    }
+    const analysis = analyzeChannels(decoded.channels, decoded.durationSec)
+    material.peakDb = analysis.peakDb
+    material.rmsDb = analysis.rmsDb
+    changed = true
+  }
+  if (changed) await writeMaterialIndex(workspaceRoot, project.id, index)
+  return index
+}
+
+
 async function projectSummary(workspaceRoot, project) {
-  const index = await readMaterialIndex(workspaceRoot, project.id)
+  const index = await measureMissingLevels(workspaceRoot, project, await readMaterialIndex(workspaceRoot, project.id))
   return {
     projectId: project.id,
     name: project.name,
@@ -76,6 +114,11 @@ async function projectSummary(workspaceRoot, project) {
       kind: material.kind,
       file: material.file,
       durationSec: material.durationSec,
+      // A material's measured level is the ledger every mix decision reads
+      // (improvement plan 03, I-37). `null` means nobody has measured it yet —
+      // it must never read as 0 dB, which would be a claim about the file.
+      peakDb: material.peakDb ?? null,
+      rmsDb: material.rmsDb ?? null,
       source: material.source?.tool ?? material.source?.kind ?? 'unknown',
     })),
     video: project.video ?? null,

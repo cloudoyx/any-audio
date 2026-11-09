@@ -40,6 +40,17 @@ export function validateMaterial(entry, path = 'material') {
   if (!MATERIAL_KINDS.includes(entry.kind)) {
     throw new ProjectSchemaError(`${path}.kind must be one of ${MATERIAL_KINDS.join(' | ')}`)
   }
+  // A material's level is part of its identity, next to its length (improvement
+  // plan 03, I-37). Both are optional because every material registered before
+  // this existed has neither, and a project must still open: a missing value
+  // means "not measured yet", never "silent".
+  for (const field of ['peakDb', 'rmsDb']) {
+    const value = entry[field]
+    if (value === undefined || value === null) continue
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new ProjectSchemaError(`${path}.${field} must be a finite number or null`)
+    }
+  }
   if (entry.source && typeof entry.source === 'object' && entry.source.snapshot !== undefined) {
     assertRelativePath(entry.source.snapshot, `${path}.source.snapshot`)
   }

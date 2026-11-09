@@ -20,15 +20,23 @@ export function bucketCount(durationSec) {
  * Build the peak series for float channels. Each bucket holds the signed
  * extremes of both channels merged: the renderer draws one shape per track, so
  * separate channels would only add data no view consumes.
+ *
+ * `analyze` is the same walk with the square sum accumulated beside it, which is
+ * how a material gets its level for free when it is imported (improvement plan
+ * 03, I-37). Returns `{ peaks, peakDb, rmsDb }`; a channel set that is pure
+ * digital silence reports `null` for both, because −Infinity is not JSON and
+ * `null` reads honestly as "nothing there".
  */
-export function computePeaks(channels, durationSec, { bucketsPerSecond = BUCKETS_PER_SECOND } = {}) {
+export function analyzeChannels(channels, durationSec, { bucketsPerSecond = BUCKETS_PER_SECOND } = {}) {
   const frames = channels?.[0]?.length ?? 0
   if (!frames) throw new Error('computePeaks needs at least one non-empty channel')
   const total = Math.max(1, Math.ceil((Number(durationSec) || frames / 48000) * bucketsPerSecond))
   const framesPerBucket = frames / total
   const min = new Array(total)
   const max = new Array(total)
-  let index = 0
+  let peak = 0
+  let squares = 0
+  let samples = 0
   for (let bucket = 0; bucket < total; bucket++) {
     const start = Math.floor(bucket * framesPerBucket)
     const end = bucket === total - 1 ? frames : Math.min(frames, Math.floor((bucket + 1) * framesPerBucket))
@@ -39,13 +47,26 @@ export function computePeaks(channels, durationSec, { bucketsPerSecond = BUCKETS
         const value = channel[i]
         if (value < low) low = value
         if (value > high) high = value
+        const magnitude = value < 0 ? -value : value
+        if (magnitude > peak) peak = magnitude
+        squares += value * value
+        samples++
       }
-      index++
     }
     min[bucket] = Number(low.toFixed(4))
     max[bucket] = Number(high.toFixed(4))
   }
-  return { bucketsPerSecond, buckets: total, durationSec: Number(durationSec), min, max }
+  const rms = samples > 0 ? Math.sqrt(squares / samples) : 0
+  return {
+    peaks: { bucketsPerSecond, buckets: total, durationSec: Number(durationSec), min, max },
+    peakDb: peak > 0 ? Number((20 * Math.log10(peak)).toFixed(2)) : null,
+    rmsDb: rms > 0 ? Number((20 * Math.log10(rms)).toFixed(3)) : null,
+  }
+}
+
+/** The peak series alone; `analyzeChannels` does the same walk with the level. */
+export function computePeaks(channels, durationSec, options) {
+  return analyzeChannels(channels, durationSec, options).peaks
 }
 
 /** Round the series so the JSON files stay small; the drawing does not need more. */

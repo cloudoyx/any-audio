@@ -12,7 +12,7 @@
 import { spawn } from 'node:child_process'
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, isAbsolute, resolve } from 'node:path'
-import { computePeaks, writePeaks } from '../audio/peaks.js'
+import { analyzeChannels, writePeaks } from '../audio/peaks.js'
 import { conformChannels, parseWav, resample } from '../audio/wav.js'
 import { MATERIALS_DIR, SOURCES_DIR, VIDEO_DIR, newMaterialId, projectDir, resolveInside } from './paths.js'
 import { readProject, saveProject } from './store.js'
@@ -214,7 +214,10 @@ export async function importFile(workspaceRoot, projectId, sourcePath, { findFfm
     if (await pathExists(materialCopy)) {
       const decoded = await readAudioForPeaks(materialCopy)
       peaksRelPath = peaksRel
-      await writePeaks(resolveInside(dir, peaksRel), computePeaks(decoded.channels, decoded.durationSec))
+      // One walk gives the waveform and the level, so a material's loudness stops
+      // being a fact nobody wrote down (improvement plan 03, I-37).
+      const analysis = analyzeChannels(decoded.channels, decoded.durationSec)
+      await writePeaks(resolveInside(dir, peaksRel), analysis.peaks)
       material = await registerMaterial(workspaceRoot, projectId, {
         id,
         file: `${MATERIALS_DIR}/${id}.wav`,
@@ -223,6 +226,8 @@ export async function importFile(workspaceRoot, projectId, sourcePath, { findFfm
         channels: IMPORT_CHANNELS,
         kind: 'video-audio',
         bytes: (await stat(materialCopy)).size,
+        peakDb: analysis.peakDb,
+        rmsDb: analysis.rmsDb,
         source: {
           kind: 'imported',
           originalName: basename(from),
@@ -253,7 +258,8 @@ export async function importFile(workspaceRoot, projectId, sourcePath, { findFfm
   }
 
   const decoded = await readAudioForPeaks(materialCopy)
-  await writePeaks(resolveInside(dir, peaksRel), computePeaks(decoded.channels, decoded.durationSec))
+  const analysis = analyzeChannels(decoded.channels, decoded.durationSec)
+  await writePeaks(resolveInside(dir, peaksRel), analysis.peaks)
 
   const material = await registerMaterial(workspaceRoot, projectId, {
     id,
@@ -263,6 +269,8 @@ export async function importFile(workspaceRoot, projectId, sourcePath, { findFfm
     channels: IMPORT_CHANNELS,
     kind: 'imported',
     bytes: (await stat(materialCopy)).size,
+    peakDb: analysis.peakDb,
+    rmsDb: analysis.rmsDb,
     source: {
       kind: 'imported',
       originalName: basename(from),
@@ -291,7 +299,8 @@ export async function importGeneratedMaterial(workspaceRoot, projectId, {
 
   const decoded = await readAudioForPeaks(materialCopy)
   const peaksRel = `${MATERIALS_DIR}/${id}.peaks.json`
-  await writePeaks(resolveInside(dir, peaksRel), computePeaks(decoded.channels, decoded.durationSec))
+  const analysis = analyzeChannels(decoded.channels, decoded.durationSec)
+  await writePeaks(resolveInside(dir, peaksRel), analysis.peaks)
 
   let snapshotRel = null
   if (snapshot && snapshotKind) {
@@ -309,6 +318,8 @@ export async function importGeneratedMaterial(workspaceRoot, projectId, {
     channels: IMPORT_CHANNELS,
     kind,
     bytes: (await stat(materialCopy)).size,
+    peakDb: analysis.peakDb,
+    rmsDb: analysis.rmsDb,
     source: { kind: 'generated', snapshot: snapshotRel, tool: tool ?? null, label: label ?? null },
   })
   return { material, peaks: peaksRel }
