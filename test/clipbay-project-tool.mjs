@@ -403,6 +403,61 @@ await test('update refuses an unknown track, clip or field', async () => {
   assert.match(badField.error, /unknown track field/)
 })
 
+await test('a clip change needs no trackId: the clip id finds its own track', async () => {
+  // Improvement plan 03, I-45. A clip id is unique across the project, so the
+  // track is a lookup, not an input. An Agent in a real session sent eight clip
+  // changes with no trackId; all eight failed with "no such track: undefined" and
+  // it kept retrying, because that message blamed the id it had got right.
+  const project = await readProject(workspaceRoot, projectId)
+  const track = project.tracks.find((entry) => entry.items.length > 0)
+  const clip = track.items[0]
+  const result = await call({
+    mode: 'update',
+    projectId,
+    changes: [
+      { target: 'clip', clipId: clip.id, field: 'gainDb', value: -4 },
+      { target: 'clip', clipId: clip.id, field: 'pan', value: 0.25 },
+      { target: 'clip', clipId: clip.id, field: 'fadeInSec', value: 0.5 },
+    ],
+  })
+  assert.equal(result.ok, true, result.error)
+  assert.equal(result.applied.length, 3, 'all three land, not just the first')
+  const after = await readProject(workspaceRoot, projectId)
+  const updated = after.tracks.find((entry) => entry.id === track.id).items.find((item) => item.id === clip.id)
+  assert.equal(updated.gainDb, -4)
+  assert.equal(updated.pan, 0.25)
+  assert.equal(updated.fadeInSec, 0.5)
+})
+
+await test('an unknown clip id says so, instead of blaming a missing track', async () => {
+  const result = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'clip', clipId: 'itm_nope', field: 'gainDb', value: 0 }],
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /no such clip/)
+  assert.match(result.error, /itm_nope/)
+  assert.match(result.error, /trackId is optional/, 'and says the trackId it did not send was never needed')
+  assert.doesNotMatch(result.error, /no such track/, 'the old message sent the Agent after the wrong id')
+})
+
+await test('a clip id sent as a trackId still gets the pointer', async () => {
+  // I-27's message. It must keep working now that the clip branch resolves its
+  // own track, or one confusion would replace another.
+  const project = await readProject(workspaceRoot, projectId)
+  const track = project.tracks.find((entry) => entry.items.length > 0)
+  const clip = track.items[0]
+  const result = await call({
+    mode: 'update',
+    projectId,
+    changes: [{ target: 'track', trackId: clip.id, field: 'muted', value: false }],
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /is a clip id, not a track id/)
+  assert.match(result.error, /target:"clip"/)
+})
+
 await test('update refuses an edit that would break the duration limit', async () => {
   const project = await readProject(workspaceRoot, projectId)
   const track = project.tracks[0]

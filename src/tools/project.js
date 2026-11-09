@@ -112,23 +112,44 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
     }
   }
 
-  const track = project.tracks.find((entry) => entry.id === trackId)
+  // A clip's id is unique across the whole project (`newId('itm')` in the client,
+  // and the host mints the same way), so `target:"clip"` does not need a track id
+  // at all. It used to require one and then look it up with `undefined`, which
+  // failed as "no such track: undefined" — an Agent in a real session sent eight
+  // clip changes without a trackId and lost all eight, then kept retrying the
+  // same call because the message said the id was wrong.
+  let resolvedTrackId = trackId
+  if (target === 'clip' && (resolvedTrackId === undefined || resolvedTrackId === null || resolvedTrackId === '')) {
+    const owner = project.tracks.find((entry) => entry.items?.some((item) => item.id === clipId))
+    if (owner) resolvedTrackId = owner.id
+  }
+
+  const track = project.tracks.find((entry) => entry.id === resolvedTrackId)
   if (!track) {
+    if (target === 'clip' && !resolvedTrackId) {
+      const known = project.tracks
+        .flatMap((entry) => (entry.items ?? []).map((item) => `${item.id} "${item.label || ''}"`))
+        .join(', ')
+      throw new Error(
+        `no such clip: ${clipId}. ${known ? `This project has: ${known}` : 'This project has no clips yet'}. `
+        + 'For a clip, pass target:"clip" with clipId — trackId is optional and is worked out from the clip id.',
+      )
+    }
     // An id that exists, but as a clip, is a mistake worth naming. The agent in
     // the session that prompted this passed `itm_oqpdqa` as a trackId and got
     // back "no such track", which says nothing about what to do next — it
     // retried with the same value. A message that names the confusion ends it.
-    const owner = project.tracks.find((entry) => entry.items?.some((item) => item.id === trackId))
+    const owner = project.tracks.find((entry) => entry.items?.some((item) => item.id === resolvedTrackId))
     if (owner) {
-      const item = owner.items.find((entry) => entry.id === trackId)
+      const item = owner.items.find((entry) => entry.id === resolvedTrackId)
       throw new Error(
-        `"${trackId}" is a clip id, not a track id: it belongs to clip "${item?.label || trackId}" on track "${owner.name}" (${owner.id}). `
+        `"${resolvedTrackId}" is a clip id, not a track id: it belongs to clip "${item?.label || resolvedTrackId}" on track "${owner.name}" (${owner.id}). `
         + 'For a clip, set target:"clip" and pass trackId plus clipId; for the track itself use target:"track" with the track id. '
         + 'mode:"read" lists both ids for every track.',
       )
     }
     const ids = project.tracks.map((entry) => `${entry.id} "${entry.name}"`).join(', ')
-    throw new Error(`no such track: ${trackId}. This project tracks: ${ids || '(none)'}`)
+    throw new Error(`no such track: ${resolvedTrackId}. This project tracks: ${ids || '(none)'}`)
   }
 
   if (target === 'track') {
@@ -406,7 +427,7 @@ export const projectToolDefinition = finalizeTool({
           type: 'object',
           properties: {
             target: { type: 'string', enum: ['project', 'track', 'clip'], description: 'project: name, masterFaderDb or masterFx (no trackId needed). track: name, volumeDb, pan, muted, solo, fx, or "delete" to remove the whole track. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label, fx, or "delete" to remove that one clip.' },
-            trackId: { type: 'string', description: 'Required for target:"track" and target:"clip"; ignored for target:"project".' },
+            trackId: { type: 'string', description: 'Required for target:"track". For target:"clip" it may be left out: the clip id is unique across the project, so the host works out which track owns it.' },
             clipId: { type: 'string', description: 'Required for target:"clip".' },
             field: { type: 'string' },
             value: {},
