@@ -1,10 +1,12 @@
 import { basename } from 'node:path'
+import { rm } from 'node:fs/promises'
 import { planFonts, resolveConfiguredDefault } from '../audio/banks.js'
 import { compileScore } from '../audio/score.js'
 import { renderCompiled } from '../audio/synth.js'
 import { readConfig } from '../config.js'
 import { attachMaterialFile } from '../project/attach.js'
-import { deliverCopy, deliveryPath, finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, seconds as clampSeconds, stagePath, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
+import { projectDir } from '../project/paths.js'
+import { deliverCopy, deliveryPath, finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, scratchPath, seconds as clampSeconds, stagePath, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 
 function describeTracks(tracks) {
   return tracks
@@ -210,7 +212,13 @@ export const musicToolDefinition = finalizeTool({
     // (48 kHz): the mixed render takes 2.7 s, the twelve stems 13.4 s — about
     // 5.9x, i.e. ~13 s more for that score.
     const gain = Number.isFinite(rendered.appliedGain) ? rendered.appliedGain : 1
-    const base = target.replace(/\.wav$/i, '')
+    // Stem files are scratch space, not output. They exist for exactly as long as
+    // it takes to copy them into materials/ and then go away: `out/` holds what a
+    // person asked for, and a stem they can neither see nor delete does not count
+    // (improvement plan 03, I-39 — measured: 539 of a project's 586 MB in out/
+    // were byte-identical copies of the stems already in materials/).
+    const base = scratchPath(workspaceRoot, `stem-${nowStamp()}`)
+    const projectRel = relativeToWorkspace(workspaceRoot, projectDir(workspaceRoot, projectId))
     const { levels } = await eachTrackStem(compiled, {
       gain,
       renderOne: (track) => renderCompiled(compiled, {
@@ -228,23 +236,31 @@ export const musicToolDefinition = finalizeTool({
           for (let suffix = 2; usedStemNames.has(stemName); suffix++) stemName = `${safeName}-${suffix}`
           usedStemNames.add(stemName)
           const stemPath = `${base}-${stemName}.wav`
-          await writeWavFile(stemPath, channels, sampleRate)
-          stems.push(relativeToWorkspace(workspaceRoot, stemPath))
-          const attached = await attachMaterialFile(workspaceRoot, projectId, stemPath, {
-            kind: 'music-stem',
-            trackName: track.name,
-            category: 'music',
-            snapshot: score,
-            snapshotKind: 'score',
-            tool: 'anyaudio_music',
-            label: track.name,
-            exec,
-            // The level was just measured; a second pass over the same samples
-            // would only reproduce it.
-            peakDb: Number.isFinite(level.peakDb) ? Number(level.peakDb.toFixed(2)) : null,
-            rmsDb: Number.isFinite(level.rmsDb) ? Number(level.rmsDb.toFixed(3)) : null,
-          })
-          stemFiles.push(attached)
+          try {
+            await writeWavFile(stemPath, channels, sampleRate)
+            const attached = await attachMaterialFile(workspaceRoot, projectId, stemPath, {
+              kind: 'music-stem',
+              trackName: track.name,
+              category: 'music',
+              snapshot: score,
+              snapshotKind: 'score',
+              tool: 'anyaudio_music',
+              label: track.name,
+              exec,
+              // The level was just measured; a second pass over the same samples
+              // would only reproduce it.
+              peakDb: Number.isFinite(level.peakDb) ? Number(level.peakDb.toFixed(2)) : null,
+              rmsDb: Number.isFinite(level.rmsDb) ? Number(level.rmsDb.toFixed(3)) : null,
+            })
+            stemFiles.push(attached)
+            // What the reply names is the copy the project owns and the clip bay
+            // plays, so a path in the reply always points at a file that exists.
+            stems.push(`${projectRel}/${attached.file}`.replace(/\\/g, '/'))
+          } finally {
+            // Scratch, even when the attach threw: a failed stem must not leave a
+            // stray file behind for the next run to trip over.
+            await rm(stemPath, { force: true })
+          }
         }
         : null,
     })

@@ -772,16 +772,23 @@ await test('stems keep the authored balance instead of being re-normalised', asy
   assert(drop > 8, `the lead should sit clearly above the pad, measured ${drop.toFixed(1)} dB`)
   assert(result.stemsNormalized === false, 'stems must be reported as not normalised')
   assert(result.warnings.some((warning) => warning.includes('below the loudest')), 'a buried part must raise a balance warning')
-  // Stems are written next to the staged score (they are project material, not
-  // deliverables), so read them from the paths the tool reports.
-  const stemPath = (name) => result.stems.find((entry) => entry.includes(`-${name}.wav`))
-  const lead = parseWav(await readFile(join(repoRoot, stemPath('lead'))))
-  const pad = parseWav(await readFile(join(repoRoot, stemPath('pad'))))
+  // Since I-39 the stem file is scratch: it is copied into materials/ and then
+  // deleted, so `stems[]` names the project's own copy — the file the clip bay
+  // plays. `stems` and `attached` are built in the same iteration, so the two
+  // arrays line up and each path can be matched to the track it came from.
+  const stemOf = (name) => result.stems[result.attached.findIndex((entry) => entry.trackName === name)]
+  const lead = parseWav(await readFile(join(repoRoot, stemOf('lead'))))
+  const pad = parseWav(await readFile(join(repoRoot, stemOf('pad'))))
   const fileRatio = toDb(rmsOf(lead.channels) / Math.max(1e-9, rmsOf(pad.channels)))
   assert(fileRatio > 8, `stem files must preserve the authored difference, measured ${fileRatio.toFixed(1)} dB`)
   // Each stem is its own clip on its own track, so a person can rebalance them.
   assert(result.attached.length === 2, `both stems must land in the project, got ${result.attached.length}`)
   assert(result.attached.every((entry) => entry.trackName && entry.clipId), 'each stem needs its own track and clip')
+  // Improvement plan 03, I-39: the stems are material, not deliverables. out/
+  // held 539 MB of byte-identical copies of what materials/ already had.
+  const outDir = join(repoRoot, '.anyaudio', 'out')
+  const outNames = existsSync(outDir) ? await readdir(outDir) : []
+  assert(!outNames.some((name) => name.startsWith('stem-')), `no stem may be left in out/, found ${outNames.filter((name) => name.startsWith('stem-')).join(', ')}`)
 })
 
 await test('stems with Chinese track names get distinct files', async () => {
@@ -809,13 +816,18 @@ await test('stems with Chinese track names get distinct files', async () => {
   assert(result.stems.length === 3, `three stems, got ${result.stems.length}`)
   const unique = new Set(result.stems)
   assert(unique.size === 3, `each stem needs its own path, got ${JSON.stringify(result.stems)}`)
-  for (const name of ['卡林巴旋律', '贝斯', '暖垫和声']) {
-    const found = result.stems.filter((entry) => entry.includes(name))
-    assert(found.length === 1, `"${name}" must appear in exactly one stem path, saw ${JSON.stringify(result.stems)}`)
-  }
+  // I-39 moved the reported path to the project's own copy, whose name is the
+  // material id; the track name survives on the material record instead, so this
+  // checks the three stems really are three different files with their own names.
+  const trackNames = result.attached.map((entry) => entry.trackName).sort()
+  assert(unique.size === 3 && trackNames.length === 3, `three distinct stems on three tracks, saw ${JSON.stringify(trackNames)}`)
+  assert(new Set(trackNames).size === 3, `each stem needs its own track, got ${JSON.stringify(trackNames)}`)
   // The files have to be readable at those paths, and hold different audio.
   const levels = await Promise.all(result.stems.map(async (entry) => rmsOf(parseWav(await readFile(join(repoRoot, entry))).channels)))
   assert(levels.every((level) => level > 0), `no stem may be empty, got ${JSON.stringify(levels)}`)
+  // And they are not one file written three times: the three parts were authored
+  // 4, 6 and 10 dB down from each other, so identical bytes would be a bug.
+  assert(new Set(levels.map((level) => level.toFixed(6))).size === 3, `the three stems must differ, got ${JSON.stringify(levels)}`)
 })
 
 await test('a stem that renders to silence is reported as silent, not as quiet', async () => {

@@ -73,6 +73,23 @@ export function stagePath(workspaceRoot, defaultName) {
 }
 
 /**
+ * Scratch space for a file whose only purpose is to be copied somewhere else.
+ *
+ * Deliberately not `out/`: that directory is where a person looks for what a
+ * tool produced, and a stem exists for exactly as long as it takes to land in
+ * `materials/` (improvement plan 03, I-39). Keeping the two apart is the
+ * difference between "this project is 586 MB" and "this project is 47 MB and
+ * the other 539 MB was the same audio written twice".
+ */
+export function scratchDir(workspaceRoot) {
+  return join(workspaceRoot, '.anyaudio', 'tmp')
+}
+
+export function scratchPath(workspaceRoot, defaultName) {
+  return join(scratchDir(workspaceRoot), defaultName)
+}
+
+/**
  * Where the delivered copy goes. `requested` wins when the caller named a path;
  * otherwise the configured output directory; otherwise the staging file itself is
  * the only copy and nothing else is written.
