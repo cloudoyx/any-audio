@@ -88,6 +88,62 @@ export function parsePitch(value) {
   throw new Error(`invalid pitch: ${String(value)}`)
 }
 
+/**
+ * Instrument names close to `key`, so a typo can be fixed without a detour.
+ *
+ * "see the skill" is a round trip: the Agent leaves, reads a long list, comes
+ * back, and may still not find the name it wanted (`shaker` is not in the table;
+ * the nearest thing is `agogo`). Naming a few candidates in the error ends the
+ * round trip. This deliberately does not correct anything: guessing wrong is
+ * worse than being told what exists.
+ */
+export function suggestInstruments(key, limit = 4) {
+  const wanted = String(key ?? '').toLowerCase()
+  if (!wanted) return []
+  const distance = (a, b) => {
+    const rows = a.length + 1
+    const cols = b.length + 1
+    let previous = Array.from({ length: cols }, (_, index) => index)
+    for (let i = 1; i < rows; i++) {
+      const current = [i]
+      for (let j = 1; j < cols; j++) {
+        current[j] = Math.min(
+          previous[j] + 1,
+          current[j - 1] + 1,
+          previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        )
+      }
+      previous = current
+    }
+    return previous[cols - 1]
+  }
+  const longestShared = (a, b) => {
+    let best = 0
+    const row = new Array(b.length + 1).fill(0)
+    for (let i = 1; i <= a.length; i++) {
+      let diagonal = 0
+      for (let j = 1; j <= b.length; j++) {
+        const previous = row[j]
+        row[j] = a[i - 1] === b[j - 1] ? diagonal + 1 : 0
+        if (row[j] > best) best = row[j]
+        diagonal = previous
+      }
+    }
+    return best
+  }
+  const scored = Object.keys(INSTRUMENTS).map((name) => ({
+    name,
+    edits: distance(wanted, name),
+    shared: longestShared(wanted, name),
+  }))
+  // Two characters shared in a row is a real neighbour (`shaker` → `shakuhachi`),
+  // one is a coincidence (`zzzz` and `jazz-guitar`), and three edits covers a
+  // typo. Nothing passes for a name with no neighbours, and the message says so.
+  const close = scored.filter((entry) => entry.shared >= 3 || entry.edits <= 2)
+  close.sort((a, b) => (b.shared - a.shared) || (a.edits - b.edits) || a.name.localeCompare(b.name))
+  return close.slice(0, limit).map((entry) => entry.name)
+}
+
 export function resolveInstrument(spec) {
   if (spec === undefined || spec === null || spec === '') return { program: 0, bank: 0, label: 'piano' }
   if (typeof spec === 'number') {
@@ -99,7 +155,11 @@ export function resolveInstrument(spec) {
     if (key in INSTRUMENTS) return { program: INSTRUMENTS[key], bank: 0, label: key }
     const asNumber = Number(key)
     if (Number.isInteger(asNumber) && asNumber >= 0 && asNumber <= 127) return { program: asNumber, bank: 0, label: `program ${asNumber}` }
-    throw new Error(`unknown instrument "${spec}"; see the anyaudio-scoring skill for the instrument list or pass a GM program number`)
+    const nearby = suggestInstruments(key)
+    throw new Error(
+      `unknown instrument "${spec}"; ${nearby.length > 0 ? `closest names: ${nearby.join(', ')}. ` : 'there is nothing close to that name. '}`
+      + 'The full list is in the anyaudio-scoring skill, or pass a GM program number.',
+    )
   }
   if (typeof spec === 'object') {
     const base = resolveInstrument(spec.program ?? spec.presetName ?? 0)

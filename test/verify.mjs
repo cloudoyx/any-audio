@@ -1245,6 +1245,37 @@ for (const name of await listing(projectsDirPath)) {
 }
 // Restore the pre-run state of the scratch parent: when `.anyaudio` did not
 // exist before the run, leave the tree exactly as it was.
+await test('an unknown instrument names what is close instead of pointing at a list', async () => {
+  // Improvement plan 03, I-48. "see the skill" is a round trip: read a long list,
+  // come back, and still not find the name — `shaker` is not in the table at all,
+  // so the closest thing has to be named for the answer to be usable.
+  const { suggestInstruments } = await import('../src/audio/score.js')
+  const nearby = suggestInstruments('shaker')
+  assert(nearby.length > 0, 'shaker should have candidates')
+
+  let message = ''
+  try {
+    compileScore({ tracks: [{ name: 'perc', instrument: 'shaker', notes: [[0, 0.2, 'C4', 80]] }] })
+  } catch (error) {
+    message = error.message
+  }
+  assert(/unknown instrument "shaker"/.test(message), `the error must still name the value, got "${message}"`)
+  assert(nearby.some((name) => message.includes(name)), `the error must list a real instrument name, got "${message}"`)
+  assert(/GM program number/.test(message), 'and keep the escape hatch: a numeric program')
+
+  let nonsense = ''
+  try {
+    compileScore({ tracks: [{ name: 'x', instrument: 'zzzz', notes: [[0, 0.2, 'C4', 80]] }] })
+  } catch (error) {
+    nonsense = error.message
+  }
+  assert(/nothing close/i.test(nonsense), `a name with no neighbours must say so, got "${nonsense}"`)
+
+  // A legal name is untouched.
+  const { resolveInstrument } = await import('../src/audio/score.js')
+  assert(resolveInstrument('piano').program === 0, 'a known instrument still resolves')
+})
+
 if (!hadAnyAudioDir) {
   const leftover = await readdir(anyaudioDir).catch(() => [])
   if (leftover.length === 0) await rm(anyaudioDir, { recursive: true, force: true })
