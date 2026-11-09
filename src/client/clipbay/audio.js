@@ -483,11 +483,12 @@ export function usePlayback(root, projectId) {
       source.buffer = buffer
 
       // Three stages, so a live fader move and a running fade cannot overwrite
-      // each other: the fade shapes `fade`, the clip gain sits on `itemLevel`,
-      // and the track fader (mute/solo included) sits on the bus.
+      // each other: the fade shapes `fade`, and `itemLevel` carries the clip
+      // gain times the track gain (mute/solo included — there is no bus any
+      // more, so the track factor has to ride here).
       const fade = context.createGain()
       const itemLevel = context.createGain()
-      itemLevel.gain.value = entry.itemGain
+      itemLevel.gain.value = entry.gain
 
       const clipStart = startedAtRef.current + entry.when
       const offset = Math.max(0, entry.inSec)

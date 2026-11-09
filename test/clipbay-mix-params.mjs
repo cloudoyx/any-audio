@@ -286,6 +286,15 @@ await test('the live path uses clipMixGain instead of restating the arithmetic',
   assert.doesNotMatch(applyMix, /resolveTrackGain\(/, 'and does not compute its own track gain')
 })
 
+await test('the scheduled path applies the track gain too, so solo survives a fresh play', () => {
+  // The regression this covers: the scheduler set `itemLevel.gain` from
+  // `entry.itemGain` alone, dropping the track factor. Solo and mute worked
+  // while the transport ran (the live path) but vanished on the next play.
+  const audio = read(join('src', 'client', 'clipbay', 'audio.js'))
+  assert.match(audio, /itemLevel\.gain\.value = entry\.gain\b/, 'the scheduled clip gain includes the track factor')
+  assert.doesNotMatch(audio, /itemLevel\.gain\.value = entry\.itemGain\b/, 'and does not drop it')
+})
+
 await rm(scratch, { recursive: true, force: true })
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1
