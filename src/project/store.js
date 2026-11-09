@@ -90,10 +90,37 @@ export async function readProject(workspaceRoot, projectId) {
 }
 
 /** Validate, stamp modifiedAt/durationSec, append a history entry, write atomically. */
+/**
+ * Drop empty effect chains from the object that goes to disk.
+ *
+ * `fx: []` and `masterFx: []` are useful in memory — the code never has to ask
+ * whether the field exists — but they are noise in the file, and they made the
+ * two save paths disagree: the browser's serializer already omits an empty chain,
+ * so a project saved by the Agent carried twelve `"fx": []` a project saved by
+ * hand never had (improvement plan 03, I-49). Only the write is cleaned; the
+ * in-memory defaults stay, because `schema.js` asking every caller to check for
+ * an empty array would be worse than the noise.
+ */
+function withoutEmptyChains(project) {
+  const clean = { ...project }
+  if (Array.isArray(clean.masterFx) && clean.masterFx.length === 0) delete clean.masterFx
+  clean.tracks = (project.tracks ?? []).map((track) => {
+    const next = { ...track }
+    if (Array.isArray(next.fx) && next.fx.length === 0) delete next.fx
+    next.items = (track.items ?? []).map((item) => {
+      const copy = { ...item }
+      if (Array.isArray(copy.fx) && copy.fx.length === 0) delete copy.fx
+      return copy
+    })
+    return next
+  })
+  return clean
+}
+
 export async function saveProject(workspaceRoot, project, { by = 'user', note = '' } = {}) {
   const stamped = stampForSave(project, { by, note })
   validateProject(stamped)
-  await atomicWriteJson(projectFile(workspaceRoot, stamped.id), stamped)
+  await atomicWriteJson(projectFile(workspaceRoot, stamped.id), withoutEmptyChains(stamped))
   return stamped
 }
 

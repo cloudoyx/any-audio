@@ -304,5 +304,37 @@ if (!hadAnyaudioDir) {
   if (leftover.length === 0) await rm(anyaudioDir, { recursive: true, force: true })
 }
 
+await test('an empty effect chain never reaches project.json', async () => {
+  // Improvement plan 03, I-49. The browser's serializer already omits an empty
+  // chain; the host wrote the in-memory default, so a project touched by the Agent
+  // carried `"fx": []` on every track and one saved by hand carried none.
+  const { saveProject, readProject: readBack } = await import('../src/project/store.js')
+  const { defaultItem, defaultTrack, emptyProject: makeEmpty } = await import('../src/project/schema.js')
+  const project = await createProject(ws, { name: 'fx-cleaning' })
+  const draft = makeEmpty({ id: project.id, name: project.name })
+  draft.tracks = [{
+    ...defaultTrack('trk_clean', 'Clean'),
+    items: [{ ...defaultItem('itm_clean', 'mat_none'), startSec: 0, inSec: 0, outSec: 1 }],
+  }]
+  await saveProject(ws, draft, { by: 'agent', note: 'test' })
+  const path = join(ws, '.anyaudio', 'projects', project.id, 'project.json')
+  const raw = await readFile(path, 'utf8')
+  assert(!/"fx":\s*\[\]/.test(raw), 'no empty fx array may be written')
+  assert(!/"masterFx":\s*\[\]/.test(raw), 'nor an empty masterFx')
+
+  // A real chain still goes to disk untouched.
+  draft.masterFx = [{ type: 'limiter', ceilingDb: -1 }]
+  draft.tracks[0].items[0].fx = [{ type: 'eq', bands: [{ type: 'peaking', freqHz: 1000, gainDb: 3, q: 1 }] }]
+  await saveProject(ws, draft, { by: 'agent', note: 'with fx' })
+  const withFx = await readFile(path, 'utf8')
+  assert(/"masterFx":\s*\[/.test(withFx), 'the bus chain is written')
+  assert(/"fx":\s*\[/.test(withFx), 'and the clip chain is written')
+
+  // And the file reads back with the defaults the code expects in memory.
+  const loaded = await readBack(ws, project.id)
+  assert(loaded.tracks[0].id === 'trk_clean', 'the project reads back')
+  await rm(join(ws, '.anyaudio', 'projects', project.id), { recursive: true, force: true })
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)
