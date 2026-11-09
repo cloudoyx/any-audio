@@ -355,6 +355,11 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
 
   const selectedTrack = selection ? project.tracks.find((entry) => entry.id === selection.trackId) : null
   const selectedItem = selectedTrack?.items.find((entry) => entry.id === selection.itemId) ?? null
+  // The selected clip's material record carries the measured level (I-37), which
+  // is the number the property panel shows first (I-38).
+  const selectedMaterial = selectedItem
+    ? materials.find((entry) => entry.id === selectedItem.material) ?? null
+    : null
   const formats = availableFormats(project)
   const chosenFormat = formats.includes(exportFormat) ? exportFormat : formats[0]
   // The bus fader reads the stored field every render, so it never drifts from
@@ -500,6 +505,7 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
             selection,
             track: selectedTrack,
             item: selectedItem,
+            material: selectedMaterial,
             // The chain editor needs every track, because a duck effect has to name
             // the track whose level drives it.
             tracks: project.tracks,

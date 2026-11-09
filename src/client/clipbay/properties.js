@@ -20,6 +20,46 @@ import { FxEditor } from './fx-editor.js'
 const cellInput = { padding: '2px 6px', fontSize: 12, height: 24 }
 const smallBtn = { padding: '3px 6px', fontSize: 11 }
 
+/** −12.3 dBFS, or an honest dash when nobody has measured the material. */
+function dbLabel(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)}` : '—'
+}
+
+/**
+ * The three numbers that decide how loud a clip is (improvement plan 03, I-38).
+ *
+ * Without them a fader reading 0 dB is ambiguous: is that "the material as it is"
+ * or "this track is at 0 dB"? Those are different questions with different
+ * answers, and the only way to tell them apart is to show where the level comes
+ * from: the file's measured RMS, the clip's own offset, and what the two add up
+ * to. The first value never moves when the gain does — that is the whole point.
+ */
+function LevelStrip({ material, item }) {
+  const sourceDb = typeof material?.rmsDb === 'number' && Number.isFinite(material.rmsDb) ? material.rmsDb : null
+  const gainDb = Number(item?.gainDb) || 0
+  const actualDb = sourceDb === null ? null : sourceDb + gainDb
+  return h('div', {
+    title: t('素材电平 → 片段增益 → 实际电平'),
+    style: {
+      display: 'flex', alignItems: 'baseline', gap: 4, flexWrap: 'wrap',
+      border: `1px solid ${C.border}`, borderRadius: 6, padding: '2px 6px',
+      background: C.softer, fontSize: 10, fontVariantNumeric: 'tabular-nums',
+    },
+  },
+    h('span', { style: { color: '#9fc0ff', fontSize: 12, fontWeight: 600 } }, dbLabel(sourceDb)),
+    h('span', { style: { color: C.muted } }, t('素材 dBFS')),
+    h('span', { style: { color: C.muted } }, '→'),
+    h('span', { style: { color: '#ffd08a', fontSize: 12, fontWeight: 600 } }, `${gainDb >= 0 ? '+' : ''}${gainDb.toFixed(1)}`),
+    h('span', { style: { color: C.muted } }, t('片段 dB')),
+    h('span', { style: { color: C.muted } }, '→'),
+    h('span', { style: { color: C.good, fontSize: 12, fontWeight: 600 } }, dbLabel(actualDb)),
+    h('span', { style: { color: C.muted } }, t('实际 dBFS')),
+    sourceDb === null
+      ? h('span', { style: { color: C.muted } }, `· ${t('素材电平未知')}`)
+      : null,
+  )
+}
+
 /** A labelled field cell inside the two-column grid. */
 function cell(label, control) {
   return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 } },
@@ -28,7 +68,7 @@ function cell(label, control) {
   )
 }
 
-export function ClipProperties({ selection, track, item, tracks, onEdit, onClear }) {
+export function ClipProperties({ selection, track, item, material, tracks, onEdit, onClear }) {
   if (!selection || !item) {
     return h('div', { style: { ...S.desc, padding: '2px 2px 0' } },
       t('选中一个片段后可以在这里改增益、声像和淡入淡出。'),
@@ -54,6 +94,7 @@ export function ClipProperties({ selection, track, item, tracks, onEdit, onClear
         }, '✕')
         : null,
     ),
+    h(LevelStrip, { material, item }),
     h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 } },
       cell(t('增益 (dB)'), h(NumberInput, {
         value: item.gainDb,

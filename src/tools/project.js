@@ -18,9 +18,8 @@ import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { contentEndSec, LIMITS, TRACK_CATEGORIES, MATERIAL_KINDS, validateFxChain } from '../project/schema.js'
 import { createProject, listProjects, readMaterialIndex, readProject, saveProject, writeMaterialIndex } from '../project/store.js'
-import { findMaterial, registerMaterial, deleteMaterial, referencesFor } from '../project/materials.js'
-import { importFile, importGeneratedMaterial, readWavChannels } from '../project/import.js'
-import { analyzeChannels } from '../audio/peaks.js'
+import { ensureMaterialLevels, findMaterial, registerMaterial, deleteMaterial, referencesFor } from '../project/materials.js'
+import { importFile, importGeneratedMaterial } from '../project/import.js'
 import { exportProject, renderProject } from '../project/render.js'
 import { ensureTrack, placeClip } from '../project/attach.js'
 import { projectDir, resolveInside } from '../project/paths.js'
@@ -53,29 +52,15 @@ function requireWorkspace(exec) {
  * out what is wrong with it.
  */
 async function measureMissingLevels(workspaceRoot, project, index) {
-  const missing = (index.materials ?? []).filter((material) => material.rmsDb === undefined || material.rmsDb === null || material.peakDb === undefined || material.peakDb === null)
-  if (missing.length === 0) return index
-  const dir = projectDir(workspaceRoot, project.id)
-  let changed = false
-  for (const material of missing) {
-    let decoded
-    try {
-      decoded = await readWavChannels(resolveInside(dir, material.file))
-    } catch {
-      continue
-    }
-    const analysis = analyzeChannels(decoded.channels, decoded.durationSec)
-    material.peakDb = analysis.peakDb
-    material.rmsDb = analysis.rmsDb
-    changed = true
-  }
-  if (changed) await writeMaterialIndex(workspaceRoot, project.id, index)
-  return index
+  return ensureMaterialLevels(workspaceRoot, project.id, index)
 }
 
 
 async function projectSummary(workspaceRoot, project) {
-  const index = await measureMissingLevels(workspaceRoot, project, await readMaterialIndex(workspaceRoot, project.id))
+  // Levels are measured on demand so an older project answers "how loud is this"
+  // from then on (improvement plan 03, I-37). The measuring lives in the material
+  // module because the clip bay's own read route needs exactly the same pass.
+  const index = await ensureMaterialLevels(workspaceRoot, project.id, await readMaterialIndex(workspaceRoot, project.id))
   return {
     projectId: project.id,
     name: project.name,

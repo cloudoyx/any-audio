@@ -173,7 +173,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, audible = 
   )
 }
 
-function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WIDTH, onSelect, onEdit }) {
+function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WIDTH, levelDb = null, onSelect, onEdit }) {
   const [name, setName] = useState(track.name)
   const [editing, setEditing] = useState(false)
 
@@ -245,16 +245,31 @@ function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WID
         style: { padding: '0 3px', fontSize: 9, lineHeight: 1.4 },
       }, '✕'),
     ),
+    // The measured level of what is on this track (improvement plan 03, I-38).
+    // A track has no fader any more, so this row is the whole story of how loud
+    // the group is — and with no number there, the only way to compare seven
+    // tracks was to select each clip and read its properties.
+    h('div', {
+      title: levelDb === null ? t('这个轨道上的素材还没有测过电平') : t('这条轨上最响素材的实测电平'),
+      style: {
+        display: 'flex', alignItems: 'center', gap: 4, minWidth: 0,
+        fontSize: 9, fontVariantNumeric: 'tabular-nums',
+        color: levelDb === null ? C.muted : C.good,
+      },
+    },
+      h('span', null, levelDb === null ? t('电平未知') : `${levelDb.toFixed(1)} dBFS`),
+      levelDb !== null ? h('span', { style: { color: C.muted } }, t('素材')) : null,
+    ),
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
+function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, levelDb = null, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
   const height = TRACK_HEIGHT
   const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h(TrackHead, { track, active, audible, height, headWidth, onSelect, onEdit }),
+    h(TrackHead, { track, active, audible, height, headWidth, levelDb, onSelect, onEdit }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -301,6 +316,19 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const [headWidth, setHeadWidth] = useState(HEAD_WIDTH)
   const peaksById = usePeaks(root, projectId, materials)
+  // Measured level per material, so a track head can show how loud its group is
+  // without reading every clip (improvement plan 03, I-38).
+  const levelByMaterial = new Map(
+    (materials ?? []).map((material) => [material.id, typeof material.rmsDb === 'number' ? material.rmsDb : null]),
+  )
+  const trackLevel = (track) => {
+    let loudest = null
+    for (const item of track.items ?? []) {
+      const value = levelByMaterial.get(item.material)
+      if (typeof value === 'number' && (loudest === null || value > loudest)) loudest = value
+    }
+    return loudest
+  }
   const duration = Math.max(contentEndSec(project), 1)
   const positionSec = transport?.positionSec ?? 0
 
@@ -606,6 +634,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             scale,
             headWidth,
             audible: audibleByTrack.get(track.id) !== false,
+            levelDb: trackLevel(track),
             active: track.id === activeTrackId,
             onSelect: () => setActiveTrackId(track.id),
             onEdit: (request) => onEdit?.({ ...request, trackId: track.id }),

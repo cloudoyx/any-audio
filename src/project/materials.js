@@ -5,7 +5,9 @@
  * source of truth that drifts.
  */
 import { existsSync } from 'node:fs'
-import { readdir, rm, stat } from 'node:fs/promises'
+import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { analyzeChannels } from '../audio/peaks.js'
+import { conformChannels, parseWav } from '../audio/wav.js'
 import { assertRelativePath, MATERIAL_KINDS, ProjectSchemaError } from './schema.js'
 import {
   MATERIALS_DIR,
@@ -142,8 +144,46 @@ export async function deleteMaterial(workspaceRoot, projectId, materialId, { del
   return { deleted: true, materialId, usedBefore: 0 }
 }
 
-/** Absolute path of a registered material file, with an existence check. */
-export async function materialPath(workspaceRoot, projectId, materialId) {
+/**
+ * Give every material in the index a measured level, writing back the ones that
+ * had none.
+ *
+ * A material's loudness is a fact about the file, so it belongs in the file's
+ * record next to its length (improvement plan 03, I-37). Materials registered
+ * before that existed have no level, and re-importing them is not an option — an
+ * external file cannot be re-rendered at all, and a user's own library is exactly
+ * the case that needs it most.
+ *
+ * Costs one read of each unmeasured file. A file that has gone missing is left as
+ * `null` rather than failing: the project still describes an arrangement, and the
+ * caller is usually the read path whose job is to say what is wrong.
+ */
+export async function ensureMaterialLevels(workspaceRoot, projectId, index) {
+  const rows = index ?? (await readMaterialIndex(workspaceRoot, projectId))
+  const missing = (rows.materials ?? []).filter((material) => material.rmsDb === null || material.rmsDb === undefined || material.peakDb === null || material.peakDb === undefined)
+  if (missing.length === 0) return rows
+  const dir = projectDirOf(workspaceRoot, projectId)
+  let changed = false
+  for (const material of missing) {
+    let channels
+    let durationSec
+    try {
+      const wav = parseWav(await readFile(resolveInside(dir, material.file)))
+      channels = conformChannels(wav.channels, 2)
+      durationSec = channels[0].length / wav.sampleRate
+    } catch {
+      continue
+    }
+    const analysis = analyzeChannels(channels, durationSec)
+    material.peakDb = analysis.peakDb
+    material.rmsDb = analysis.rmsDb
+    changed = true
+  }
+  if (changed) await writeMaterialIndex(workspaceRoot, projectId, rows)
+  return rows
+}
+
+/** Absolute path of a registered material file, with an existence check. */export async function materialPath(workspaceRoot, projectId, materialId) {
   const index = await readMaterialIndex(workspaceRoot, projectId)
   const entry = findMaterial(index, materialId)
   if (!entry) throw new MaterialError(`material "${materialId}" is not in project "${projectId}"`)
