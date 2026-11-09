@@ -68,6 +68,43 @@ export function trackParams(track) {
 }
 
 /**
+ * Where the last clip on the timeline ends, in seconds.
+ *
+ * Deliberately narrower than `contentEndSec` in serialize.js: that one also
+ * counts the picture's length, and the transport needs this number for one
+ * question only — "is there anything left to play from here". A 60 s video whose
+ * audio ends at 59 s has one silent second; a play press in it is not content.
+ */
+export function contentEnd(project) {
+  let end = 0
+  for (const track of project?.tracks ?? []) {
+    for (const item of track?.items ?? []) {
+      const length = Number(item?.outSec) - Number(item?.inSec)
+      if (!(length > 0)) continue
+      end = Math.max(end, (Number(item?.startSec) || 0) + length)
+    }
+  }
+  return end
+}
+
+/**
+ * Where a press of play actually starts.
+ *
+ * Pressing play once a playback has run to its end used to schedule nothing —
+ * `scheduleClips` drops every clip that ended before the playhead — so the
+ * button snapped back to ▶ and not one thing moved, with no explanation. The
+ * playhead is left at the end by definition, so that was every second press.
+ * Asking for a replay from the start is what every player does; it is also the
+ * only reading of "play" that has something to play.
+ */
+export function playbackStart(project, askedSec) {
+  const asked = Math.max(0, Number(askedSec) || 0)
+  const end = contentEnd(project)
+  if (end > 0 && asked >= end) return 0
+  return asked
+}
+
+/**
  * The master gain: the frozen normalisation plus the person's fader, applied
  * once and never measured back (spec §10.2).
  */

@@ -25,7 +25,7 @@ const source = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 
   // The hooks import react, which is not needed for the pure helpers.
   .replace(/^import .*$/gm, '')
   .replace(/export function usePlayback[\s\S]*$/m, '')
-const { scheduleClips, audibleTracks, dbToGain, scheduledLength, mixedGain, resolveTrackGain, itemParams, masterParams, panGains } = await import(
+const { scheduleClips, audibleTracks, dbToGain, scheduledLength, mixedGain, resolveTrackGain, itemParams, masterParams, panGains, contentEnd, playbackStart } = await import(
   `data:text/javascript;base64,${Buffer.from(`const API = '/api/dsh-any-audio'\n${mixParamsSource}\n${source}`, 'utf8').toString('base64')}`
 )
 
@@ -321,6 +321,49 @@ test('pan is described in the labels the user reads', () => {
   // The user asked for the meaning next to the word: -1 and 1 are not obvious.
   const i18n = readFileSync(join(root, 'src', 'client', 'i18n.js'), 'utf8')
   assert.match(i18n, /'声像 \(-1=极左, 1=极右\)'/, 'the pan label spells out both ends')
+})
+
+test('contentEnd is the last clip end, and ignores the picture', () => {
+  // Improvement plan 03, I-44. The transport asks one question of this number:
+  // "is anything left to play from here". A 60 s video whose audio stops at 59 s
+  // must not make the silent last second count as content.
+  assert.equal(contentEnd({ tracks: [] }), 0, 'an empty project ends at zero')
+  assert.equal(contentEnd(null), 0, 'and so does a missing one')
+  const project = {
+    video: { durationSec: 60 },
+    tracks: [
+      track({ id: 'a', items: [item({ id: 'a1', startSec: 0, inSec: 0, outSec: 50 })] }),
+      track({ id: 'b', items: [item({ id: 'b1', startSec: 50, inSec: 55, outSec: 64 })] }),
+    ],
+  }
+  close(contentEnd(project), 59, 'the last clip ends at 50 + (64 - 55)')
+  const trimmed = { tracks: [track({ items: [item({ startSec: 10, inSec: 4, outSec: 4.5 })] })] }
+  close(contentEnd(trimmed), 10.5, 'a short clip at 10 s ends at 10.5 s')
+})
+
+test('a press at or past the end plays from the start', () => {
+  // I-44: playback ran to its end, parked the playhead there, and every later
+  // press scheduled nothing — the button blinked and nothing moved.
+  const project = { tracks: [track({ items: [item({ startSec: 0, inSec: 0, outSec: 59 })] })] }
+  close(playbackStart(project, 0), 0, 'the start is the start')
+  close(playbackStart(project, 53.3), 53.3, 'inside the content it seeks there')
+  close(playbackStart(project, 59), 0, 'exactly at the end replays')
+  close(playbackStart(project, 60), 0, 'past the end replays too')
+  close(playbackStart(project, 59.3), 0, 'the measured stuck position replays')
+  // No content at all: return what was asked and let the empty schedule speak.
+  close(playbackStart({ tracks: [] }, 12), 12, 'an empty project is left alone')
+  close(playbackStart(null, 3), 3, 'and a missing one too')
+})
+
+test('playback rewinds when it runs out, so the press is never dead', () => {
+  // Both halves of I-44 are load-bearing: rewinding on natural stop removes the
+  // bad state, and the guard in play() handles a playhead dragged into it.
+  const raw = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
+  assert.match(raw, /const start = playbackStart\(project, asked\)/, 'play() asks the shared helper where to start')
+  const tail = raw.slice(raw.indexOf('if (at >= fromRef.current + total)'))
+  assert.match(tail.slice(0, 900), /fromRef\.current = 0/, 'running out resets the playhead')
+  assert.match(tail.slice(0, 900), /setPositionEverywhere\(0\)/, 'and the visible position with it')
+  assert.equal(/fromRef\.current = start \+ total/.test(raw), false, 'the old park-at-the-end write is gone')
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

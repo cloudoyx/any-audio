@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
 import { buildDuckCurve } from '../../audio/fx.js'
-import { fadeCurve, itemParams, masterParams, panGains, resolveTrackGain, toStereoChannels } from './mix-params.js'
+import { fadeCurve, itemParams, masterParams, panGains, playbackStart, resolveTrackGain, toStereoChannels } from './mix-params.js'
 import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
 
 /**
@@ -358,7 +358,11 @@ export function usePlayback(root, projectId) {
     const token = ++tokenRef.current
     stopSources()
 
-    const start = Math.max(0, fromSeconds === undefined ? fromRef.current : Number(fromSeconds) || 0)
+    const asked = Math.max(0, fromSeconds === undefined ? fromRef.current : Number(fromSeconds) || 0)
+    // A press at or past the end replays from the start. Without this the
+    // schedule below comes back empty and the button just blinked — see
+    // `playbackStart` for why that hit every second press, not an odd one.
+    const start = playbackStart(project, asked)
     const entries = scheduleClips(project, start)
     fromRef.current = start
     setPositionEverywhere(start)
@@ -544,9 +548,13 @@ export function usePlayback(root, projectId) {
       if (at >= fromRef.current + total) {
         stopSources()
         startedAtRef.current = 0
-        fromRef.current = start + total
+        // Back to the start, not parked on the last frame. Stopping where the
+        // sound stopped left the playhead in a stretch with nothing in it, so
+        // the next press scheduled nothing and the button appeared dead. Landing
+        // on zero means there is never such a press to make.
+        fromRef.current = 0
         setPlaying(false)
-        setPositionEverywhere(start + total)
+        setPositionEverywhere(0)
         master.disconnect()
         return
       }
