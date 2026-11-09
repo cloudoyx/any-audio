@@ -77,8 +77,30 @@ export function useDraftAutosave(root, project, { enabled = true, onError } = {}
       .catch((caught) => { if (mountedRef.current) onError?.(caught.message) })
   }, [root, onError])
 
+  /**
+   * Drop the pending write.
+   *
+   * 保存 and 放弃 both delete the draft, and the unmount flush would otherwise
+   * write it straight back — the panel unmounts right after either action, so the
+   * queued project would resurrect a draft that was just deleted.
+   */
+  const cancel = useCallback(() => {
+    pendingRef.current = null
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = 0
+    }
+  }, [])
+
   useEffect(() => {
-    if (!enabled || !project) return undefined
+    // A disabled autosave must also drop anything already scheduled: 保存 and
+    // 放弃 flip `dirty` off while a write from the previous render is still in
+    // the timer, and that write would resurrect the draft right after it was
+    // deleted (measured: the draft came back after 放弃).
+    if (!enabled || !project) {
+      cancel()
+      return undefined
+    }
     pendingRef.current = project
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
@@ -86,7 +108,7 @@ export function useDraftAutosave(root, project, { enabled = true, onError } = {}
       flush()
     }, SAVE_DEBOUNCE_MS)
     return undefined
-  }, [enabled, project, flush])
+  }, [enabled, project, flush, cancel])
 
   // The unmount path is the one that matters: the tab switch destroys this
   // component, so the last write has to start here rather than in a later render.
@@ -103,5 +125,5 @@ export function useDraftAutosave(root, project, { enabled = true, onError } = {}
     mountedRef.current = false
   }, [root])
 
-  return { flush }
+  return { flush, cancel }
 }

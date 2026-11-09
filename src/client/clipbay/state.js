@@ -136,6 +136,10 @@ export function useProject(root, projectId) {
 
   /** Throw the draft away and go back to the last saved arrangement. */
   const discard = useCallback(async () => {
+    // Clear `dirty` first: reload adopts the saved project, and the autosave
+    // effect would otherwise schedule a write of that project as a fresh draft
+    // the moment it lands (measured: the draft came back right after 放弃).
+    setDirty(false)
     await api(draftUrl(root, projectId), { method: 'DELETE' })
     await reload()
   }, [root, projectId, reload])

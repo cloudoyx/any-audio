@@ -219,7 +219,7 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // this component, and the last few hundred milliseconds must still reach the
   // draft. Gated on `dirty` rather than on "a project is loaded": mounting the
   // panel must not write a draft the person has not changed.
-  const { flush } = useDraftAutosave(root, project, {
+  const { flush, cancel } = useDraftAutosave(root, project, {
     enabled: Boolean(project) && dirty,
     onError: (message) => setSaveError(message),
   })
@@ -428,12 +428,12 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       // 保存 is the commit point (improvement plan 05): edits go to the draft, and
       // only this writes project.json. 放弃 throws the draft away.
       h(Btn, {
-        onClick: () => { void save().then(() => setSaveError('')).catch((caught) => setSaveError(caught.message)) },
+        onClick: () => { cancel(); void save().then(() => setSaveError('')).catch((caught) => setSaveError(caught.message)) },
         disabled: !dirty,
         kind: dirty ? 'primary' : undefined,
         title: t('保存到工程文件'),
       }, t('保存')),
-      dirty ? h(Btn, { onClick: () => { void discard() }, title: t('放弃未保存的修改') }, t('放弃')) : null,
+      dirty ? h(Btn, { onClick: () => { cancel(); void discard() }, title: t('放弃未保存的修改') }, t('放弃')) : null,
       h(Btn, { onClick: addToConversation, kind: (selection || range) ? 'primary' : undefined, disabled: !selection && !range }, t('添加到对话')),
       // The bus fader (spec §10.2's 总推子). It sits beside the bus chain button
       // because the two act on the whole mix, and it stays a slider rather than a
@@ -582,11 +582,12 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
         h('div', { style: S.desc }, t('保存后离开，或放弃这些修改回到上次保存的版本。')),
         h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
           h(Btn, { onClick: () => setLeavePrompt(false) }, t('取消')),
-          h(Btn, { onClick: async () => { await discard(); setLeavePrompt(false); onBack() } }, t('放弃并离开')),
+          h(Btn, { onClick: async () => { cancel(); await discard(); setLeavePrompt(false); onBack() } }, t('放弃并离开')),
           h(Btn, {
             kind: 'primary',
             onClick: async () => {
               try {
+                cancel()
                 await save()
                 setLeavePrompt(false)
                 onBack()
