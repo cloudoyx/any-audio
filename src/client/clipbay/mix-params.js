@@ -45,25 +45,16 @@ export function panGains(pan) {
  */
 export function itemParams(item, track) {
   const gainDb = Number(item?.gainDb) || 0
-  const pan = (Number(item?.pan) || 0) + (Number(track?.pan) || 0)
   return {
     gainDb,
     gain: dbToGain(gainDb),
-    pan: Math.max(-1, Math.min(1, pan)),
+    // The clip's pan, and nothing else. A track used to add its own pan on top,
+    // which made the same field mean two things and put a second copy of every
+    // balance decision one level up (improvement plan 03, I-41).
+    pan: Math.max(-1, Math.min(1, Number(item?.pan) || 0)),
     fadeInSec: Math.max(0, Number(item?.fadeInSec) || 0),
     fadeOutSec: Math.max(0, Number(item?.fadeOutSec) || 0),
     muted: item?.muted === true || track?.muted === true,
-  }
-}
-
-/** One track's parameters. Solo is a property, not a gain: see `resolveTrackGain`. */
-export function trackParams(track) {
-  const volumeDb = Number(track?.volumeDb) || 0
-  return {
-    volumeDb,
-    gain: dbToGain(volumeDb),
-    muted: track?.muted === true,
-    solo: track?.solo === true,
   }
 }
 
@@ -116,17 +107,22 @@ export function masterParams(project) {
 }
 
 /**
- * The gain of one track, in linear units.
+ * The gain of one track, in linear units: 1 or 0.
  *
- * Mute wins over solo, and while anything is soloed every other track is silent.
- * Returned as a number rather than a boolean so the same expression drives the
- * scheduled graph, a live fader move and the renderer.
+ * A track has no fader any more (improvement plan 03, I-41). Everything a fader
+ * used to do is done per clip, and the reasoning is the same for every effect
+ * parameter: an Agent that can change a hundred clips' gain in one call can hang
+ * a reverb on a hundred clips in one call, so a second copy of the decision at
+ * track level only creates two places to disagree.
+ *
+ * What is left is what a track still is — a grouping — and its one audible
+ * property: mute and solo. Returned as a number rather than a boolean so the same
+ * expression drives the scheduled graph, a live change and the renderer.
  */
 export function resolveTrackGain(track, anySolo) {
-  const params = trackParams(track)
-  if (params.muted) return 0
-  if (anySolo && !params.solo) return 0
-  return params.gain
+  if (track?.muted === true) return 0
+  if (anySolo && track?.solo !== true) return 0
+  return 1
 }
 
 /** Tracks that can be heard at all: solo wins over everything, then mute. */

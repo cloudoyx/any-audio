@@ -20,6 +20,21 @@
 
 export const FX_TYPES = ['eq', 'compressor', 'limiter', 'reverb', 'delay', 'duck', 'pitch']
 
+/**
+ * Effects whose sound outlives their input.
+ *
+ * A clip's chain runs over a buffer exactly as long as the clip, so a reverb on
+ * a clip stopped dead at the clip's last sample: measured −240 dB one millisecond
+ * past the boundary, where a bus would still have been at −11 dB. Something has
+ * to know which chains need room to decay (improvement plan 03, I-50), and it
+ * belongs here, next to the effects themselves.
+ */
+const TAILED_FX = new Set(['reverb', 'delay'])
+
+export function needsTail(chain) {
+  return (chain ?? []).some((fx) => TAILED_FX.has(fx?.type))
+}
+
 /** A chain longer than this is a mistake, not an arrangement. */
 export const MAX_FX_PER_CHAIN = 8
 

@@ -122,13 +122,15 @@ await step('a single clip is placed, trimmed and scaled exactly as written', asy
   near(rendered.channels[0][Math.round(2.9 * SAMPLE_RATE)], 0, 1e-6, 'audio must stop at the clip end')
 })
 
-await step('clip gain and track gain add up in dB', async () => {
+await step('clip gain is the only level a clip gets', async () => {
+  // Improvement plan 03, I-41: a track has no fader. A leftover volumeDb on an
+  // old project is ignored rather than applied a second time.
   const material = constantTone(2, 0.4)
   const track = { ...defaultTrack('trk_a', 'A'), volumeDb: -6, items: [{ ...defaultItem('itm_a', 'mat_tone'), startSec: 0, inSec: 0, outSec: 2, gainDb: -3.5 }] }
   const { project } = await makeProject({ id: 'prj_gain', materials: { mat_tone: material }, tracks: [track] })
   const rendered = await renderProject({ project, workspaceRoot })
-  const expected = peakOf(material) * fromDb(-6 - 3.5)
-  near(peakOf(rendered.channels), expected, 2e-3, 'clip -3.5 dB plus track -6 dB should give -9.5 dB')
+  const expected = peakOf(material) * fromDb(-3.5)
+  near(peakOf(rendered.channels), expected, 2e-3, 'clip -3.5 dB is the whole gain; the track -6 dB is ignored')
 })
 
 await step('several clips on one track are placed independently', async () => {
@@ -190,13 +192,13 @@ await step('pan follows an equal-power law and centre is a bypass', async () => 
   const centredRender = await renderProject({ project: centreProject, workspaceRoot })
   near(peakOf(centredRender.channels), 0.5, 1e-3, 'a centred clip must not lose 3 dB')
 
-  const panned = { ...defaultTrack('trk_p', 'P'), pan: -1, items: [{ ...defaultItem('itm_p', 'mat_tone'), inSec: 0, outSec: 1 }] }
+  const panned = { ...defaultTrack('trk_p', 'P'), items: [{ ...defaultItem('itm_p', 'mat_tone'), inSec: 0, outSec: 1, pan: -1 }] }
   const { project: panProject } = await makeProject({ id: 'prj_pan_left', materials: { mat_tone: material }, tracks: [panned] })
   const pannedRender = await renderProject({ project: panProject, workspaceRoot })
   near(peakOf([pannedRender.channels[1], pannedRender.channels[1]]), 0, 1e-6, 'hard left must silence the right channel')
   near(peakOf([pannedRender.channels[0], pannedRender.channels[0]]), 0.5, 1e-3, 'hard left keeps the left channel at full level')
 
-  const half = { ...defaultTrack('trk_h', 'H'), pan: 0.5, items: [{ ...defaultItem('itm_h', 'mat_tone'), inSec: 0, outSec: 1 }] }
+  const half = { ...defaultTrack('trk_h', 'H'), items: [{ ...defaultItem('itm_h', 'mat_tone'), inSec: 0, outSec: 1, pan: 0.5 }] }
   const { project: halfProject } = await makeProject({ id: 'prj_pan_half', materials: { mat_tone: material }, tracks: [half] })
   const halfRender = await renderProject({ project: halfProject, workspaceRoot })
   const angle = ((0.5 + 1) * Math.PI) / 4
@@ -546,6 +548,81 @@ await step('the project file on disk is not modified by rendering', async () => 
   await renderProject({ project, workspaceRoot })
   const after = await readFile(join(dir, 'project.json'), 'utf8')
   assert(before === after, 'rendering must be a pure read of project.json')
+})
+
+await step('a clip-mounted reverb rings on past the clip boundary', async () => {
+  // Improvement plan 03, I-50. A clip's chain used to run over a buffer exactly as
+  // long as the clip, so a reverb stopped dead at the last sample: measured −240 dB
+  // one millisecond past the boundary, where a bus-mounted effect still read
+  // −11 dB. The person heard the reverb "switch off" at every clip end.
+  //
+  // The timeline has to be longer than the clip for the tail to have anywhere to
+  // land, which is the ordinary case: a reverb clip in the middle of a project.
+  const material = constantTone(1, 0.5)
+  const tailed = {
+    ...defaultTrack('trk_tail', 'Tail'),
+    items: [{
+      ...defaultItem('itm_tail', 'mat_tone'),
+      inSec: 0, outSec: 0.8,
+      fx: [{ type: 'reverb', roomSize: 0.9, wet: 0.35, dry: 0.65 }],
+    }],
+  }
+  // A muted clip further along only extends the timeline; it adds no sound.
+  const spacer = {
+    ...defaultTrack('trk_spacer', 'Spacer'),
+    items: [{ ...defaultItem('itm_spacer', 'mat_tone'), startSec: 1.5, inSec: 0, outSec: 1, muted: true }],
+  }
+  const { project } = await makeProject({ id: 'prj_tail', materials: { mat_tone: material }, tracks: [tailed, spacer] })
+  const rendered = await renderProject({ project, workspaceRoot })
+  const past = rendered.channels[0].subarray(Math.round(0.8 * SAMPLE_RATE), Math.round(1.5 * SAMPLE_RATE))
+  const level = toDb(peakOf([past]))
+  assert(level > -35, `the reverb tail must still be audible after the clip ends, measured ${level.toFixed(1)} dB`)
+})
+
+await step('a clip with no tailed effect is not padded', async () => {
+  // Only reverb and delay need room. An EQ or a compressor on a clip must not
+  // silently lengthen the render: the extra silence would push the project's end
+  // time out and change nothing anyone can hear.
+  const material = constantTone(1, 0.5)
+  const plain = { ...defaultTrack('trk_plain', 'Plain'), items: [{ ...defaultItem('itm_plain', 'mat_tone'), inSec: 0, outSec: 0.8 }] }
+  const eq = {
+    ...defaultTrack('trk_eq', 'EQ'),
+    items: [{
+      ...defaultItem('itm_eq', 'mat_tone'),
+      inSec: 0, outSec: 0.8,
+      fx: [{ type: 'eq', bands: [{ type: 'peaking', freqHz: 1000, gainDb: 3, q: 1 }] }],
+    }],
+  }
+  const { project: plainProject } = await makeProject({ id: 'prj_nopad', materials: { mat_tone: material }, tracks: [plain] })
+  const { project: eqProject } = await makeProject({ id: 'prj_nopad_eq', materials: { mat_tone: material }, tracks: [eq] })
+  const plainRender = await renderProject({ project: plainProject, workspaceRoot })
+  const eqRender = await renderProject({ project: eqProject, workspaceRoot })
+  assert(plainRender.durationSec === 0.8 || Math.abs(plainRender.durationSec - 0.8) < 0.01, `plain clip ends at 0.8s, got ${plainRender.durationSec}`)
+  assert(Math.abs(eqRender.durationSec - plainRender.durationSec) < 1e-6, 'an EQ must not lengthen a clip')
+})
+
+await step('needsTail knows which effects have a tail', async () => {
+  const { needsTail } = await import('../src/audio/fx.js')
+  assert(needsTail([{ type: 'eq' }]) === false, 'an EQ ends with its input')
+  assert(needsTail([{ type: 'compressor' }]) === false, 'so does a compressor')
+  assert(needsTail([{ type: 'limiter' }]) === false, 'and a limiter')
+  assert(needsTail([{ type: 'reverb' }]) === true, 'a reverb does not')
+  assert(needsTail([{ type: 'delay' }]) === true, 'nor a delay')
+  assert(needsTail([{ type: 'eq' }, { type: 'reverb' }]) === true, 'one tailed effect is enough')
+  assert(needsTail([]) === false, 'no chain, no tail')
+  assert(needsTail(null) === false, 'and a missing chain too')
+})
+
+await step('the tail is padded before the chain, which is what keeps it', async () => {
+  // The order is load-bearing and invisible: `preserveLength` trims to the length
+  // it is handed, so padding first keeps the tail and padding afterwards deletes
+  // it — with every other assertion in this file still passing.
+  const source = await readFile(join(root, 'src', 'project', 'render.js'), 'utf8')
+  const body = source.slice(source.indexOf('const renderClip = async'), source.indexOf('const duckEnvelopeFor'))
+  const padAt = body.indexOf('padTail(')
+  const chainAt = body.indexOf('applyFxChain(')
+  assert(padAt > 0 && chainAt > padAt, 'padTail must run before applyFxChain')
+  assert(/preserveLength: true/.test(body), 'the chain still preserves the padded length')
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

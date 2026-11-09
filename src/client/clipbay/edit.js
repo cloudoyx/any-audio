@@ -250,30 +250,6 @@ export function renameTrack(project, { trackId, name }) {
   return { project: next, note: `重命名轨道「${before}」为「${track.name}」` }
 }
 
-/** Track fader, shared by every clip on the track. */
-export function setTrackVolume(project, { trackId, volumeDb }) {
-  const next = clone(project)
-  const track = findTrack(next, trackId)
-  const value = Number(volumeDb)
-  if (!Number.isFinite(value)) throw new EditError('volume must be a number')
-  if (value < -120 || value > 24) throw new EditError('volume must stay between -120 and +24 dB')
-  if (tidy(value) === tidy(track.volumeDb)) return { project: next, note: '' }
-  track.volumeDb = tidy(value)
-  return { project: next, note: `调整轨道「${track.name}」音量 ${track.volumeDb} dB` }
-}
-
-/** Track pan, summed with each clip's own pan by the renderer. */
-export function setTrackPan(project, { trackId, pan }) {
-  const next = clone(project)
-  const track = findTrack(next, trackId)
-  const value = Number(pan)
-  if (!Number.isFinite(value)) throw new EditError('pan must be a number')
-  if (value < -1 || value > 1) throw new EditError('pan must stay between -1 and 1')
-  if (tidy(value) === tidy(track.pan)) return { project: next, note: '' }
-  track.pan = tidy(value)
-  return { project: next, note: `调整轨道「${track.name}」声像 ${track.pan}` }
-}
-
 export function setTrackMuted(project, { trackId, muted }) {
   const next = clone(project)
   const track = findTrack(next, trackId)
@@ -364,16 +340,6 @@ function assertChain(chain) {
     if (!FX_TYPES.includes(fx.type)) throw new EditError(`unknown effect type "${fx.type}"; use ${FX_TYPES.join(', ')}`)
   }
   return chain
-}
-
-export function setTrackFx(project, { trackId, chain }) {
-  const next = clone(project)
-  const track = findTrack(next, trackId)
-  const wanted = assertChain(chain)
-  const before = JSON.stringify(track.fx ?? [])
-  if (JSON.stringify(wanted) === before) return { project: next, note: '' }
-  track.fx = wanted.map((fx) => structuredClone(fx))
-  return { project: next, note: `设置轨道「${track.name}」效果链（${describeFxChain(track.fx)}）` }
 }
 
 export function setClipFx(project, { trackId, itemId, chain }) {

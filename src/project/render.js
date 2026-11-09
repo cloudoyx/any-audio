@@ -18,8 +18,8 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { accumulateInto, applyFades, applyGainDb } from '../audio/mix.js'
-import { applyFxChain, monoEnvelope } from '../audio/fx.js'
-import { dbToGain, itemParams, masterParams, panGains, resolveTrackGain, trackParams } from '../client/clipbay/mix-params.js'
+import { applyFxChain, monoEnvelope, needsTail } from '../audio/fx.js'
+import { dbToGain, itemParams, masterParams, panGains, resolveTrackGain } from '../client/clipbay/mix-params.js'
 import { conformChannels, encodeWav, parseWav, peakOf, resample, rmsOf, toDb } from '../audio/wav.js'
 import { findFfmpeg, runFfmpeg } from '../tools/shared.js'
 import { muxVideo, probeDuration } from '../tools/mix.js'
@@ -30,6 +30,15 @@ import { readMaterialIndex, saveProject } from './store.js'
 
 /** Where an explicit export-time normalisation peaks (spec §10.2). */
 export const EXPORT_NORMALIZE_PEAK_DB = -1.5
+
+/**
+ * How much silence a clip-mounted reverb or delay gets to decay into.
+ *
+ * Two seconds is long enough for a large room to fall away and short enough that
+ * a project with a reverb on every clip does not pay noticeably for it: only
+ * clips whose chain actually has a reverb or delay are extended.
+ */
+export const TAIL_SEC = 2
 
 export class RenderError extends Error {
   constructor(message) {
@@ -76,6 +85,21 @@ function sliceItem(channels, sampleRate, item) {
   out[0].set(channels[0].subarray(start, start + take))
   out[1].set(channels[1].subarray(start, start + take))
   return out
+}
+
+/**
+ * Extend both channels with silence, so an effect has room to ring out.
+ *
+ * The added part is zeros, so it can only ever carry the *effect's* tail — never
+ * a second copy of the dry sound, which has already finished by then.
+ */
+function padTail(channels, frames) {
+  if (!(frames > 0)) return channels
+  return channels.map((channel) => {
+    const out = new Float32Array(channel.length + frames)
+    out.set(channel)
+    return out
+  })
 }
 
 /** Render a validated project to float channels. */
@@ -132,7 +156,17 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
     for (const fx of item.fx) {
       if (fx?.type === 'duck' && fx.sourceTrackId) await duckEnvelopeFor(fx.sourceTrackId)
     }
-    return applyFxChain(piece, sampleRate, item.fx, { duckEnvelopes, preserveLength: true })
+    // A reverb or delay needs somewhere to decay. The buffer is exactly as long
+    // as the clip, so the tail was cut off at the boundary and a clip-mounted
+    // reverb sounded like a switch being thrown rather than a room (improvement
+    // plan 03, I-50 — measured −240 dB where a bus still read −11 dB).
+    //
+    // This has to happen BEFORE the chain: `preserveLength` trims to the length
+    // it was handed, so padding first keeps the tail and padding after would
+    // delete it. The order is pinned by a test, because getting it wrong is
+    // invisible — every other assertion still passes.
+    const padded = needsTail(item.fx) ? padTail(piece, Math.round(TAIL_SEC * sampleRate)) : piece
+    return applyFxChain(padded, sampleRate, item.fx, { duckEnvelopes, preserveLength: true })
   }
 
   /** The sidechain signal: that track's clips summed, with no fader of its own. */
@@ -170,58 +204,32 @@ export async function renderProject({ project, workspaceRoot, signal, onProgress
 
   for (const [trackIndex, track] of tracks.entries()) {
     throwIfAborted(signal)
-    const level = trackParams(track)
     const trackGain = resolveTrackGain(track, anySolo)
     const report = {
       id: track.id,
       name: track.name,
       category: track.category,
-      volumeDb: level.volumeDb,
-      pan: Number(track.pan) || 0,
-      muted: level.muted,
+      muted: track.muted === true,
       clips: 0,
-      fx: (track.fx ?? []).length,
     }
-
-    // A track with effects is summed on its own first, processed, then mixed into
-    // the master. The alternative — one buffer per track for the whole project —
-    // is 20 × 330 MB on a 15-minute project (plan §8, "no per-track bus").
-    const trackBus = track.fx?.length ? [new Float32Array(frames), new Float32Array(frames)] : null
 
     for (const item of track.items) {
       throwIfAborted(signal)
-      // A muted clip is dropped; a muted *track* is not, because its fader is
-      // what silences it (and the report still counts its clips).
+      // A muted clip is dropped; a muted *track* is not, because its mute is what
+      // silences it (and the report still counts its clips).
       if (item.muted) continue
       const piece = await renderClip(track, item)
       const params = itemParams(item, track)
-      // Clip pan and track pan add up once, in mix-params; one equal-power pair
-      // is applied once.
+      // The clip's pan, once, in equal power — the same pair the preview applies.
+      // A track contributes nothing but mute and solo (improvement plan 03, I-41),
+      // so there is no track bus left to sum a chain on.
       const [panLeft, panRight] = panGains(params.pan)
-      if (trackBus) accumulateInto(trackBus, piece, Math.round(item.startSec * sampleRate), panLeft, panRight)
-      else accumulateInto(acc, piece, Math.round(item.startSec * sampleRate), trackGain * panLeft, trackGain * panRight)
+      accumulateInto(acc, piece, Math.round(item.startSec * sampleRate), trackGain * panLeft, trackGain * panRight)
       report.clips++
       clipCount++
       onProgress?.({ phase: 'render', track: trackIndex + 1, tracks: tracks.length, clips: clipCount })
     }
 
-    if (trackBus) {
-      throwIfAborted(signal)
-      // A duck at track level reads another track's signal; it has to be measured
-      // before the chain runs, or `applyDuck` finds no envelope and quietly does
-      // nothing.
-      await prepareDuckSources(track.fx)
-      const processed = applyFxChain(trackBus, sampleRate, track.fx, { duckEnvelopes, preserveLength: true })
-      // Only the fader is left to apply. Pan already went onto each clip above —
-      // the same combined pair the no-effect path uses — so applying the track
-      // pan again here would square it, and a track with an EQ would quietly
-      // pan differently from one without.
-      //
-      // Order inside the track: clips (gain, fades, clip effects, pan) → chain →
-      // fader. That is what a track insert means in a DAW, and it keeps a
-      // compressor's threshold in the same place whether or not the fader moved.
-      accumulateInto(acc, processed, 0, trackGain, trackGain)
-    }
     reports.push(report)
   }
 

@@ -94,9 +94,9 @@ export function ClipProperties({ selection, track, item, tracks, onEdit, onClear
     ),
     track
       ? h('p', {
-        title: `${t('所属轨道')}：${track.name} · ${track.volumeDb} dB`,
+        title: `${t('所属轨道')}：${track.name}`,
         style: { ...S.desc, fontSize: 10, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      }, `${track.name} · ${track.volumeDb} dB${track.pan ? ` · ${t('声像')} ${track.pan}` : ''}`)
+      }, track.name)
       : null,
     // The clip's own chain (I-07). It sits last in the column because it is the
     // longest block, and the fields a person reaches for first — gain, pan,

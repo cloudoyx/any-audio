@@ -163,7 +163,7 @@ await test('project update renders each applied note', async () => {
   const text = await renderOf('anyaudio_project', {
     mode: 'update',
     projectId,
-    changes: [{ target: 'track', trackId: track.id, field: 'volumeDb', value: -6 }],
+    changes: [{ target: 'track', trackId: track.id, field: 'muted', value: true }],
   })
   assert.match(text, /Applied 1 change/)
   assert.match(text, /- /)

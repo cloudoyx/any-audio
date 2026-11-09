@@ -87,11 +87,8 @@ async function projectSummary(workspaceRoot, project) {
       id: track.id,
       name: track.name,
       category: track.category,
-      volumeDb: track.volumeDb,
-      pan: track.pan,
       muted: track.muted,
       solo: track.solo,
-      ...(track.fx?.length ? { fx: track.fx } : {}),
       clips: track.items.map((item) => ({
         id: item.id,
         material: item.material,
@@ -152,7 +149,7 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
       case 'normalizeGainDb':
         throw new Error(
           'project field "normalizeGainDb" is measured by the renderer, not set: it is fixed the first time the project is exported (spec §10.2), '
-          + 'so a manual value would be overwritten anyway. Adjust the mix with masterFaderDb, track volumeDb or clip gainDb instead.',
+          + 'so a manual value would be overwritten anyway. Adjust the mix with masterFaderDb or a clip gainDb instead.',
         )
       default: throw new Error(`unknown project field "${field}"; use name, masterFaderDb or masterFx`)
     }
@@ -201,8 +198,6 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
   if (target === 'track') {
     switch (field) {
       case 'name': track.name = String(value).slice(0, 80); return `重命名轨道「${track.name}」`
-      case 'volumeDb': track.volumeDb = Number(value); return `调整轨道「${track.name}」音量 ${track.volumeDb} dB`
-      case 'pan': track.pan = Number(value); return `调整轨道「${track.name}」声像 ${track.pan}`
       case 'muted': {
         track.muted = Boolean(value)
         // Same rule as the clip bay's own buttons: mute wins over solo in
@@ -220,10 +215,6 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
         if (cleared) track.muted = false
         return `${track.solo ? '独奏' : '取消独奏'}轨道「${track.name}」${cleared ? '（同时取消静音）' : ''}`
       }
-      case 'fx': {
-        track.fx = validateFxChain(value, 'fx')
-        return `设置轨道「${track.name}」效果链（${describeChain(track.fx)}）`
-      }
       case 'delete': {
         // Deleting a track is how a person cleans up after a re-render that
         // appended a second copy instead of replacing the first. Without it the
@@ -235,7 +226,10 @@ function applyUpdate(project, { target, trackId, clipId, field, value }) {
           ? `删除轨道「${track.name}」及其 ${count} 个片段`
           : `删除轨道「${track.name}」`
       }
-      default: throw new Error(`unknown track field "${field}"; use name, volumeDb, pan, muted, solo, fx or delete`)
+      default: throw new Error(
+        `unknown track field "${field}"; a track is a grouping and has only name, muted, solo or delete. `
+        + 'Volume, pan and effects live on each clip (target:"clip", field:"gainDb"/"pan"/"fx"), so one update with many changes does the same job for a whole track.',
+      )
     }
   }
 
@@ -507,7 +501,7 @@ export const projectToolDefinition = finalizeTool({
         items: {
           type: 'object',
           properties: {
-            target: { type: 'string', enum: ['project', 'track', 'clip', 'material'], description: 'project: name, masterFaderDb or masterFx (no trackId needed). track: name, volumeDb, pan, muted, solo, fx, or "delete" to remove the whole track. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label, fx, or "delete" to remove that one clip. material: "delete" to remove a material file — refused while any clip still uses it.' },
+            target: { type: 'string', enum: ['project', 'track', 'clip', 'material'], description: 'project: name, masterFaderDb or masterFx (no trackId needed). track: name, muted, solo, or "delete" to remove the whole track — a track is a grouping and has no volume, pan or effects of its own; set those on its clips. clip: startSec, inSec, outSec, gainDb, pan, fadeInSec, fadeOutSec, muted, label, fx, or "delete" to remove that one clip. material: "delete" to remove a material file — refused while any clip still uses it.' },
             trackId: { type: 'string', description: 'Required for target:"track". For target:"clip" it may be left out: the clip id is unique across the project, so the host works out which track owns it.' },
             clipId: { type: 'string', description: 'Required for target:"clip".' },
             materialId: { type: 'string', description: 'Required for target:"material". mode:"read" lists every material id with its measured level and how many clips use it.' },
@@ -579,6 +573,10 @@ export const projectToolDefinition = finalizeTool({
           // listed in the catalog does not tell an agent when to open it; a line
           // in the reply it is reading right now does.
           'Before laying out tracks or editing this project, load the "anyaudio-clipbay" skill — it carries the placement rules, how to change one range without touching the rest, and how a finished file is meant to be produced.',
+          // The one sentence that has to arrive with the project itself: a
+          // material is measured when it lands, and rebalancing is a clip field,
+          // not a second render (improvement plan 03, I-42).
+          'Every material is measured as it enters the project (peakDb / rmsDb in the material index, shown by mode:"read"). To change the balance, set the clip gain (target:"clip", field:"gainDb") — changing a clip never re-renders the material, so do not re-generate what is already here.',
         ].join('\n')
       }
       if (value.mode === 'add_material') {
@@ -618,7 +616,7 @@ export const projectToolDefinition = finalizeTool({
       ]
       for (const track of value.tracks) {
         const clips = track.clips ?? []
-        lines.push(`- ${track.name} [${track.category}] ${track.volumeDb}dB ${clips.length ? `(${clips.length} clips)` : '(empty)'}`)
+        lines.push(`- ${track.name} [${track.category}]${track.muted ? ' (muted)' : ''}${track.solo ? ' (solo)' : ''} ${clips.length ? `(${clips.length} clips)` : '(empty)'}`)
         for (const item of clips) {
           const end = Number(item.startSec) + (Number(item.outSec) - Number(item.inSec))
           lines.push(`    ${item.id} "${item.label}" ${Number(item.startSec).toFixed(2)}–${end.toFixed(2)}s, material ${item.material}`)

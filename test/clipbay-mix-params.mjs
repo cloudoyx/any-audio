@@ -31,7 +31,7 @@ await mkdir(workspaceRoot, { recursive: true })
 const read = (rel) => readFileSync(join(repoRoot, rel), 'utf8').replace(/\r\n/g, '\n')
 
 const {
-  dbToGain, panGains, itemParams, trackParams, masterParams,
+  dbToGain, panGains, itemParams, masterParams,
   resolveTrackGain, audibleTracks, fadeShape, fadeCurve,
 } = await import('../src/client/clipbay/mix-params.js')
 
@@ -94,11 +94,14 @@ await test('fadeShape is the cosine the renderer always used', () => {
 
 // --- the parameters ----------------------------------------------------------
 
-await test('itemParams sums clip and track pan and clamps once', () => {
-  const track = { pan: 0.4, muted: false }
-  assert.equal(itemParams({ pan: 0.4, gainDb: 0 }, track).pan, 0.8, 'the two pans add')
-  assert.equal(itemParams({ pan: 1, gainDb: 0 }, { pan: 1 }).pan, 1, 'and the sum clamps')
-  assert.equal(itemParams({ pan: -1, gainDb: 0 }, { pan: -1 }).pan, -1, 'on both ends')
+await test('itemParams takes the clip pan alone and clamps it', () => {
+  // Improvement plan 03, I-41: a track has no pan any more, so the clip's value
+  // is the whole story. Two places for the same decision is exactly the
+  // disagreement this module exists to prevent.
+  assert.equal(itemParams({ pan: 0.4, gainDb: 0 }, { pan: 0.4 }).pan, 0.4, 'the track pan is gone, not added')
+  assert.equal(itemParams({ pan: 1, gainDb: 0 }, {}).pan, 1, 'the clip value is kept')
+  assert.equal(itemParams({ pan: -1, gainDb: 0 }, {}).pan, -1, 'on both ends')
+  assert.equal(itemParams({ pan: 7, gainDb: 0 }, {}).pan, 1, 'and it is clamped')
 })
 
 await test('itemParams reports mute from either side and keeps the gain factors apart', () => {
@@ -116,12 +119,15 @@ await test('masterParams is one sum of the frozen normalisation and the fader', 
   assert.equal(masterParams({}).gainDb, 0, 'an untouched project is unity')
 })
 
-await test('resolveTrackGain puts mute above solo, and solo silences the rest', () => {
-  assert.equal(resolveTrackGain({ volumeDb: 0 }, false), 1)
-  assert.equal(resolveTrackGain({ volumeDb: 0, muted: true }, false), 0, 'mute wins')
-  assert.equal(resolveTrackGain({ volumeDb: 0, solo: false }, true), 0, 'someone else soloed')
-  assert.equal(resolveTrackGain({ volumeDb: 0, solo: true }, true), 1, 'this one is soloed')
-  assert.equal(resolveTrackGain({ volumeDb: 0, solo: true, muted: true }, true), 0, 'muted solo is still silent')
+await test('resolveTrackGain is only mute and solo: 1 or 0, never a volume', () => {
+  // Improvement plan 03, I-41. A track used to carry a fader; what is left is
+  // its one audible property — being switched off, or being the one soloed.
+  assert.equal(resolveTrackGain({}, false), 1)
+  assert.equal(resolveTrackGain({ volumeDb: -20 }, false), 1, 'a leftover volume field is ignored, not applied')
+  assert.equal(resolveTrackGain({ muted: true }, false), 0, 'mute wins')
+  assert.equal(resolveTrackGain({ solo: false }, true), 0, 'someone else soloed')
+  assert.equal(resolveTrackGain({ solo: true }, true), 1, 'this one is soloed')
+  assert.equal(resolveTrackGain({ solo: true, muted: true }, true), 0, 'muted solo is still silent')
 })
 
 await test('audibleTracks drops muted tracks and honours solo', () => {
@@ -203,7 +209,9 @@ await test('the rendered samples equal the preview schedule applied to the same 
   )
 
   // A tone, so the only thing that varies is the gain the two chains apply to
-  // it. One clip with both fades, a clip pan and a track pan.
+  // it. One clip with both fades and a clip pan. No track volume or pan: since
+  // I-41 a track has neither, and the parity being checked is exactly that the
+  // two engines agree without one.
   const frames = SAMPLE_RATE
   const tone = new Float32Array(frames)
   for (let i = 0; i < frames; i++) tone[i] = Math.sin((2 * Math.PI * 200 * i) / SAMPLE_RATE) * 0.5
@@ -213,8 +221,6 @@ await test('the rendered samples equal the preview schedule applied to the same 
   project.masterFaderDb = 0
   project.tracks = [{
     ...defaultTrack('trk_parity', 'parity'),
-    volumeDb: -3,
-    pan: 0.25,
     items: [{ ...defaultItem('itm_parity', 'mat_parity'), startSec: 0, inSec: 0, outSec: 1, gainDb: -2, pan: -0.5, fadeInSec: 0.2, fadeOutSec: 0.2 }],
   }]
   project.durationSec = contentEndSec(project)

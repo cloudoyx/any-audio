@@ -59,8 +59,6 @@ function sampleProject() {
         id: 'trk_a',
         name: 'Rain',
         category: 'ambience',
-        volumeDb: -3,
-        pan: -0.2,
         muted: false,
         solo: false,
         items: [

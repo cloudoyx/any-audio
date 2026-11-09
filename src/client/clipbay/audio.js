@@ -3,8 +3,9 @@
  *
  * The rule that shapes this file: playback must use the same parameters the
  * renderer uses (plan M5, "预览与导出必须用同一套参数语义"). So gain is
- * `track.volumeDb + item.gainDb`, pan is `clamp(item.pan + track.pan)`, mute and
- * solo resolve the same way, and fades come from the same fadeInSec/fadeOutSec.
+ * `item.gainDb`, pan is `item.pan`, mute and solo resolve the same way, and fades
+ * come from the same fadeInSec/fadeOutSec. A track contributes only mute and
+ * solo (improvement plan 03, I-41) — it has no fader, pan or chain of its own.
  *
  * One AudioContext clock drives every clip: each `start()` is scheduled against
  * a single `startedAt` timestamp, so clips cannot drift apart the way separate
@@ -15,7 +16,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
-import { buildDuckCurve } from '../../audio/fx.js'
+import { buildDuckCurve, needsTail } from '../../audio/fx.js'
 import { fadeCurve, itemParams, masterParams, panGains, playbackStart, resolveTrackGain, toStereoChannels } from './mix-params.js'
 import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
 
@@ -28,6 +29,15 @@ import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } f
  * a fifteen-minute project costs 45k floats instead of 43M.
  */
 const DUCK_POINTS_PER_SEC = 50
+
+/**
+ * How long a clip's reverb is allowed to ring past its own end in the preview.
+ *
+ * The renderer pads by the same two seconds (see `TAIL_SEC` in project/render.js).
+ * The two must agree, or the person hears a tail that the export does not have —
+ * which is the class of defect this file exists to prevent.
+ */
+const PREVIEW_TAIL_SEC = 2
 
 /**
  * Where the reverb worklet bundle lives on the host.
@@ -280,10 +290,10 @@ export function usePlayback(root, projectId) {
   const cacheRef = useRef(null)
   const sourcesRef = useRef([])
   const masterRef = useRef(null)
-  // The bus chain and the per-track buses outlive the clips: a live fader or EQ
-  // move has to reach nodes that belong to the track, not to one clip on it.
+  // The bus chain outlives the clips: an EQ move has to reach nodes that belong
+  // to the whole mix, not to one clip. Tracks themselves hold no chain any more
+  // (improvement plan 03, I-41), so this is the only bus there is.
   const masterChainRef = useRef(null)
-  const busesRef = useRef([])
   const hasWorkletRef = useRef(false)
   const startedAtRef = useRef(0)
   const fromRef = useRef(0)
@@ -311,11 +321,6 @@ export function usePlayback(root, projectId) {
       node.clipChain?.dispose()
     }
     sourcesRef.current = []
-    for (const bus of busesRef.current) {
-      try { bus.fader.disconnect() } catch { /* already gone */ }
-      bus.chain?.dispose()
-    }
-    busesRef.current = []
     masterChainRef.current?.dispose()
     masterChainRef.current = null
     if (frameRef.current) {
@@ -383,7 +388,7 @@ export function usePlayback(root, projectId) {
     // Effects need the reverb worklet, and loading it is async: do it once, up
     // front, so the graph is built in one synchronous pass below.
     const anyFx = Boolean(project.masterFx?.length)
-      || project.tracks.some((track) => track.fx?.length || (track.items ?? []).some((item) => item.fx?.length))
+      || project.tracks.some((track) => (track.items ?? []).some((item) => item.fx?.length))
     const hasWorklet = anyFx ? Boolean(await ensureReverbWorklet(context, [WORKLET_URL])) : false
     if (tokenRef.current !== token) return
 
@@ -408,7 +413,7 @@ export function usePlayback(root, projectId) {
       return envelope
     }
     const duckSources = new Set()
-    for (const chain of [project.masterFx, ...project.tracks.flatMap((track) => [track.fx, ...(track.items ?? []).map((item) => item.fx)])]) {
+    for (const chain of [project.masterFx, ...project.tracks.flatMap((track) => (track.items ?? []).map((item) => item.fx))]) {
       for (const fx of chain ?? []) if (fx?.type === 'duck' && fx.sourceTrackId) duckSources.add(fx.sourceTrackId)
     }
     for (const trackId of duckSources) await loadDuckEnvelope(trackId)
@@ -436,25 +441,6 @@ export function usePlayback(root, projectId) {
           pointsPerSecond: DUCK_POINTS_PER_SEC,
         })
       }
-    }
-
-    // One bus per track, shared by its clips: clips sum into the bus first, then
-    // the track chain, then the fader — the order the renderer uses.
-    const trackBuses = new Map()
-    const ensureTrackBus = (trackId) => {
-      if (trackBuses.has(trackId)) return trackBuses.get(trackId)
-      const track = project.tracks.find((entry) => entry.id === trackId)
-      const fader = context.createGain()
-      fader.gain.value = resolveTrackGain(track, project.tracks.some((entry) => entry.solo))
-      const chain = buildFxChain(context, track?.fx, { hasWorklet })
-      const tail = chain ? chain.output : fader
-      if (chain) fader.connect(chain.input)
-      tail.connect(master)
-      scheduleDucks(chain)
-      const bus = { trackId, fader, chain }
-      trackBuses.set(trackId, bus)
-      busesRef.current.push(bus)
-      return bus
     }
 
     setError('')
@@ -508,7 +494,9 @@ export function usePlayback(root, projectId) {
       const clipChain = buildFxChain(context, item?.fx, { hasWorklet })
       scheduleDucks(clipChain)
 
-      const bus = ensureTrackBus(entry.trackId)
+      // No track bus any more (improvement plan 03, I-41): a track has no fader,
+      // no pan and no chain, so its clips go straight onto the master. Mute and
+      // solo still apply — they ride on `entry.gain`, computed above.
       source.connect(fade)
       fade.connect(itemLevel)
       const head = clipChain ? clipChain.input : null
@@ -520,14 +508,22 @@ export function usePlayback(root, projectId) {
       splitter.connect(panRight, 1)
       panLeft.connect(merger, 0, 0)
       panRight.connect(merger, 0, 1)
-      merger.connect(bus.fader)
-
+      merger.connect(master)
       // A pitch effect is varispeed in both runtimes: `start`'s duration is in
       // buffer time, so the clip still occupies its place on the timeline.
       const rate = chainPlaybackRate(item?.fx)
       if (rate !== 1) source.playbackRate.value = rate
 
-      source.start(clipStart, offset, duration)
+      // A chain with a reverb or delay needs room past the clip to decay into,
+      // or the tail is chopped off exactly where the preview says the clip ends
+      // (improvement plan 03, I-50 — measured −240 dB one millisecond later on a
+      // clip, where the same effect on a bus still read −11 dB). The extra time
+      // is capped by what is left in the material, so a clip shorter than its
+      // source never reads past the end of it.
+      const tailSec = needsTail(item?.fx)
+        ? Math.max(0, Math.min(PREVIEW_TAIL_SEC, buffer.duration - offset - duration))
+        : 0
+      source.start(clipStart, offset, duration + tailSec)
       nodes.push({
         source, fade, itemLevel, splitter, merger, panLeft, panRight,
         trackId: entry.trackId, itemId: entry.itemId, clipChain,
@@ -591,13 +587,6 @@ export function usePlayback(root, projectId) {
     // The bus chain's own parameters move too: turning an EQ gain or a limiter
     // ceiling while the transport runs has to be heard, or the panel is lying.
     if (masterChainRef.current) updateFxChain(masterChainRef.current, project?.masterFx)
-    // A track's fader lives on its bus now, not on each clip, so it is pushed
-    // once per track rather than once per scheduled clip.
-    for (const bus of busesRef.current) {
-      const track = tracks.find((entry) => entry.id === bus.trackId)
-      bus.fader.gain.setTargetAtTime(resolveTrackGain(track, anySolo), now, TARGET_TAU_SEC)
-      if (bus.chain) updateFxChain(bus.chain, track?.fx)
-    }
     if (sourcesRef.current.length === 0) return
     for (const node of sourcesRef.current) {
       const track = tracks.find((entry) => entry.id === node.trackId)

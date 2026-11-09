@@ -105,19 +105,22 @@ export function nowIso() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
 }
 
+/**
+ * A track is a grouping, not a mixer strip (improvement plan 03, I-41).
+ *
+ * It carries what makes it useful as a group — a name, a category, an order —
+ * and the two things that are genuinely properties of the group rather than of
+ * the sound: mute and solo. Volume, pan and the effect chain are not here,
+ * because a clip already carries all three and a second copy at track level only
+ * creates two places to disagree.
+ */
 export function defaultTrack(id, name = id) {
   return {
     id,
     name,
     category: 'other',
-    volumeDb: 0,
-    pan: 0,
     muted: false,
     solo: false,
-    // Processing order, the way a DAW lists a chain. Empty is the normal case and
-    // is omitted on save, so a project without effects reads exactly like one
-    // written before this field existed.
-    fx: [],
     items: [],
   }
 }
@@ -300,11 +303,11 @@ export function validateProject(project) {
     trackIds.add(trackId)
     text(track.name, `${base}.name`)
     choice(track.category, `${base}.category`, TRACK_CATEGORIES)
-    number(track.volumeDb, `${base}.volumeDb`, { min: -120, max: 24 })
-    number(track.pan, `${base}.pan`, { min: -1, max: 1 })
+    // A project written before I-41 still carries volumeDb/pan/fx on its tracks.
+    // They are read, ignored, and dropped on the next save: the user asked for no
+    // migration code, and an old project has to open rather than be rejected.
     flag(track.muted, `${base}.muted`)
     flag(track.solo, `${base}.solo`)
-    validateFxChain(track.fx, `${base}.fx`)
 
     if (!Array.isArray(track.items)) fail(`${base}.items must be an array`)
     track.items.forEach((item, itemIndex) => {

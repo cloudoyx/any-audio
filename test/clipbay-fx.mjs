@@ -425,12 +425,19 @@ await test('the master chain runs after the fader, so a limiter cannot be undone
   assert.ok(peakDb > -6, `and it must actually use the headroom, got ${peakDb.toFixed(2)} dBFS`)
 })
 
-await test('a track chain runs before the fader, and an EQ there changes the sound', async () => {
+await test('a clip chain changes the sound, and a leftover track chain is ignored', async () => {
+  // Improvement plan 03, I-41. A track used to carry its own chain; that is gone,
+  // so this checks the chain on the clip does the work and a leftover `fx` on the
+  // track neither helps nor breaks the render.
   const material = tone(1, 1000, 0.25)
   const track = {
     ...defaultTrack('trk_eq', 'EQ'),
     fx: [{ type: 'eq', bands: [{ type: 'peaking', freqHz: 1000, gainDb: 12, q: 1 }] }],
-    items: [{ ...defaultItem('itm_eq', 'mat_tone'), startSec: 0, inSec: 0, outSec: 1 }],
+    items: [{
+      ...defaultItem('itm_eq', 'mat_tone'),
+      startSec: 0, inSec: 0, outSec: 1,
+      fx: [{ type: 'eq', bands: [{ type: 'peaking', freqHz: 1000, gainDb: 12, q: 1 }] }],
+    }],
   }
   const plain = { ...defaultTrack('trk_plain', 'Plain'), items: [{ ...defaultItem('itm_plain', 'mat_tone'), startSec: 0, inSec: 0, outSec: 1 }] }
   const withFx = await makeProject({ id: 'prj_track_fx', materials: { mat_tone: material }, tracks: [track] })
@@ -438,7 +445,7 @@ await test('a track chain runs before the fader, and an EQ there changes the sou
   const boosted = await renderProject({ project: withFx.project, workspaceRoot })
   const reference = await renderProject({ project: without.project, workspaceRoot })
   const delta = toDb(peakOf(boosted.channels)) - toDb(peakOf(reference.channels))
-  assert.ok(delta > 8, `a +12 dB band on the only content lifts the peak substantially, measured ${delta.toFixed(2)} dB`)
+  assert.ok(delta > 8, `a +12 dB band on the clip lifts the peak substantially, measured ${delta.toFixed(2)} dB`)
   near(boosted.trackCount, 1, 0, 'and the track is still there')
 })
 
@@ -470,8 +477,14 @@ await test('a duck on the bus follows the narration track', async () => {
   }
   const musicTrack = {
     ...defaultTrack('trk_music', 'Music'),
-    fx: [{ type: 'duck', sourceTrackId: 'trk_voice', targetDb: -18, thresholdDb: -30, attackSec: 0.01, releaseSec: 0.05 }],
-    items: [{ ...defaultItem('itm_music', 'mat_music'), startSec: 0, inSec: 0, outSec: 2 }],
+    items: [{
+      ...defaultItem('itm_music', 'mat_music'),
+      startSec: 0, inSec: 0, outSec: 2,
+      // The duck lives on the clip now (I-41): a track has no chain, and a duck
+      // that has to apply to a whole group is what one `update` with many changes
+      // is for.
+      fx: [{ type: 'duck', sourceTrackId: 'trk_voice', targetDb: -18, thresholdDb: -30, attackSec: 0.01, releaseSec: 0.05 }],
+    }],
   }
   const voiceTrack = {
     ...defaultTrack('trk_voice', 'Voice'),

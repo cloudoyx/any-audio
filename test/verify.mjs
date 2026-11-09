@@ -936,6 +936,51 @@ await test('the system prompt keeps the rules that decide whether a project surv
   assert(!/one track per narration line/i.test(text), 'the old wording that caused this must not come back')
 })
 
+await test('the prompt says rebalancing is a clip field, not a second render', async () => {
+  // Improvement plan 03, I-42. The "render four times" loop was not the Agent
+  // being careless: the guidance told it that per-track gainDb was the balance
+  // knob, and the only way to change that was to render the score again.
+  const { apply } = await import('../src/index.js')
+  let text = null
+  const ctx = {
+    get: (id) => (id === 'systemPrompt' ? { section: (value) => { text = value.text } } : undefined),
+    tools: { register: () => {} },
+    logger: { info: () => {} },
+  }
+  apply(ctx, { routes: false })
+  for (let attempt = 0; attempt < 40 && !text; attempt++) await new Promise((resolve) => setTimeout(resolve, 25))
+  assert(text, 'the prompt section was not registered')
+  assert(/change the balance with clip gain/i.test(text), 'the rule has to be stated, not implied')
+  assert(/not by rendering the material again/i.test(text), 'and it has to name the wrong path it replaces')
+  assert(/re-generating a whole score/i.test(text), 'including the exact waste it is meant to stop')
+})
+
+await test('the music tool no longer sells the old balance story', async () => {
+  // The parameter text is what an Agent reads on *every* call, so it outranks the
+  // skill. I-18 taught this: a rule that lives only in a skill is invisible to a
+  // session that never loads it.
+  const music = await readFile(join(repoRoot, 'src', 'tools', 'music.js'), 'utf8')
+  assert(!/its real share of the music bus/.test(music), 'the "gainDb is the mix knob" wording must be gone')
+  assert(!/Render with analyze:true \(or stems:true\) to see per-track RMS/.test(music), 'and the instruction to call again for RMS')
+  assert(!/Use this to check the balance/.test(music), 'the analyze parameter must not promise to turn measurement on')
+  assert(/its level is its stem is rendered at|the level its stem is rendered at/i.test(music), 'the new wording says gainDb is a fact about the file')
+  assert(/measured during this render|measured as part of rendering/i.test(music), 'and that levels come back without asking')
+  assert(/trackName.? is ignored/i.test(music), 'stems:true has to say that trackName is ignored')
+})
+
+await test('no document still calls a track a fader', async () => {
+  // A track is a grouping now (I-41). "一条轨就是一个推子" was true for one round
+  // and would send the next Agent looking for a control that no longer exists.
+  for (const rel of ['src/skills/anyaudio-clipbay.md', 'src/skills/anyaudio-scoring.md']) {
+    const text = await readFile(join(repoRoot, rel), 'utf8')
+    assert(!/一条轨就是一个推子/.test(text), `${rel} still calls a track a fader`)
+    assert(!/用那条轨道的 `?gainDb`? 修/.test(text), `${rel} still sends the Agent to the score's gainDb`)
+  }
+  const scoring = await readFile(join(repoRoot, 'src', 'skills', 'anyaudio-scoring.md'), 'utf8')
+  assert(/改片段增益|改\*\*片段增益\*\*/.test(scoring), 'the skill has to name clip gain as the way to rebalance')
+  assert(/为了调音量把整首曲子重新生成/.test(scoring), 'and the anti-pattern has to be written down somewhere')
+})
+
 await test('creating a project points at the clip bay skill', async () => {
   // B of the same fix: a file listed in the catalog does not tell an agent when
   // to open it, but a sentence in the reply it is already reading does.

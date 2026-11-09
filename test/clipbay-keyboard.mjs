@@ -123,15 +123,19 @@ test('the properties panel offers an explicit way out of a selection', () => {
   assert.match(panel, /onClear: clearSelection/, 'the shell wires it to the same handler as Escape')
 })
 
-test('the track head faders are thin, not raw browser sliders', () => {
-  // A bare `input[type=range]` draws a thick track with a chunky accent fill.
-  // Pseudo-elements cannot be styled inline, so the plugin ships one stylesheet
-  // rule set and every fader uses it.
+test('the timeline has no faders at all, and the shared slider is still styled', () => {
+  // A bare `input[type=range]` draws a thick track with a chunky accent fill, so
+  // the plugin ships one stylesheet rule set and every fader uses it. Since
+  // improvement plan 03, I-41 a track has no fader, pan or chain: the clip bay's
+  // timeline therefore carries no Slider at all, and the only one left is the bus
+  // fader in the panel.
   const ui = readFileSync(join(root, 'src', 'client', 'ui.js'), 'utf8').replace(/\r\n/g, '\n')
   assert.match(ui, /slider-runnable-track\{height:3px/, 'the track is 3px tall')
   assert.match(ui, /function Slider\(/, 'a shared Slider component exists')
-  assert.match(source, /h\(Slider,/, 'the track heads use it')
+  assert.equal(/h\(Slider,/.test(source), false, 'the timeline no longer carries a fader: tracks have none')
   assert.equal(/type: 'range'/.test(source), false, 'no raw range input is left in the timeline')
+  const panel = readFileSync(join(root, 'src', 'client', 'clipbay', 'panel.js'), 'utf8').replace(/\r\n/g, '\n')
+  assert.match(panel, /h\(Slider,/, 'the bus fader still uses the shared slider')
 })
 
 console.log(`\n${passed} passed, ${failed} failed`)

@@ -28,8 +28,8 @@ import { buildMention, appendToDraft } from './mention.js'
 import {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits,
-  renameTrack, setTrackVolume, setTrackPan, setTrackMuted, setTrackSolo, deleteTrack,
-  setClipFx, setTrackFx, setMasterFx, setMasterFader,
+  renameTrack, setTrackMuted, setTrackSolo, deleteTrack,
+  setClipFx, setMasterFx, setMasterFader,
   EditError,
 } from './edit.js'
 
@@ -307,14 +307,6 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           if (!track) throw new EditError(`no such track: ${trackId}`)
           result = renameTrack(project, { trackId, name: request.name })
           break
-        case 'track-volume':
-          if (!track) throw new EditError(`no such track: ${trackId}`)
-          result = setTrackVolume(project, { trackId, volumeDb: request.volumeDb })
-          break
-        case 'track-pan':
-          if (!track) throw new EditError(`no such track: ${trackId}`)
-          result = setTrackPan(project, { trackId, pan: request.pan })
-          break
         case 'track-mute':
           if (!track) throw new EditError(`no such track: ${trackId}`)
           result = setTrackMuted(project, { trackId, muted: request.muted })
@@ -326,10 +318,6 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
         case 'track-delete':
           if (!track) throw new EditError(`no such track: ${trackId}`)
           result = deleteTrack(project, { trackId })
-          break
-        case 'track-fx':
-          if (!track) throw new EditError(`no such track: ${trackId}`)
-          result = setTrackFx(project, { trackId, chain: request.chain })
           break
         case 'master-fx':
           result = setMasterFx(project, { chain: request.chain })
@@ -374,15 +362,12 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   const faderDb = Number(project.masterFaderDb) || 0
 
   // Which chain the right-hand column is showing (I-07). The column is 220px and
-  // lives beside the picture, so one list at a time: a clip, a track, or the bus.
-  const fxTrack = typeof fxTarget === 'string' && fxTarget !== 'master'
-    ? project.tracks.find((entry) => entry.id === fxTarget)
-    : null
+  // lives beside the picture, so one list at a time. Since I-41 a track has no
+  // chain of its own — effects live on clips or on the bus — so the only chain
+  // that can open here is the bus.
   const fxEditor = fxTarget === 'master'
     ? { level: 'master', chain: project.masterFx ?? [], title: t('总线效果'), apply: (chain) => applyEdit({ kind: 'master-fx', chain }) }
-    : fxTrack
-      ? { level: 'track', chain: fxTrack.fx ?? [], title: `${t('轨道效果')} · ${fxTrack.name}`, apply: (chain) => applyEdit({ kind: 'track-fx', trackId: fxTrack.id, chain }) }
-      : null
+    : null
 
   // The panel fills the view area and handles its own scrolling, so the header,
   // the preview row and the transport stay put while only the tracks scroll
@@ -537,8 +522,6 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       range,
       onRange: setRange,
       onClearSelection: clearSelection,
-      // A track's FX button opens that track's chain in the right-hand column.
-      onFx: (trackId) => setFxTarget(trackId),
     }),
   )
 }

@@ -55,6 +55,7 @@ Rules that decide whether the deliverable is worth keeping — these are not sty
 - Read a project (mode:"read") before changing it, and touch only the range that was asked about. There is no undo for an agent's edit, so a broad edit destroys the person's own work.
 - Generated material is frozen at the moment it entered the project; never overwrite or delete a material to "fix" it. Add the new take and leave the old one, because the person may want to compare.
 - Never assemble the finished file yourself: no direct ffmpeg run, no re-muxing a video by hand. A finished MP4 comes from anyaudio_project mode:"render" only — anything else produces a file the clip bay cannot see, and the project and the delivered file stop agreeing.
+- Change the balance with clip gain, not by rendering the material again. A material is finished the moment it exists; a clip's gainDb, pan and fx are playback settings that never re-render anything. Re-generating a whole score to move one number throws away every track's audio to change one field.
 - Normalisation happens once, on the first export, and is then frozen. Do not re-normalise a later export: it would cancel the level changes the person made by hand.`
 
 function safeGet(ctx, service) {

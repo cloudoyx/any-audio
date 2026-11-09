@@ -21,7 +21,7 @@ const mod = await import(`data:text/javascript;base64,${Buffer.from(`${fxSource}
 const {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits, EditError,
-  renameTrack, setTrackVolume, setTrackPan, setTrackMuted, setTrackSolo, deleteTrack,
+  renameTrack, setTrackMuted, setTrackSolo, deleteTrack,
   setMasterFader,
   itemLength, itemEnd,
 } = mod
@@ -264,14 +264,6 @@ test('renameTrack renames one track and rejects an empty name', () => {
   equal(renameTrack(project(), { trackId: 'trk_1', name: 'Drums' }).note, '', 'the same name records nothing')
 })
 
-test('setTrackVolume writes the fader and rejects out-of-range input', () => {
-  const { project: after, note } = setTrackVolume(project(), { trackId: 'trk_1', volumeDb: -12.5 })
-  close(after.tracks[0].volumeDb, -12.5, 'fader applied')
-  check(/音量/.test(note), 'the note names the volume')
-  assert.throws(() => setTrackVolume(project(), { trackId: 'trk_1', volumeDb: 30 }), EditError)
-  assert.throws(() => setTrackVolume(project(), { trackId: 'trk_1', volumeDb: -200 }), EditError)
-})
-
 test('setMasterFader writes the bus fader and rejects out-of-range input', () => {
   const { project: after, note } = setMasterFader(project(), { masterFaderDb: -6 })
   close(after.masterFaderDb, -6, 'fader applied')
@@ -287,12 +279,6 @@ test('setMasterFader writes the bus fader and rejects out-of-range input', () =>
 test('setMasterFader reports no note when the value is unchanged', () => {
   const { note } = setMasterFader(project(), { masterFaderDb: 0 })
   equal(note, '', 'a no-op must not enter the history log')
-})
-
-test('setTrackPan writes the pan and rejects out-of-range input', () => {
-  const { project: after } = setTrackPan(project(), { trackId: 'trk_1', pan: 0.5 })
-  close(after.tracks[0].pan, 0.5, 'pan applied')
-  assert.throws(() => setTrackPan(project(), { trackId: 'trk_1', pan: -3 }), EditError)
 })
 
 test('setTrackMuted and setTrackSolo leave the other flag alone when it is off', () => {

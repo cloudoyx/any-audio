@@ -173,7 +173,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, audible = 
   )
 }
 
-function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WIDTH, onSelect, onEdit, onFx }) {
+function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WIDTH, onSelect, onEdit }) {
   const [name, setName] = useState(track.name)
   const [editing, setEditing] = useState(false)
 
@@ -240,51 +240,21 @@ function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WID
         style: { padding: '0 4px', fontSize: 9, minWidth: 16, lineHeight: 1.4 },
       }, 'S'),
       h(Btn, {
-        onClick: (event) => { event.stopPropagation(); onFx() },
-        kind: track.fx?.length ? 'primary' : 'plain',
-        title: track.fx?.length ? `${t('轨道效果')}（${track.fx.length}）` : t('轨道效果'),
-        style: { padding: '0 4px', fontSize: 9, minWidth: 18, lineHeight: 1.4 },
-      }, 'FX'),
-      h(Btn, {
         onClick: (event) => { event.stopPropagation(); onEdit({ kind: 'track-delete' }) },
         title: t('删除轨道'),
         style: { padding: '0 3px', fontSize: 9, lineHeight: 1.4 },
       }, '✕'),
     ),
-    // Volume and pan share one row: two thin faders with their current values,
-    // which is all a track head needs to be read at a glance.
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } },
-      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 26, color: C.muted } }, `${track.volumeDb} dB`),
-      h(Slider, {
-        min: -60,
-        max: 12,
-        step: 0.5,
-        value: track.volumeDb,
-        title: `${t('音量')} ${track.volumeDb} dB`,
-        onChange: (value) => onEdit({ kind: 'track-volume', volumeDb: value }),
-      }),
-    ),
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } },
-      h('span', { style: { ...S.mono, fontSize: 9, minWidth: 26, color: C.muted } }, track.pan.toFixed(2)),
-      h(Slider, {
-        min: -1,
-        max: 1,
-        step: 0.05,
-        value: track.pan,
-        title: `${t('声像 (-1=极左, 1=极右)')} ${track.pan}`,
-        onChange: (value) => onEdit({ kind: 'track-pan', pan: value }),
-      }),
-    ),
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, onSelect, onEdit, onFx, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
+function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
   const height = TRACK_HEIGHT
   const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h(TrackHead, { track, active, audible, height, headWidth, onSelect, onEdit, onFx }),
+    h(TrackHead, { track, active, audible, height, headWidth, onSelect, onEdit }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -326,7 +296,7 @@ function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, 
   )
 }
 
-export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange, onClearSelection, onFx }) {
+export function Timeline({ root, projectId, project, materials, transport, onEdit, selection, onSelect, onUndo, onRedo, range, onRange, onClearSelection }) {
   const [scale, setScale] = useState(60)
   const [activeTrackId, setActiveTrackId] = useState(project.tracks[0]?.id ?? null)
   const [headWidth, setHeadWidth] = useState(HEAD_WIDTH)
@@ -639,9 +609,6 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             active: track.id === activeTrackId,
             onSelect: () => setActiveTrackId(track.id),
             onEdit: (request) => onEdit?.({ ...request, trackId: track.id }),
-            // A track's own chain lives behind the FX button in its head, which
-            // opens the same editor the clip and bus use.
-            onFx: () => onFx?.(track.id),
             drag: { preview: dragPreview },
             selection,
             onClipPointerDown: startDrag,

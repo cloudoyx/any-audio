@@ -53,7 +53,7 @@ function close(actual, expected, message, epsilon = 1e-6) {
 }
 
 function track(overrides = {}) {
-  return { id: 'trk_1', name: 'T', category: 'other', volumeDb: 0, pan: 0, muted: false, solo: false, items: [], ...overrides }
+  return { id: 'trk_1', name: 'T', category: 'other', muted: false, solo: false, items: [], ...overrides }
 }
 
 function item(overrides = {}) {
@@ -94,17 +94,19 @@ test('scheduleClips places a clip at its start time', () => {
   close(entry.duration, 3, 'lasts outSec - inSec')
 })
 
-test('scheduleClips multiplies track and clip gain', () => {
+test('scheduleClips takes the gain from the clip, not from the track', () => {
+  // Improvement plan 03, I-41: a track has no fader. A leftover volumeDb in an
+  // old project is ignored rather than applied on top of the clip's gain.
   const project = { tracks: [track({ volumeDb: -6, items: [item({ gainDb: -3.5 })] })] }
   const entry = scheduleClips(project, 0)[0]
-  close(entry.gain, dbToGain(-9.5), 'gains add in dB, not multiply per stage', 1e-9)
+  close(entry.gain, dbToGain(-3.5), 'the clip gain is the whole gain', 1e-9)
 })
 
-test('scheduleClips sums clip and track pan, clamped', () => {
+test('scheduleClips takes the pan from the clip alone, clamped', () => {
   const project = { tracks: [track({ pan: 0.4, items: [item({ pan: 0.4 })] })] }
-  close(scheduleClips(project, 0)[0].pan, 0.8, 'pans add')
-  const over = { tracks: [track({ pan: 1, items: [item({ pan: 1 })] })] }
-  close(scheduleClips(over, 0)[0].pan, 1, 'the sum is clamped to +1')
+  close(scheduleClips(project, 0)[0].pan, 0.4, 'the track pan is gone, not added')
+  const over = { tracks: [track({ items: [item({ pan: 2 })] })] }
+  close(scheduleClips(over, 0)[0].pan, 1, 'and the clip value is clamped')
 })
 
 test('a muted clip or track is scheduled silent, not dropped', () => {
@@ -189,11 +191,12 @@ test('scheduledLength follows the last clip end', () => {
 
 test('scheduleClips agrees with a hand-computed renderer mix', () => {
   // Two clips on two tracks, one trimmed, one panned: the export mix of this
-  // arrangement is what these four numbers describe.
+  // arrangement is what these four numbers describe. Since I-41 the tracks carry
+  // no level or pan of their own, so both come from the clips.
   const project = {
     tracks: [
-      track({ id: 'a', volumeDb: -6, pan: 0, items: [item({ id: 'a1', startSec: 0, inSec: 0.5, outSec: 2.5, gainDb: -1 })] }),
-      track({ id: 'b', volumeDb: 0, pan: -1, items: [item({ id: 'b1', startSec: 1, inSec: 0, outSec: 1 })] }),
+      track({ id: 'a', items: [item({ id: 'a1', startSec: 0, inSec: 0.5, outSec: 2.5, gainDb: -1 })] }),
+      track({ id: 'b', items: [item({ id: 'b1', startSec: 1, inSec: 0, outSec: 1, pan: -1 })] }),
     ],
   }
   const entries = scheduleClips(project, 0)
@@ -202,25 +205,25 @@ test('scheduleClips agrees with a hand-computed renderer mix', () => {
   close(a.when, 0, 'a starts at 0')
   close(a.inSec, 0.5, 'a is trimmed in')
   close(a.duration, 2, 'a lasts 2s')
-  close(a.gain, dbToGain(-7), 'a carries -7 dB total')
+  close(a.gain, dbToGain(-1), 'a carries its own -1 dB')
   close(b.when, 1, 'b starts at 1')
   close(b.pan, -1, 'b is hard left')
 })
 
-test('mixedGain reads the live project, which is what makes a fader audible', () => {
+test('mixedGain reads the live project, which is what makes an edit audible', () => {
   // Improvement plan 01, I-06. The value the graph is pushed must be computed
   // from the current project, not from what was true when playback started.
   const project = {
     tracks: [
-      track({ id: 'a', volumeDb: 0, items: [item({ id: 'a1', gainDb: 0 })] }),
-      track({ id: 'b', volumeDb: -6, items: [item({ id: 'b1', gainDb: -3 })] }),
+      track({ id: 'a', items: [item({ id: 'a1', gainDb: 0 })] }),
+      track({ id: 'b', items: [item({ id: 'b1', gainDb: -3 })] }),
     ],
   }
   close(mixedGain(project, 'a', 'a1'), 1, 'unity stays exactly 1')
-  close(mixedGain(project, 'b', 'b1'), dbToGain(-9), 'track and clip gain multiply')
+  close(mixedGain(project, 'b', 'b1'), dbToGain(-3), 'the clip gain is the gain')
 
-  project.tracks[1].volumeDb = -20
-  close(mixedGain(project, 'b', 'b1'), dbToGain(-23), 'a fader move is picked up at once')
+  project.tracks[1].items[0].gainDb = -20
+  close(mixedGain(project, 'b', 'b1'), dbToGain(-20), 'a clip gain move is picked up at once')
 
   project.tracks[0].muted = true
   assert.equal(mixedGain(project, 'a', 'a1'), 0, 'muting the track silences its clips')
@@ -235,7 +238,7 @@ test('mixedGain reads the live project, which is what makes a fader audible', ()
   project.tracks[0].items[0].muted = false
   project.tracks[1].solo = true
   assert.equal(mixedGain(project, 'a', 'a1'), 0, 'solo silences the other tracks')
-  close(mixedGain(project, 'b', 'b1'), dbToGain(-23), 'the soloed track keeps its level')
+  close(mixedGain(project, 'b', 'b1'), dbToGain(-20), 'the soloed track keeps its level')
 
   project.tracks[1].solo = false
   close(mixedGain(project, 'a', 'a1'), 1, 'cancelling solo brings the others back')
@@ -244,30 +247,33 @@ test('mixedGain reads the live project, which is what makes a fader audible', ()
   assert.equal(mixedGain(project, 'a', 'nope'), 0, 'an unknown clip is silent')
 })
 
-test('resolveTrackGain puts mute above solo', () => {
-  assert.equal(resolveTrackGain({ volumeDb: 0 }, false), 1)
-  assert.equal(resolveTrackGain({ volumeDb: -6 }, false), dbToGain(-6))
-  assert.equal(resolveTrackGain({ volumeDb: 0, muted: true }, false), 0, 'mute wins')
-  assert.equal(resolveTrackGain({ volumeDb: 0, solo: false }, true), 0, 'someone else soloed')
-  assert.equal(resolveTrackGain({ volumeDb: 0, solo: true }, true), 1, 'this one is soloed')
-  assert.equal(resolveTrackGain({ volumeDb: 0, solo: true, muted: true }, true), 0, 'muted solo is still silent')
+test('resolveTrackGain puts mute above solo, and applies no volume', () => {
+  assert.equal(resolveTrackGain({}, false), 1)
+  assert.equal(resolveTrackGain({ volumeDb: -6 }, false), 1, 'a leftover volume is ignored')
+  assert.equal(resolveTrackGain({ muted: true }, false), 0, 'mute wins')
+  assert.equal(resolveTrackGain({ solo: false }, true), 0, 'someone else soloed')
+  assert.equal(resolveTrackGain({ solo: true }, true), 1, 'this one is soloed')
+  assert.equal(resolveTrackGain({ solo: true, muted: true }, true), 0, 'muted solo is still silent')
 })
 
-test('scheduleClips splits the two gain factors so the graph can update them apart', () => {
-  // The graph applies trackGain and itemGain on separate nodes; `gain` stays as
-  // their product for anyone reading the schedule alone.
+test('scheduleClips keeps the clip factor apart from the mute factor', () => {
+  // The graph applies trackGain (now only 1 or 0: mute/solo) and itemGain on
+  // separate nodes, so a track mute never overwrites a clip's own gain.
   const project = {
-    tracks: [track({ id: 'a', volumeDb: -6, items: [item({ id: 'a1', gainDb: -3 })] })],
+    tracks: [track({ id: 'a', items: [item({ id: 'a1', gainDb: -3 })] })],
   }
   const entry = scheduleClips(project, 0)[0]
-  close(entry.trackGain, dbToGain(-6), 'track factor')
+  close(entry.trackGain, 1, 'an audible track imposes no level')
   close(entry.itemGain, dbToGain(-3), 'clip factor')
-  close(entry.gain, dbToGain(-9), 'and their product')
+  close(entry.gain, dbToGain(-3), 'and their product')
+
+  const muted = { tracks: [track({ id: 'a', muted: true, items: [item({ id: 'a1', gainDb: -3 })] })] }
+  close(scheduleClips(muted, 0)[0].trackGain, 0, 'a muted track contributes zero')
 })
 
 test('the transport pushes the mix when the project changes', () => {
   // A structural check: the hook must expose applyMix and setProject must call
-  // it, otherwise a fader move during playback is never heard.
+  // it, otherwise a clip gain move during playback is never heard.
   const raw = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
   assert.match(raw, /applyMix/, 'the hook exposes applyMix')
   assert.match(raw, /return \{[^}]*applyMix[^}]*\}/, 'applyMix is part of the returned transport')
@@ -276,15 +282,15 @@ test('the transport pushes the mix when the project changes', () => {
   assert.match(setProjectBody.slice(0, 400), /applyMix\(project\)/, 'setProject pushes the mix')
 })
 
-test('pan follows the same live path as the faders', () => {
+test('pan follows the same live path as the clip gain', () => {
   // Pan was written once when the graph was built, so turning the knob during
   // playback did nothing until the next play. It has to ramp like the gains do,
-  // and the clip and the track must read the same sum — which since improvement
-  // plan 02 (I-04) is computed once, in mix-params.js, for both engines.
+  // and it lives in one place — computed once, in mix-params.js, for both engines.
   const raw = readFileSync(join(root, 'src', 'client', 'clipbay', 'audio.js'), 'utf8')
   const shared = readFileSync(join(root, 'src', 'client', 'clipbay', 'mix-params.js'), 'utf8')
-  assert.match(shared, /export function itemParams/, 'itemParams is the one place clip pan is summed')
-  assert.match(shared, /pan: Math\.max\(-1, Math\.min\(1, pan\)\)/, 'the sum is clamped once, there')
+  assert.match(shared, /export function itemParams/, 'itemParams is the one place clip pan is read')
+  assert.match(shared, /pan: Math\.max\(-1, Math\.min\(1, Number\(item\?\.pan\) \|\| 0\)\)/, 'the clip value is clamped once, there')
+  assert.equal(/track\?\.pan/.test(shared), false, 'a track pan is not added on top (I-41)')
   // Slice the whole function, not a fixed window: applyMix grew when the effect
   // chains landed, and a char count would silently start reading past its end.
   const mixStart = raw.indexOf('const applyMix = useCallback')

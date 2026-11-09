@@ -35,8 +35,6 @@ export function ensureTrack(project, { name, category = 'other' }) {
     id: newTrackId(),
     name: wanted,
     category: resolved,
-    volumeDb: 0,
-    pan: 0,
     muted: false,
     solo: false,
     items: [],

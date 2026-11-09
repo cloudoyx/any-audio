@@ -454,15 +454,34 @@ await test('update changes a track field and records the change', async () => {
   const result = await call({
     mode: 'update',
     projectId,
-    changes: [{ target: 'track', trackId: track.id, field: 'volumeDb', value: -5 }],
+    changes: [{ target: 'track', trackId: track.id, field: 'muted', value: true }],
   })
   assert.equal(result.ok, true)
-  assert.equal(result.tracks[0].volumeDb, -5)
+  assert.equal(result.tracks[0].muted, true)
   assert.ok(result.applied.length === 1)
   const after = await readProject(workspaceRoot, projectId)
   const last = after.history.at(-1)
   assert.equal(last.by, 'agent')
-  assert.match(last.note, /音量/)
+  assert.match(last.note, /静音/)
+  // Put it back so later tests are not affected by a muted first track.
+  await call({ mode: 'update', projectId, changes: [{ target: 'track', trackId: track.id, field: 'muted', value: false }] })
+})
+
+await test('a track has no volume, pan or fx field any more', async () => {
+  // Improvement plan 03, I-41. The refusal has to name what does exist, and point
+  // at the clip, or the Agent guesses the same three fields again.
+  const project = await readProject(workspaceRoot, projectId)
+  for (const field of ['volumeDb', 'pan', 'fx']) {
+    const result = await call({
+      mode: 'update',
+      projectId,
+      changes: [{ target: 'track', trackId: project.tracks[0].id, field, value: field === 'fx' ? [] : 0 }],
+    })
+    assert.equal(result.ok, false, `${field} must be refused`)
+    assert.match(result.error, /unknown track field/)
+    assert.match(result.error, /only name, muted, solo or delete/)
+    assert.match(result.error, /target:"clip"/, 'and the message says where those fields do live')
+  }
 })
 
 await test('update changes several clips in one call', async () => {

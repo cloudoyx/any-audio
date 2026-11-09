@@ -33,11 +33,8 @@ export function serializeProject(project) {
       id: track.id,
       name: track.name,
       category: track.category,
-      volumeDb: track.volumeDb,
-      pan: track.pan,
       muted: track.muted,
       solo: track.solo,
-      ...(track.fx?.length ? { fx: serializeChain(track.fx) } : {}),
       items: (track.items ?? []).map((item) => ({
         id: item.id,
         material: item.material,

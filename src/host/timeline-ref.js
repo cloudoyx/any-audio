@@ -80,7 +80,7 @@ export function describeReference(project, materials, reference) {
 
   if (found.kind === 'track') {
     const { track } = found
-    lines.push(`轨道：${track.name}（${track.id}，${track.category}，${track.volumeDb} dB）`)
+    lines.push(`轨道：${track.name}（${track.id}，${track.category}）`)
     const from = reference.fromSec
     const to = reference.toSec
     if (from !== null && to !== null) {
@@ -114,7 +114,7 @@ export function describeReference(project, materials, reference) {
 
   const { track, item } = found
   const end = item.startSec + (item.outSec - item.inSec)
-  lines.push(`轨道：${track.name}（${track.id}，${track.volumeDb} dB）`)
+  lines.push(`轨道：${track.name}（${track.id}）`)
   lines.push(`片段：${item.label || item.id}（${item.id}）`)
   lines.push(`位置：${formatTime(item.startSec)} — ${formatTime(end)}`)
   lines.push(`素材：${materialName(item.material)}，源区间 ${item.inSec.toFixed(3)}–${item.outSec.toFixed(3)}s`)
