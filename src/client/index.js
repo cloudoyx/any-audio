@@ -21,6 +21,13 @@ export const name = 'any-audio'
 export const inject = ['slots', 'locale']
 
 function apply(ctx) {
+  // The shell's locale service is the live answer to "what language is the
+  // interface in right now". The plugin has its own preference (`ui.language`),
+  // but on "auto" it has to follow this instead of guessing from `navigator` at
+  // load time: every other tab switches the moment the setting changes, and a
+  // clip bay that needs a refresh looks broken next to them (2026-11-10).
+  const locale = ctx.get('locale')
+
   try {
     ctx.slots.inject('settings.section', () => ctx.slots.register({
       name: 'settings.section',
@@ -43,7 +50,7 @@ function apply(ctx) {
       id: CLIP_BAY_ID,
       order: 40,
       label: () => t('剪辑台'),
-    }, ClipBayPanel))
+    }, (props) => h(ClipBayPanel, { ...props, locale })))
   } catch (error) {
     console.error('[any-audio] clip bay view failed', error)
   }

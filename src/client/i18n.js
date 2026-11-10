@@ -383,6 +383,19 @@ export function detectLanguage(config) {
   return /^zh/i.test(nav) ? 'zh' : 'en'
 }
 
+/**
+ * The language the shell is currently showing, as `zh` or `en`.
+ *
+ * `locale` is the shell's own service: `getSnapshot().active` is a BCP 47 tag.
+ * Used only when the plugin preference is "auto" — a pinned `zh` or `en` wins,
+ * because that is what the person asked for on the settings page.
+ */
+export function languageFromLocale(locale) {
+  const active = locale?.getSnapshot?.()?.active
+  if (typeof active !== 'string' || active === '') return null
+  return /^zh/i.test(active) ? 'zh' : 'en'
+}
+
 export function t(key, ...args) {
   const template = LANG === 'zh' ? key : (EN[key] ?? key)
   return template.replace(/\{(\d+)\}/g, (_, index) => String(args[Number(index)] ?? ''))

@@ -38,7 +38,9 @@ assert.deepEqual(mod.inject, ['slots', 'locale'])
 
 const sections = []
 const views = []
+const localeService = { getSnapshot: () => ({ active: 'zh-CN' }), subscribe: () => () => {} }
 mod.apply({
+  get: (name) => (name === 'locale' ? localeService : undefined),
   slots: {
     inject: (name, fn) => { fn() },
     register: (spec, component) => {

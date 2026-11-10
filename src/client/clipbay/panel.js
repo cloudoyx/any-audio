@@ -15,7 +15,7 @@
  */
 import { h, useState, useEffect, useCallback, S, C, Btn, Notice, Select, Slider, Switch, useSurface } from '../ui.js'
 import { api, API } from '../api.js'
-import { t, detectLanguage, setLanguage } from '../i18n.js'
+import { t, detectLanguage, setLanguage, languageFromLocale } from '../i18n.js'
 import { useProject } from './state.js'
 import { usePlayback } from './audio.js'
 import { useDraftAutosave } from './saving.js'
@@ -568,6 +568,11 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       minHeight: 300,
       overflow: 'hidden',
       paddingBottom: composerInset,
+      // The guide is a drawer over the clip bay, not over the whole window: it
+      // explains the surface the person is looking at, so it must not cover the
+      // session list or the right sidebar. `position: relative` is what gives it
+      // this box to fill (2026-11-10).
+      position: 'relative',
     },
   },
     // The header, the notices and the preview row are frozen: only the track
@@ -785,7 +790,11 @@ function HelpDrawer({ open, onClose, surface }) {
     h('td', { style: { padding: '3px 8px 3px 0', color: C.muted, whiteSpace: 'nowrap', verticalAlign: 'top', fontSize: 11 } }, label),
     h('td', { style: { padding: '3px 0', fontSize: 11, fontFamily: 'ui-monospace, Consolas, monospace', wordBreak: 'break-all' } }, value),
   )
-  return h('div', { style: { position: 'fixed', inset: 0, zIndex: 55, display: 'flex', justifyContent: 'flex-end' } },
+  // Absolute, not fixed: the guide belongs to this View. A fixed drawer covered
+  // the whole window and landed on top of the shell's right sidebar, which is a
+  // different surface with its own panels (2026-11-10). The panel root is the
+  // positioning box, so the drawer stops at the clip bay's own right edge.
+  return h('div', { style: { position: 'absolute', inset: 0, zIndex: 55, display: 'flex', justifyContent: 'flex-end' } },
     h('div', { onClick: onClose, style: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.28)' } }),
     h('div', {
       style: {
@@ -846,15 +855,23 @@ function HelpDrawer({ open, onClose, surface }) {
   )
 }
 
-export function ClipBayPanel({ useWorkspaces, sessionId, inputActions, useInput }) {
+export function ClipBayPanel({ useWorkspaces, sessionId, inputActions, useInput, locale }) {
   const snapshot = useWorkspaces ? useWorkspaces((value) => value) : undefined
   const workspace = workspaceForSession(snapshot?.items, sessionId)
   const [opened, setOpened] = useState(null)
   // The language preference lives in a module variable, so changing it does not
-  // re-render anything on its own. This counter is what turns the /state answer
-  // into a repaint: without it an English user could be left looking at the
-  // first frame's Chinese for the whole visit (2026-11-10).
+  // re-render anything on its own. The preference decides whether the shell's
+  // locale is even consulted, and this counter turns either answer into a
+  // repaint: without it an English user could be left on the first frame's
+  // Chinese for the whole visit (2026-11-10).
+  const [preference, setPreference] = useState(null)
   const [, setLangTick] = useState(0)
+  // One way in for every language change: adopt it, tell the document, repaint.
+  const adoptLanguage = (next) => {
+    setLanguage(next)
+    if (typeof document !== 'undefined') document.documentElement.lang = next === 'en' ? 'en' : 'zh-CN'
+    setLangTick((tick) => tick + 1)
+  }
 
   // A different Session is a different workspace, and an open project belongs to
   // the old one — close it rather than let the shell keep writing to a folder the
@@ -868,14 +885,28 @@ export function ClipBayPanel({ useWorkspaces, sessionId, inputActions, useInput 
     api('/state')
       .then((data) => {
         if (cancelled) return
-        const next = detectLanguage(data.config)
-        setLanguage(next)
-        if (typeof document !== 'undefined') document.documentElement.lang = next === 'en' ? 'en' : 'zh-CN'
-        setLangTick((value) => value + 1)
+        const value = data.config?.ui?.language || 'auto'
+        setPreference(value)
+        adoptLanguage(detectLanguage(data.config))
       })
       .catch(() => {})
     return () => { cancelled = true }
   }, [])
+
+  // "auto" means "whatever the shell is showing", and the shell publishes that as
+  // its own locale service. Subscribing here is what makes the tab follow a
+  // language change the same instant every other tab does, instead of waiting for
+  // a reload. A pinned zh/en ignores it — that is what the person chose.
+  useEffect(() => {
+    if (!locale?.subscribe) return undefined
+    const apply = () => {
+      if (preference !== null && preference !== 'auto') return
+      const next = languageFromLocale(locale)
+      if (next) adoptLanguage(next)
+    }
+    apply()
+    return locale.subscribe(apply)
+  }, [locale, preference])
 
   if (!workspace?.path) {
     return h('div', { style: S.workbench },
