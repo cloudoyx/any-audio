@@ -13,7 +13,7 @@
  * release, so the project and its history see one edit, not one per frame.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { h, S, Btn, C, Slider } from '../ui.js'
+import { h, S, Btn, C, Slider, useSurface } from '../ui.js'
 import { t } from '../i18n.js'
 import { itemLengthSec, contentEndSec } from './serialize.js'
 import { drawClipWaveform } from './waveform.js'
@@ -139,7 +139,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, audible = 
       width,
       height: height - 4,
       borderRadius: 4,
-      border: `1px solid ${selected ? '#fff' : dimmed ? C.border : color}`,
+      border: `1px solid ${selected ? C.accent : dimmed ? C.border : color}`,
       boxShadow: selected ? `0 0 0 1px ${C.accent}` : 'none',
       background: dimmed ? 'rgba(128,128,128,0.10)' : `${color}22`,
       overflow: 'hidden',
@@ -173,7 +173,7 @@ function Clip({ item, track, peaks, scale, height, selected, preview, audible = 
   )
 }
 
-function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WIDTH, levelDb = null, onSelect, onEdit }) {
+function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WIDTH, levelDb = null, surface = '#ffffff', onSelect, onEdit }) {
   const [name, setName] = useState(track.name)
   const [editing, setEditing] = useState(false)
 
@@ -198,10 +198,12 @@ function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WID
       borderRight: `1px solid ${C.border}`, cursor: 'pointer',
       overflow: 'hidden',
       // Frozen against horizontal scrolling: the head names the track and holds
-      // its faders, so it has to stay readable however far the timeline is
-      // scrolled. The background must be opaque or the clips slide through it.
+      // its buttons, so it has to stay readable however far the timeline is
+      // scrolled. The background must be opaque or the clips slide through it,
+      // and it is read from the shell rather than hard-coded so the head follows
+      // a light theme instead of sitting on it as a dark patch.
       position: 'sticky', left: 0, zIndex: 2,
-      background: active ? 'rgb(40,40,44)' : 'rgb(28,28,30)',
+      background: active ? C.soft : surface,
       // A track silenced by someone else's solo greys out rather than
       // disappearing: it is still there to be clicked and un-soloed.
       opacity: audible ? 1 : 0.5,
@@ -263,13 +265,13 @@ function TrackHead({ track, active, audible = true, height, headWidth = HEAD_WID
   )
 }
 
-function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, levelDb = null, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
+function TrackRow({ track, peaksById, scale, active, headWidth, audible = true, levelDb = null, surface, onSelect, onEdit, drag, selection, onClipPointerDown, onClipSelect, range, onRangeStart }) {
   const height = TRACK_HEIGHT
   const band = range && range.trackId === track.id && range.toSec > range.fromSec
   return h('div', {
     style: { display: 'flex', borderBottom: `1px solid ${C.border}` },
   },
-    h(TrackHead, { track, active, audible, height, headWidth, levelDb, onSelect, onEdit }),
+    h(TrackHead, { track, active, audible, height, headWidth, levelDb, surface, onSelect, onEdit }),
     h('div', { style: { position: 'relative', height, flex: 1, overflow: 'hidden' }, 'data-track-body': true },
       track.items.map((item) => h(Clip, {
         key: item.id,
@@ -331,6 +333,12 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
   }
   const duration = Math.max(contentEndSec(project), 1)
   const positionSec = transport?.positionSec ?? 0
+
+  // The track heads and the sticky ruler must be opaque, and their colour has
+  // to come from the shell's own background instead of a hard-coded dark value:
+  // a dark strip on a light page is what made the timeline look broken
+  // (2026-11-10).
+  const surface = useSurface()
 
   const dragRef = useRef(null)
   const rangeRef = useRef(null)
@@ -607,7 +615,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
           // tracks scroll under it (the "frozen pane" the user asked for).
           style: {
             display: 'flex', position: 'sticky', top: 0, zIndex: 2,
-            background: 'rgb(28,28,30)', borderBottom: `1px solid ${C.border}`,
+            background: surface, borderBottom: `1px solid ${C.border}`,
           },
         },
           h('div', {
@@ -615,7 +623,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             // slide under it when the timeline scrolls sideways.
             style: {
               width: headWidth, flex: '0 0 auto', borderRight: `1px solid ${C.border}`,
-              position: 'sticky', left: 0, zIndex: 3, background: 'rgb(28,28,30)',
+              position: 'sticky', left: 0, zIndex: 3, background: surface,
               cursor: 'col-resize',
             },
             title: t('拖动调整轨道头宽度'),
@@ -643,6 +651,7 @@ export function Timeline({ root, projectId, project, materials, transport, onEdi
             onClipPointerDown: startDrag,
             onClipSelect: (trackId, itemId) => onSelect?.(trackId, itemId),
             range,
+            surface,
             onRangeStart: startRange,
           })),
         h('div', {

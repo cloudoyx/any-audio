@@ -47,7 +47,7 @@ function LevelStrip({ material, item }) {
       background: C.softer, fontSize: 10, fontVariantNumeric: 'tabular-nums',
     },
   },
-    h('span', { style: { color: '#9fc0ff', fontSize: 12, fontWeight: 600 } }, dbLabel(sourceDb)),
+    h('span', { style: { color: C.accent, fontSize: 12, fontWeight: 600 } }, dbLabel(sourceDb)),
     // "dBFS" alone invited a peak-versus-RMS comparison, and the two differed by
     // 16 dB on a spoken line (measured: -20.3 RMS, -3.9 peak) — the number read as
     // wrong. Name the measure, and show the peak that was already recorded next
@@ -57,7 +57,7 @@ function LevelStrip({ material, item }) {
       ? null
       : h('span', { style: { color: C.muted } }, `· ${t('峰值')} ${dbLabel(peakDb)}`),
     h('span', { style: { color: C.muted } }, '→'),
-    h('span', { style: { color: '#ffd08a', fontSize: 12, fontWeight: 600 } }, `${gainDb >= 0 ? '+' : ''}${gainDb.toFixed(1)}`),
+    h('span', { style: { color: C.warn, fontSize: 12, fontWeight: 600 } }, `${gainDb >= 0 ? '+' : ''}${gainDb.toFixed(1)}`),
     h('span', { style: { color: C.muted } }, t('片段 dB')),
     h('span', { style: { color: C.muted } }, '→'),
     h('span', { style: { color: C.good, fontSize: 12, fontWeight: 600 } }, dbLabel(actualDb)),

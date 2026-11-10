@@ -71,12 +71,12 @@ function FxParams({ fx, onChange, tracks }) {
       const bands = fx.bands ?? []
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
         ...bands.map((band, index) => h('div', { key: index, style: { display: 'grid', gridTemplateColumns: '58px 1fr 1fr 1fr 16px', gap: 2, alignItems: 'end' } },
-          field('类型', h(Select, {
+          field(t('类型'), h(Select, {
             value: band.type,
             options: [
-              { value: 'peaking', label: '峰值' },
-              { value: 'lowshelf', label: '低架' },
-              { value: 'highshelf', label: '高架' },
+              { value: 'peaking', label: t('峰值') },
+              { value: 'lowshelf', label: t('低架') },
+              { value: 'highshelf', label: t('高架') },
             ],
             onChange: (type) => {
               const next = bands.slice()
@@ -115,34 +115,34 @@ function FxParams({ fx, onChange, tracks }) {
     }
     case 'compressor':
       return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 3 } },
-        numberField('阈值 dB', fx.thresholdDb, (thresholdDb) => set({ thresholdDb }), { step: '1' }),
-        numberField('比率', fx.ratio, (ratio) => set({ ratio }), { step: '0.5' }),
-        numberField('增益 dB', fx.makeupDb, (makeupDb) => set({ makeupDb }), { step: '0.5' }),
-        numberField('起音 s', fx.attackSec, (attackSec) => set({ attackSec }), { step: '0.005' }),
-        numberField('释放 s', fx.releaseSec, (releaseSec) => set({ releaseSec }), { step: '0.01' }),
-        numberField('膝 dB', fx.kneeDb, (kneeDb) => set({ kneeDb }), { step: '1' }),
+        numberField(t('阈值 dB'), fx.thresholdDb, (thresholdDb) => set({ thresholdDb }), { step: '1' }),
+        numberField(t('比率'), fx.ratio, (ratio) => set({ ratio }), { step: '0.5' }),
+        numberField(t('增益 dB'), fx.makeupDb, (makeupDb) => set({ makeupDb }), { step: '0.5' }),
+        numberField(t('起音 s'), fx.attackSec, (attackSec) => set({ attackSec }), { step: '0.005' }),
+        numberField(t('释放 s'), fx.releaseSec, (releaseSec) => set({ releaseSec }), { step: '0.01' }),
+        numberField(t('膝 dB'), fx.kneeDb, (kneeDb) => set({ kneeDb }), { step: '1' }),
       )
     case 'limiter':
       return h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3 } },
-        numberField('封顶 dB', fx.ceilingDb, (ceilingDb) => set({ ceilingDb }), { step: '0.5' }),
-        numberField('释放 s', fx.releaseSec, (releaseSec) => set({ releaseSec }), { step: '0.01' }),
+        numberField(t('封顶 dB'), fx.ceilingDb, (ceilingDb) => set({ ceilingDb }), { step: '0.5' }),
+        numberField(t('释放 s'), fx.releaseSec, (releaseSec) => set({ releaseSec }), { step: '0.01' }),
       )
     case 'reverb':
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
-        sliderField('房间', fx.roomSize, (roomSize) => set({ roomSize })),
-        sliderField('阻尼', fx.damping, (damping) => set({ damping })),
-        sliderField('湿声', fx.wet, (wet) => set({ wet })),
-        sliderField('干声', fx.dry, (dry) => set({ dry })),
-        sliderField('宽度', fx.width, (width) => set({ width })),
+        sliderField(t('房间'), fx.roomSize, (roomSize) => set({ roomSize })),
+        sliderField(t('阻尼'), fx.damping, (damping) => set({ damping })),
+        sliderField(t('湿声'), fx.wet, (wet) => set({ wet })),
+        sliderField(t('干声'), fx.dry, (dry) => set({ dry })),
+        sliderField(t('宽度'), fx.width, (width) => set({ width })),
       )
     case 'delay':
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3 } },
-          numberField('时间 s', fx.timeSec, (timeSec) => set({ timeSec }), { step: '0.01' }),
-          numberField('反馈', fx.feedback, (feedback) => set({ feedback }), { step: '0.05' }),
+          numberField(t('时间 s'), fx.timeSec, (timeSec) => set({ timeSec }), { step: '0.01' }),
+          numberField(t('反馈'), fx.feedback, (feedback) => set({ feedback }), { step: '0.05' }),
         ),
-        sliderField('湿声', fx.wet, (wet) => set({ wet })),
-        sliderField('干声', fx.dry, (dry) => set({ dry })),
+        sliderField(t('湿声'), fx.wet, (wet) => set({ wet })),
+        sliderField(t('干声'), fx.dry, (dry) => set({ dry })),
         h(Switch, { checked: fx.pingPong, label: t('乒乓'), onChange: (pingPong) => set({ pingPong }) }),
       )
     case 'duck':
@@ -153,17 +153,17 @@ function FxParams({ fx, onChange, tracks }) {
           onChange: (sourceTrackId) => set({ sourceTrackId }),
         })),
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3 } },
-          numberField('压低 dB', fx.targetDb, (targetDb) => set({ targetDb }), { step: '0.5' }),
-          numberField('阈值 dB', fx.thresholdDb, (thresholdDb) => set({ thresholdDb }), { step: '1' }),
-          numberField('起音 s', fx.attackSec, (attackSec) => set({ attackSec }), { step: '0.01' }),
-          numberField('释放 s', fx.releaseSec, (releaseSec) => set({ releaseSec }), { step: '0.01' }),
+          numberField(t('压低 dB'), fx.targetDb, (targetDb) => set({ targetDb }), { step: '0.5' }),
+          numberField(t('阈值 dB'), fx.thresholdDb, (thresholdDb) => set({ thresholdDb }), { step: '1' }),
+          numberField(t('起音 s'), fx.attackSec, (attackSec) => set({ attackSec }), { step: '0.01' }),
+          numberField(t('释放 s'), fx.releaseSec, (releaseSec) => set({ releaseSec }), { step: '0.01' }),
         ),
       )
     case 'pitch':
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
         h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3 } },
-          numberField('速率', fx.rate, (rate) => set({ rate }), { step: '0.05' }),
-          numberField('半音', fx.pitchSemitones, (pitchSemitones) => set({ pitchSemitones }), { step: '1' }),
+          numberField(t('速率'), fx.rate, (rate) => set({ rate }), { step: '0.05' }),
+          numberField(t('半音'), fx.pitchSemitones, (pitchSemitones) => set({ pitchSemitones }), { step: '1' }),
         ),
         h(Switch, {
           checked: fx.preservePitch,
@@ -217,7 +217,7 @@ export function FxEditor({ level, chain, tracks, onChange, disabled, disabledHin
           value: '',
           options: [
             { value: '', label: t('+ 添加效果') },
-            ...FX_TYPES.map((type) => ({ value: type, label: FX_LABELS[type] })),
+            ...FX_TYPES.map((type) => ({ value: type, label: t(FX_LABELS[type]) })),
           ],
           onChange: (type) => {
             if (!type) return
@@ -239,7 +239,7 @@ export function FxEditor({ level, chain, tracks, onChange, disabled, disabledHin
       },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 3 } },
           h('span', { style: { fontSize: 11, fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-            `${index + 1}. ${FX_LABELS[fx.type] ?? fx.type}`),
+            `${index + 1}. ${t(FX_LABELS[fx.type] ?? fx.type)}`),
           h(Btn, { onClick: () => move(index, -1), disabled: index === 0, title: t('上移'), style: tinyBtn }, '↑'),
           h(Btn, { onClick: () => move(index, 1), disabled: index === list.length - 1, title: t('下移'), style: tinyBtn }, '↓'),
           h(Btn, {
@@ -258,7 +258,7 @@ export function FxEditor({ level, chain, tracks, onChange, disabled, disabledHin
           },
         }),
         FX_HINTS[fx.type]
-          ? h('span', { style: { fontSize: 9, color: C.muted } }, FX_HINTS[fx.type])
+          ? h('span', { style: { fontSize: 9, color: C.muted } }, t(FX_HINTS[fx.type]))
           : null,
       )
     }),

@@ -13,8 +13,8 @@
  * data exists. The host re-checks the path against its own registry, so a
  * mismatched root fails closed (403) rather than reading someone else's folder.
  */
-import { h, useState, useEffect, useCallback, S, C, Btn, Notice, Select, Slider, Switch } from '../ui.js'
-import { api } from '../api.js'
+import { h, useState, useEffect, useCallback, S, C, Btn, Notice, Select, Slider, Switch, useSurface } from '../ui.js'
+import { api, API } from '../api.js'
 import { t, detectLanguage, setLanguage } from '../i18n.js'
 import { useProject } from './state.js'
 import { usePlayback } from './audio.js'
@@ -58,9 +58,47 @@ function formatDuration(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
+/**
+ * A small circled question mark next to a button.
+ *
+ * It carries the same words a `title` would, but visible on hover instead of
+ * after the browser's own delay — and unlike a native tooltip it survives a long
+ * sentence. It is deliberately small and borderless so it reads as an aside, not
+ * as a second button (2026-11-10).
+ */
+function HelpDot({ title, text }) {
+  const [hover, setHover] = useState(false)
+  const surface = useSurface()
+  return h('span', {
+    style: { position: 'relative', display: 'inline-flex' },
+    onMouseEnter: () => setHover(true),
+    onMouseLeave: () => setHover(false),
+  },
+    h('span', {
+      title,
+      style: {
+        width: 15, height: 15, borderRadius: '50%', cursor: 'help',
+        border: `1px solid ${hover ? C.accent : C.border}`,
+        color: hover ? C.accent : C.muted,
+        fontSize: 10, lineHeight: 1, display: 'inline-flex',
+        alignItems: 'center', justifyContent: 'center', flex: '0 0 auto',
+      },
+    }, '?'),
+    hover ? h('span', {
+      style: {
+        position: 'absolute', top: 22, right: -8, zIndex: 60, width: 260,
+        padding: '8px 10px', borderRadius: 8, fontSize: 11.5, lineHeight: 1.55,
+        border: `1px solid ${C.border}`, background: surface, color: 'inherit',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+      },
+    }, text) : null,
+  )
+}
+
 function ProjectList({ root, onOpen }) {
   const [projects, setProjects] = useState(null)
   const [error, setError] = useState('')
+  const [copied, setCopied] = useState('')
 
   const reload = useCallback(async () => {
     try {
@@ -82,8 +120,39 @@ function ProjectList({ root, onOpen }) {
   }
   if (!projects) return h('div', { style: S.workbench }, h('p', { style: S.desc }, t('正在读取工程…')))
   if (projects.length === 0) {
+    // The empty state teaches the product rather than apologising for being
+    // empty: what the clip bay is for is easier to show with four real requests
+    // than with a sentence about projects (2026-11-10).
+    const examples = [
+      t('做一个 30 秒的水墨动画：石缝里的一粒种子长成树苗。配一点中国风音乐和风声，不要旁白。'),
+      t('古筝主旋律，弦乐铺底，大提琴走低音；人声出现时把音乐压下去。'),
+      t('帮我写一首日式 RPG 的战斗曲目，可无限循环，30 秒到 60 秒。乐器用鼓组 + 电吉他 + 弦乐。'),
+      t('帮我把《三国演义》第一章做成有声小说，旁白低沉浑厚，角色音色要有所区分，配一些简单的配乐和音效即可。'),
+    ]
     return h('div', { style: S.workbench },
-      h('p', { style: S.desc }, t('这个工作区还没有工程。在会话里让 Agent 建一个：说「新建一个剪辑台工程」即可。')),
+      h('div', { style: S.header },
+        h('h2', { style: S.title }, t('剪辑台')),
+      ),
+      h('p', { style: S.desc }, t('这个工作区还没有工程。在会话里像平时一样提需求，Agent 会自己建工程并渲染音频：')),
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 } },
+        examples.map((line, index) => h('div', {
+          key: index,
+          style: { border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', display: 'flex', gap: 10, alignItems: 'flex-start' },
+        },
+          h('span', { style: { flex: 1, fontSize: 12, lineHeight: 1.6 } }, `「${line}」`),
+          h(Btn, {
+            onClick: async () => {
+              try {
+                await navigator.clipboard.writeText(line)
+                setCopied(line)
+              } catch {
+                setCopied('')
+              }
+            },
+          }, copied === line ? t('已复制') : t('复制')),
+        )),
+      ),
+      h('p', { style: { ...S.desc, marginTop: 6 } }, t('也可以直接说「新建一个剪辑台工程」，先有一个空工程再让它往里加东西。')),
     )
   }
   return h('div', { style: S.workbench },
@@ -93,21 +162,99 @@ function ProjectList({ root, onOpen }) {
       h('span', { style: { flex: 1 } }),
       h(Btn, { onClick: () => void reload() }, t('刷新')),
     ),
-    h('div', { style: S.list }, projects.map((project) => h('button', {
-      key: project.id,
-      type: 'button',
-      onClick: () => onOpen(project),
-      style: { ...S.item, cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'inherit', fontSize: 13 },
+    // One card per project, wide enough that a picture is worth looking at.
+    // The card carries what a person decides on: what it looks like, how long it
+    // is, how many tracks and materials, when it last changed, and whether a
+    // draft is waiting. The id is kept but pushed to the quiet corner — it is a
+    // thing to copy, not a thing to read.
+    h('div', {
+      style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 },
+    }, projects.map((project) => h(ProjectCard, { key: project.id, root, project, onOpen }))),
+  )
+}
+
+function ProjectCard({ root, project, onOpen }) {
+  const [hover, setHover] = useState(false)
+  const thumbSrc = project.hasVideo
+    ? `${API}/clipbay/video?root=${encodeURIComponent(root)}&project=${encodeURIComponent(project.id)}#t=0.1`
+    : ''
+  return h('button', {
+    type: 'button',
+    onClick: () => onOpen(project),
+    onMouseEnter: () => setHover(true),
+    onMouseLeave: () => setHover(false),
+    style: {
+      display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', cursor: 'pointer',
+      border: `1px solid ${hover ? C.accent : C.border}`, borderRadius: 12,
+      background: 'transparent', color: 'inherit', textAlign: 'left',
+      transition: 'transform .15s ease, box-shadow .15s ease, border-color .15s ease',
+      transform: hover ? 'translateY(-2px)' : 'none',
+      boxShadow: hover ? '0 8px 22px rgba(0,0,0,0.12)' : 'none',
     },
-      h('div', { style: S.itemHead },
-        h('span', { style: { fontWeight: 600 } }, project.name),
+  },
+    h('div', {
+      style: {
+        position: 'relative', aspectRatio: '16 / 9', background: '#0b0c0e', overflow: 'hidden',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      },
+    },
+      // A video project shows its own first frame: the browser paints it from
+      // the media route, so no thumbnail has to be generated or stored.
+      thumbSrc
+        ? h('video', {
+          src: thumbSrc,
+          muted: true,
+          preload: 'metadata',
+          tabIndex: -1,
+          style: { position: 'absolute', inset: 0, objectFit: 'cover' },
+        })
+        : h('div', {
+          style: {
+            position: 'absolute', inset: 0,
+            background: 'repeating-linear-gradient(90deg, transparent 0 3px, rgba(255,255,255,0.16) 3px 4px)',
+            maskImage: 'linear-gradient(180deg, transparent, #000 35%, #000 65%, transparent)',
+          },
+        }),
+      h('div', {
+        style: {
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.45) 100%)',
+        },
+      }),
+      h('span', {
+        style: {
+          position: 'relative', color: '#fff', fontSize: 18, fontWeight: 650, letterSpacing: 0.4,
+          textShadow: '0 2px 10px rgba(0,0,0,0.55)', padding: '0 18px', textAlign: 'center',
+        },
+      }, project.name),
+    ),
+    h('div', { style: { padding: '10px 12px 12px', display: 'flex', flexDirection: 'column', gap: 7 } },
+      h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
         project.hasVideo ? h('span', { style: S.chip }, t('含视频')) : null,
         h('span', { style: S.chip }, `${project.trackCount} ${t('轨')}`),
+        project.materialCount ? h('span', { style: S.chip }, `${project.materialCount} ${t('个素材')}`) : null,
         h('span', { style: S.chip }, formatDuration(project.durationSec)),
+        project.hasDraft ? h('span', { style: { ...S.chip, borderColor: C.warn, color: C.warn } }, t('未保存')) : null,
       ),
-      h('div', { style: S.mono }, project.id),
-    ))),
+      h('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 } },
+        h('span', { style: { fontSize: 11, color: C.muted } }, relativeTime(project.mtimeMs)),
+        h('span', { style: S.mono }, project.id),
+      ),
+    ),
   )
+}
+
+/** "3 分钟前" for a file mtime, so the card says what changed recently. */
+export function relativeTime(mtimeMs) {
+  if (!Number.isFinite(mtimeMs)) return ''
+  const seconds = Math.max(0, (Date.now() - mtimeMs) / 1000)
+  if (seconds < 90) return t('刚刚修改')
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return t('{0} 分钟前修改', minutes)
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return t('{0} 小时前修改', hours)
+  const days = Math.round(hours / 24)
+  return t('{0} 天前修改', days)
 }
 
 /**
@@ -198,6 +345,10 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // Leaving with unsaved work is the one moment the person can lose it, so the
   // back button asks instead of guessing (improvement plan 05).
   const [leavePrompt, setLeavePrompt] = useState(false)
+  // The guide is a drawer inside the clip bay, not a shell panel: it explains the
+  // surface the person is looking at, so leaving that surface to read it would
+  // defeat the point (2026-11-10).
+  const [helpOpen, setHelpOpen] = useState(false)
   const [mentionNotice, setMentionNotice] = useState('')
   // Which effect chain the right-hand column is showing, if any (I-07). Null means
   // "show the selected clip": the panel is one column, so opening a track or the
@@ -205,6 +356,9 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // 220px.
   const [fxTarget, setFxTarget] = useState(null)
   const composerInset = useComposerInset()
+  // A floating surface has no shell ancestor to inherit from, so it names the
+  // shell background explicitly (2026-11-10).
+  const surface = useSurface()
   // Export settings live in the panel, not in project.json: they describe this
   // one export, and spec §6.8 keeps one-off UI state out of the project.
   const [exportFormat, setExportFormat] = useState('')
@@ -425,8 +579,11 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       h('span', { style: S.chip }, `${project.tracks.length} ${t('轨')}`),
       h('span', { style: S.chip }, `${materials.length} ${t('个素材')}`),
       h('span', { style: { flex: 1 } }),
-      // 保存 is the commit point (improvement plan 05): edits go to the draft, and
-      // only this writes project.json. 放弃 throws the draft away.
+      // The round marks beside a button say what that button does when the label
+      // cannot: 保存 vs 放弃 is a difference worth stating in place. The guide gets
+      // a plain word instead, because a large panel and a tooltip are not the same
+      // affordance and two question marks in a row read as a defect.
+      h(HelpDot, { title: t('保存'), text: t('把当前草稿写进工程文件。不点保存，Agent 看到的是上次保存的版本。') }),
       h(Btn, {
         onClick: () => { cancel(); void save().then(() => setSaveError('')).catch((caught) => setSaveError(caught.message)) },
         disabled: !dirty,
@@ -435,6 +592,7 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
       }, t('保存')),
       dirty ? h(Btn, { onClick: () => { cancel(); void discard() }, title: t('放弃未保存的修改') }, t('放弃')) : null,
       h(Btn, { onClick: addToConversation, kind: (selection || range) ? 'primary' : undefined, disabled: !selection && !range }, t('添加到对话')),
+      h(HelpDot, { title: t('添加到对话'), text: t('把选中的片段或轨道作为引用放进输入框。它不会自己发消息，你可以先引用，再给指令。举例：「这段台词换个音色」「重新编排这段旋律」。') }),
       // The bus fader (spec §10.2's 总推子). It sits beside the bus chain button
       // because the two act on the whole mix, and it stays a slider rather than a
       // number box so it can be pulled while the transport runs — the head of a
@@ -452,6 +610,9 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           onChange: (value) => applyEdit({ kind: 'master-fader', masterFaderDb: value }),
         }),
       ),
+      // The bus chain is one control, so it carries one plain title: a round
+      // question mark beside a button whose label already says "bus" was noise
+      // the person asked to remove (2026-11-10).
       h(Btn, {
         onClick: () => setFxTarget(fxTarget === 'master' ? null : 'master'),
         kind: fxTarget === 'master' ? 'primary' : undefined,
@@ -477,10 +638,12 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
           h(Btn, {
             onClick: () => void exporter.start(chosenFormat, { normalize: exportNormalize }),
             kind: 'primary',
+            title: t('用当前状态渲染成品，导出后工程不会自动保存。'),
           }, t('导出')),
         ),
+      h(Btn, { onClick: () => setHelpOpen(true) }, t('帮助')),
     ),
-    hasDraft ? h(Notice, null, t('有未保存的修改：导出会使用当前画面，Agent 读到的是上次保存的版本。')) : null,
+    hasDraft ? h(Notice, null, t('有未保存的修改：导出使用当前状态，Agent 读取的是上次保存的版本。')) : null,
     editError ? h(Notice, { tone: 'error' }, editError) : null,
     saveError ? h(Notice, { tone: 'error' }, `${t('保存失败')}：${saveError} ${t('编辑仍在这里，可以重试。')}`) : null,
     mentionNotice ? h(Notice, null, mentionNotice) : null,
@@ -574,7 +737,7 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
     },
       h('div', {
         style: {
-          background: 'rgb(32,32,36)', border: `1px solid ${C.border}`, borderRadius: 10,
+          background: surface, border: `1px solid ${C.border}`, borderRadius: 10,
           padding: 18, width: 380, display: 'flex', flexDirection: 'column', gap: 10,
         },
       },
@@ -599,6 +762,87 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
         ),
       ),
     ) : null,
+    h(HelpDrawer, { open: helpOpen, onClose: () => setHelpOpen(false), surface }),
+  )
+}
+
+/**
+ * The guide, in a drawer that slides over the clip bay.
+ *
+ * Deliberately short: it is read once by a person who wants to know who does
+ * what, whether quitting loses their edits, and where the files land. Anything
+ * longer stops being read.
+ */
+function HelpDrawer({ open, onClose, surface }) {
+  if (!open) return null
+  const section = (title, children) => h('section', { style: { marginBottom: 16 } },
+    h('div', { style: { fontWeight: 600, fontSize: 13, marginBottom: 5 } }, title),
+    children,
+  )
+  const p = (text) => h('p', { style: { margin: '0 0 5px', fontSize: 12, lineHeight: 1.6 } }, text)
+  const item = (text) => h('li', { style: { fontSize: 12, lineHeight: 1.6 } }, text)
+  const row = (label, value) => h('tr', null,
+    h('td', { style: { padding: '3px 8px 3px 0', color: C.muted, whiteSpace: 'nowrap', verticalAlign: 'top', fontSize: 11 } }, label),
+    h('td', { style: { padding: '3px 0', fontSize: 11, fontFamily: 'ui-monospace, Consolas, monospace', wordBreak: 'break-all' } }, value),
+  )
+  return h('div', { style: { position: 'fixed', inset: 0, zIndex: 55, display: 'flex', justifyContent: 'flex-end' } },
+    h('div', { onClick: onClose, style: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.28)' } }),
+    h('div', {
+      style: {
+        position: 'relative', width: 'min(430px, 92vw)', alignSelf: 'stretch', overflow: 'auto',
+        background: surface, borderLeft: `1px solid ${C.border}`, padding: '14px 18px 30px',
+        boxSizing: 'border-box', boxShadow: '-8px 0 24px rgba(0,0,0,0.16)',
+      },
+    },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 } },
+        h('span', { style: { fontSize: 15, fontWeight: 650 } }, t('剪辑台使用说明')),
+        h('span', { style: { flex: 1 } }),
+        h(Btn, { onClick: onClose }, t('关闭')),
+      ),
+      section(t('一句话'), p(t('Agent 负责生成素材和批量修改；你负责试听、微调和拍板。'))),
+      section(t('保存与草稿'),
+        h('ul', { style: { margin: 0, paddingLeft: 18 } },
+          item(t('你在这里改的是草稿，不会立刻写进工程文件。')),
+          item(t('点「保存」才写进工程，Agent 才能看到你的修改。')),
+          item(t('不点保存就离开，会弹窗提醒；选「放弃」就回到上次保存的版本。')),
+          item(t('「导出」用的是当前状态，不是上次保存的版本。')),
+        ),
+      ),
+      section(t('片段怎么调'),
+        h('ul', { style: { margin: 0, paddingLeft: 18 } },
+          item(t('点一下选中，右侧改增益、声像、淡入淡出。')),
+          item(t('拖动片段移动；拖左右边缘裁剪；在播放头处点「分割」。')),
+          item(t('M 静音这条轨，S 独奏这条轨；轨道只是分组，没有音量。')),
+        ),
+      ),
+      section(t('添加到对话'),
+        p(t('选中片段或轨道 → 点「添加到对话」→ 输入框出现引用 → 切到「对话」补充要求再发送。')),
+        p(t('它不会自己发消息，只是把引用放进输入框。你可以先引用，再给指令，例如「这段台词换个音色」。')),
+      ),
+      // Where the files live belongs in the guide, not in the code: a person who
+      // knows the layout can find, back up and clean up their own work.
+      section(t('文件都在哪'),
+        h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+          h('tbody', null,
+            row(t('工程'), '.anyaudio/projects/<工程id>/project.json'),
+            row(t('素材'), '.anyaudio/projects/<工程id>/materials/'),
+            row(t('草稿'), '.anyaudio/projects/<工程id>/project.draft.json'),
+            row(t('导出'), '.anyaudio/out/'),
+            row(t('临时'), '.anyaudio/tmp/'),
+          ),
+        ),
+        h('p', { style: { ...S.desc, marginTop: 6 } }, t('临时目录可以随时删；素材和工程别手动改，交给剪辑台或 Agent。')),
+      ),
+      section(t('快捷键'),
+        h('ul', { style: { margin: 0, paddingLeft: 18 } },
+          item(t('空格：播放 / 暂停')),
+          item(t('Delete：删除选中片段')),
+          item(t('Ctrl+D：复制选中片段')),
+          item(t('Ctrl+Z / Ctrl+Shift+Z：撤销 / 重做')),
+          item(t('Esc：取消选择')),
+        ),
+      ),
+    ),
   )
 }
 
@@ -606,6 +850,11 @@ export function ClipBayPanel({ useWorkspaces, sessionId, inputActions, useInput 
   const snapshot = useWorkspaces ? useWorkspaces((value) => value) : undefined
   const workspace = workspaceForSession(snapshot?.items, sessionId)
   const [opened, setOpened] = useState(null)
+  // The language preference lives in a module variable, so changing it does not
+  // re-render anything on its own. This counter is what turns the /state answer
+  // into a repaint: without it an English user could be left looking at the
+  // first frame's Chinese for the whole visit (2026-11-10).
+  const [, setLangTick] = useState(0)
 
   // A different Session is a different workspace, and an open project belongs to
   // the old one — close it rather than let the shell keep writing to a folder the
@@ -613,12 +862,17 @@ export function ClipBayPanel({ useWorkspaces, sessionId, inputActions, useInput 
   useEffect(() => { setOpened(null) }, [workspace?.path])
 
   // The panel has no config of its own; it borrows the settings page's language
-  // preference so both halves of the plugin read the same way. Rendering is not
-  // held back for it — the first frame uses the current language.
+  // preference so both halves of the plugin read the same way.
   useEffect(() => {
     let cancelled = false
     api('/state')
-      .then((data) => { if (!cancelled) setLanguage(detectLanguage(data.config)) })
+      .then((data) => {
+        if (cancelled) return
+        const next = detectLanguage(data.config)
+        setLanguage(next)
+        if (typeof document !== 'undefined') document.documentElement.lang = next === 'en' ? 'en' : 'zh-CN'
+        setLangTick((value) => value + 1)
+      })
       .catch(() => {})
     return () => { cancelled = true }
   }, [])

@@ -4,7 +4,7 @@
  * `h` is React.createElement: the bundle is built by scripts/build-client.mjs
  * with no JSX transform, so markup stays plain function calls.
  */
-import { createElement } from 'react'
+import { createElement, useEffect, useState } from 'react'
 
 export const h = createElement
 export { Fragment, useState, useEffect, useRef, useCallback, useMemo } from 'react'
@@ -19,6 +19,40 @@ export const C = {
   good: '#2ea36b',
   warn: '#c9822a',
   bad: '#c0504d',
+}
+
+/**
+ * The first opaque background above `node`, as a CSS colour.
+ *
+ * The timeline's track heads are sticky and must be opaque, or clips scroll
+ * through them. The shell's own background is not a fixed colour (light and
+ * dark themes differ), so it is read from the DOM instead of guessed.
+ */
+export function surfaceOf(node) {
+  if (typeof document === 'undefined') return '#ffffff'
+  let current = node
+  while (current && current !== document.documentElement) {
+    const value = getComputedStyle(current).backgroundColor
+    const match = value && value.match(/rgba?\(([^)]+)\)/)
+    if (match) {
+      const parts = match[1].split(',').map(Number)
+      const alpha = parts.length > 3 ? parts[3] : 1
+      if (alpha > 0.5) return `rgb(${parts[0]}, ${parts[1]}, ${parts[2]})`
+    }
+    current = current.parentElement
+  }
+  const dark = typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
+  return dark ? '#1c1d21' : '#ffffff'
+}
+
+/** The shell background, for surfaces that must be opaque. Read once per mount. */
+export function useSurface() {
+  const [value, setValue] = useState('#ffffff')
+  useEffect(() => {
+    const node = document.querySelector('[data-conversation-composer-overlay]') || document.body
+    setValue(surfaceOf(node))
+  }, [])
+  return value
 }
 
 export const S = {

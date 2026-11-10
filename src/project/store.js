@@ -192,12 +192,27 @@ export async function listProjects(workspaceRoot) {
     try {
       const project = await readProject(workspaceRoot, entry.name)
       const info = await stat(projectFile(workspaceRoot, entry.name))
+      // The card says how many materials a project holds and whether unsaved
+      // work is waiting, and both answers already live on disk — they are read
+      // here rather than fetched per card so opening the list stays one request.
+      let materialCount = 0
+      try {
+        const index = await readMaterialIndex(workspaceRoot, entry.name)
+        materialCount = (index.materials ?? []).length
+      } catch {}
+      let hasDraft = false
+      try {
+        await stat(draftFile(workspaceRoot, entry.name))
+        hasDraft = true
+      } catch {}
       rows.push({
         id: project.id,
         name: project.name,
         durationSec: project.durationSec,
         trackCount: project.tracks.length,
+        materialCount,
         hasVideo: Boolean(project.video),
+        hasDraft,
         modifiedAt: project.modifiedAt,
         mtimeMs: info.mtimeMs,
       })
