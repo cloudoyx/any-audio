@@ -32,6 +32,12 @@ const anyaudioDir = join(root, '.anyaudio')
 const hadAnyaudioDir = existsSync(anyaudioDir)
 const testRoot = join(anyaudioDir, 'test-tmp')
 const testConfigPath = join(testRoot, 'config.json')
+const projectsDirPath = join(anyaudioDir, 'projects')
+const outDirPath = join(anyaudioDir, 'out')
+// The renderer steps below need a real project and stage their WAV outside
+// test-tmp, so remember what was there and put it back on the way out.
+const preexistingProjects = new Set(await readdir(projectsDirPath).catch(() => []))
+const preexistingOut = new Set(await readdir(outDirPath).catch(() => []))
 process.env.ANYAUDIO_CONFIG = testConfigPath
 process.env.ANYAUDIO_STATE = join(testRoot, 'state.json')
 await rm(testConfigPath, { force: true })
@@ -319,9 +325,13 @@ server.listen(0, '127.0.0.1', async () => {
   // The four steps below cover the "saved default points at a bank that no longer
   // exists" case: the page and the renderer must always agree.
   const testExec = { agent: { workspaceRoot: root } }
+  // anyaudio_music writes into a project now (improvement 01 / I-10), so the
+  // renderer needs one. It lives in the scratch tree with the rest of the test.
+  const { createProject } = await import('../src/project/store.js')
+  const renderProjectId = (await createProject(root, { name: 'settings-render-check' })).id
   const renderFont = async () => {
     const rendered = await musicToolDefinition.execute(
-      { score: { tracks: [{ name: 'a', instrument: 'strings', notes: [[0, 0.5, 'C4', 90]] }] }, durationSec: 0.6, output: '.anyaudio/test-tmp/default-check.wav' },
+      { projectId: renderProjectId, score: { tracks: [{ name: 'a', instrument: 'strings', notes: [[0, 0.5, 'C4', 90]] }] }, durationSec: 0.6, output: '.anyaudio/test-tmp/default-check.wav' },
       testExec,
     )
     return rendered
@@ -402,6 +412,12 @@ server.listen(0, '127.0.0.1', async () => {
   console.log(`\n${passed} steps passed${skipped ? `, ${skipped} skipped` : ''}`)
   server.close()
   await rm(testRoot, { recursive: true, force: true })
+  for (const name of await readdir(outDirPath).catch(() => [])) {
+    if (!preexistingOut.has(name)) await rm(join(outDirPath, name), { recursive: true, force: true })
+  }
+  for (const name of await readdir(projectsDirPath).catch(() => [])) {
+    if (!preexistingProjects.has(name)) await rm(join(projectsDirPath, name), { recursive: true, force: true })
+  }
   if (!hadAnyaudioDir) {
     const leftover = await readdir(anyaudioDir).catch(() => [])
     if (leftover.length === 0) await rm(anyaudioDir, { recursive: true, force: true })

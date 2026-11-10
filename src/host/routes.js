@@ -19,10 +19,12 @@ import { resolveConfiguredDefault } from '../audio/banks.js'
 import { categoryOfProgram } from '../audio/scoring.js'
 import { compileScore } from '../audio/score.js'
 import { loadSoundBank, renderCompiled, listPresets } from '../audio/synth.js'
-import { EDGE_VOICES, MIMO_VOICES, providerInfo, synthesizeSpeech } from '../audio/tts-providers.js'
+import { EDGE_VOICES, MIMO_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
+import { handleClipBay, needsClientHeader } from './clipbay-routes.js'
+import { describeError, json, readJsonBody } from './http.js'
 
 const PREFIX = '/api/dsh-any-audio'
 const CLIENT_HEADER = 'any-audio/1'
@@ -38,32 +40,6 @@ const VERSION = (() => {
 
 const jobs = new Map()
 const audios = new Map()
-
-function json(res, status, body) {
-  const payload = JSON.stringify(body)
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  res.end(payload)
-}
-
-async function readJsonBody(req, limit = 1024 * 1024) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > limit) throw new Error('request body is too large')
-    chunks.push(chunk)
-  }
-  if (size === 0) return {}
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  } catch {
-    throw new Error('request body is not valid JSON')
-  }
-}
-
-function describeError(error) {
-  return error instanceof Error ? error.message : String(error)
-}
 
 function publicJob(job) {
   return {
@@ -159,8 +135,18 @@ async function fontState(workspaceRoot) {
       status: row?.status ?? 'missing',
     }
   })
-  const defaultPath = await configuredDefaultPath(workspaceRoot).catch(() => null)
-  return { rows, available, defaultPath, directories: fontSearchDirs(), libraryDir: userFontDir() }
+  // Two different things answer to "default" in this page: the bank the person
+  // actually chose (music.font), and the bank a render falls back to when they
+  // chose nothing. Showing only the resolved path made the fallback look like a
+  // setting, so "默认音源：GeneralUser" read as "I configured this" while the
+  // tools kept reporting "not set" (improvement plan 04).
+  const { config } = await readConfig()
+  const resolved = await resolveConfiguredDefault(config.music.font, { workspaceRoot }).catch(() => null)
+  const defaultPath = resolved?.path ?? null
+  const configured = resolved?.configured ?? ''
+  const stale = resolved?.stale === true
+  const fallbackPath = (await resolveConfiguredDefault('', { workspaceRoot }).catch(() => null))?.path ?? null
+  return { rows, available, defaultPath, configured, stale, fallbackPath, directories: fontSearchDirs(), libraryDir: userFontDir() }
 }
 
 /**
@@ -384,9 +370,21 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
 
   async function previewTts(body) {
     const { config } = await readConfig()
-    const provider = String(body.provider ?? config.tts.provider)
-    const info = providerInfo(provider)
-    if (!info) throw new Error(`unknown provider "${provider}"`)
+    const requested = body.provider
+    const explicit = requested !== undefined && requested !== null && String(requested).trim() !== ''
+    const chosenEngine = String(explicit ? requested : config.tts.provider)
+    const info = providerInfo(chosenEngine)
+    if (!info) throw new Error(`unknown provider "${chosenEngine}"`)
+    // The voice picker in the page belongs to the selected engine, so a
+    // mismatch means a name from the other engine came in. Preview has to give
+    // the same answer the tools do, or it lies about what a call would do.
+    const picked = resolveVoice({
+      provider: chosenEngine,
+      voice: body.voice,
+      explicitProvider: explicit,
+      fallbackVoice: chosenEngine === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice,
+    })
+    const provider = picked.provider
     let apiKey = null
     if (provider === 'mimo') {
       apiKey = process.env.MIMO_API_KEY ?? null
@@ -401,7 +399,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       if (!apiKey) throw new Error('MiMo needs a key: save one above (normal Open Platform key) or set MIMO_API_KEY')
     }
     const text = String(body.text ?? '').trim() || '太行、王屋二山，方七百里，高万仞。'
-    const voice = String(body.voice ?? (provider === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice))
+    const voice = picked.voice
     const audio = await synthesizeSpeech({
       provider,
       text,
@@ -409,7 +407,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       rate: body.rate ?? config.tts.edge.rate,
       pitch: body.pitch ?? config.tts.edge.pitch,
       volume: body.volume ?? config.tts.edge.volume,
-      style: body.style ?? config.tts.mimo.style,
+      style: body.style ?? (provider === 'mimo' ? config.tts.mimo.style : undefined),
       proxy: provider === 'mimo' ? config.tts.mimo.proxy || undefined : config.tts.edge.proxy || undefined,
       baseUrl: config.tts.mimo.baseUrl,
       model: config.tts.mimo.model,
@@ -421,7 +419,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     delete payload.buffer
     return rememberAudio(encodeWav({ sampleRate: audio.sampleRate, channels: audio.channels, bitDepth: 16 }), {
       kind: 'tts',
-      label: `${provider} / ${voice}`,
+      label: `${info.label} / ${voice}`,
       ...payload,
     })
   }
@@ -499,6 +497,15 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     if (path === `${PREFIX}/audio`) {
       await audioRoute(res, url.searchParams.get('id'))
       return
+    }
+    if (path.startsWith(`${PREFIX}/clipbay/`)) {
+      const suffix = path.slice(PREFIX.length)
+      // The media routes sit outside the header gate: <audio>/<video> cannot
+      // send a custom header, so only the cross-site rejection above protects them.
+      if (needsClientHeader(suffix) && req.headers['x-any-audio-client'] !== CLIENT_HEADER) {
+        return json(res, 403, { ok: false, error: 'requests must come from the AnyAudio settings page' })
+      }
+      return handleClipBay(req, res, { url, method, path: suffix, ctx })
     }
     if (req.headers['x-any-audio-client'] !== CLIENT_HEADER) {
       return json(res, 403, { ok: false, error: 'requests must come from the AnyAudio settings page' })

@@ -18,7 +18,36 @@ export const EDGE_VOICES = [
 ]
 
 /** Built-in MiMo voices; the service also accepts custom/cloned voice ids. */
-export const MIMO_VOICES = ['mimo_default', '冰糖', '茉莉', '苏打', '白桦', 'Mia', 'Chloe']
+export const MIMO_VOICES = ['mimo_default', '冰糖', '茉莉', '苏打', '白桦', 'Mia', 'Chloe', 'Milo', 'Dean']
+
+/**
+ * A short, readable name for a voice (improvement plan 02, I-03).
+ *
+ * Tracks are grouped by voice, and a track head that reads `旁白 · zh-CN-XiaoxiaoNeural`
+ * is not something a person can scan. The identifier stays the key — this is only
+ * the label; an unknown voice falls back to its own id so a cloned or custom
+ * voice still gets a track of its own instead of joining someone else's.
+ */
+export const VOICE_DISPLAY_NAMES = {
+  'zh-CN-XiaoxiaoNeural': '晓晓',
+  'zh-CN-YunxiNeural': '云希',
+  'zh-CN-YunjianNeural': '云健',
+  'zh-CN-XiaoyiNeural': '晓伊',
+  'zh-CN-YunyangNeural': '云扬',
+  'zh-CN-liaoning-XiaobeiNeural': '晓北',
+  'zh-CN-shaanxi-XiaoniNeural': '晓妮',
+  'en-US-AriaNeural': 'Aria',
+  'en-US-JennyNeural': 'Jenny',
+  'en-US-GuyNeural': 'Guy',
+  'ja-JP-NanamiNeural': 'Nanami',
+  mimo_default: '默认',
+}
+
+export function voiceDisplayName(voice) {
+  const name = typeof voice === 'string' ? voice.trim() : ''
+  if (!name) return null
+  return VOICE_DISPLAY_NAMES[name] ?? name
+}
 
 export const TTS_PROVIDERS = {
   edge: {
@@ -43,6 +72,54 @@ export const TTS_PROVIDERS = {
 
 export function providerInfo(id) {
   return TTS_PROVIDERS[id] ?? null
+}
+
+/**
+ * The engine that owns a voice name, or null when no engine claims it.
+ *
+ * Voice names are engine-specific: MiMo answers any name it does not know with
+ * HTTP 400 "Param Incorrect", and Edge simply stops answering. Deriving the
+ * owner from the registry keeps this working for engines added later — a new
+ * entry with a `voices` list needs no change here.
+ */
+export function providerForVoice(voice) {
+  const name = typeof voice === 'string' ? voice.trim() : ''
+  if (!name) return null
+  for (const provider of Object.values(TTS_PROVIDERS)) {
+    if (provider.voices?.includes(name)) return provider.id
+  }
+  return null
+}
+
+/** Voice names an engine accepts, for error messages. */
+export function voicesOf(providerId) {
+  return TTS_PROVIDERS[providerId]?.voices ?? []
+}
+
+export class VoiceProviderMismatch extends Error {}
+
+/**
+ * Decide which engine and voice a request actually means.
+ *
+ * A voice name belongs to exactly one engine. When the two disagree the answer
+ * depends on how the engine was chosen: an engine the caller named explicitly is
+ * a decision and gets an error instead of a silent replacement; an engine that
+ * came from configuration is only a default, so the voice — the more specific
+ * signal — wins, and `switched` reports it. A voice no engine claims is left
+ * alone: cloned and custom voices are legitimate.
+ */
+export function resolveVoice({ provider, voice, explicitProvider = false, fallbackVoice }) {
+  const name = typeof voice === 'string' ? voice.trim() : ''
+  if (!name) return { provider, voice: fallbackVoice, switched: false }
+  const owner = providerForVoice(name)
+  if (!owner || owner === provider) return { provider, voice: name, switched: false }
+  if (explicitProvider) {
+    throw new VoiceProviderMismatch(
+      `Voice "${name}" belongs to ${TTS_PROVIDERS[owner]?.label ?? owner}, not ${TTS_PROVIDERS[provider]?.label ?? provider}: voice names are per engine. ` +
+        `Either pass provider "${owner}", or pick one of these ${TTS_PROVIDERS[provider]?.label ?? provider} voices: ${voicesOf(provider).join(', ')}.`,
+    )
+  }
+  return { provider: owner, voice: name, switched: true }
 }
 
 function percent(value, fallback) {
@@ -152,7 +229,7 @@ function runEdgeWorker(payload, output) {
 function describeEdgeError(error) {
   const message = String(error?.message ?? error)
   if (/429|too many requests|rate limit/i.test(message)) {
-    return new Error('Edge TTS is rate limiting this machine right now (HTTP 429). Wait a minute and retry, or switch the narration engine to MiMo in Settings -> AnyAudio.')
+    return new Error('Edge TTS is rate limiting this machine right now (HTTP 429). Wait a minute and retry, or pass provider:"mimo" to switch engines (the user needs a MiMo key configured for that).')
   }
   if (/unexpected server response:?\s*200|http\s*200/i.test(message)) {
     return new Error('Edge TTS was refused by the service (its WebSocket handshake returned HTTP 200, usually a network filter or throttling). Retry later, set a proxy in Settings -> AnyAudio, or switch the narration engine to MiMo.')
@@ -364,13 +441,25 @@ async function synthesizeMimo({ text, voice, model, style, baseUrl, apiKey, prox
   }
   if (status < 200 || status >= 300) {
     const message = json?.error?.message ?? json?.message ?? raw.slice(0, 300)
+    // The service names the offending field in `error.param`. Reading it is the
+    // difference between "this voice is not ours" and a misleading guess about
+    // the network.
+    const param = json?.error?.param ?? json?.param ?? ''
     if (status === 401 || status === 403) {
       throw new Error(`MiMo rejected the API key (HTTP ${status}). Use a normal Open Platform API key; Token Plan keys are not supported. ${message}`)
     }
     if (status === 429) throw new Error(`MiMo rate limit reached (HTTP 429). Wait a moment and retry. ${message}`)
+    if (/unknown voice/i.test(param)) {
+      throw new Error(
+        `MiMo does not have a voice called "${voice ?? MIMO_VOICES[0]}" (HTTP 400). ${param}. A voice name belongs to one engine only — pass the voice of the engine you selected, or set "provider" to the engine that owns this voice.`,
+      )
+    }
+    if (status === 400 && param) {
+      throw new Error(`MiMo TTS rejected "${param}" (HTTP 400): ${message}`)
+    }
     if (status === 400 && /param/i.test(message)) {
       throw new Error(
-        `MiMo TTS failed with HTTP 400: ${message}. The request body and key are known-good; a 400 like this usually means the network path rewrote the request (a proxy, DNS hijack or TLS interception). Check the proxy/VPN in use, or set a proxy for MiMo in Settings -> AnyAudio.`,
+        `MiMo TTS failed with HTTP 400: ${message}. The service did not say which parameter is wrong, so it may also be the network path rewriting the request (a proxy, DNS hijack or TLS interception). Check the proxy/VPN in use, or set a proxy for MiMo in Settings -> AnyAudio.`,
       )
     }
     throw new Error(`MiMo TTS failed with HTTP ${status}: ${message}`)

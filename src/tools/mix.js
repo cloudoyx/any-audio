@@ -69,11 +69,13 @@ async function extractNarration(videoPath, workspaceRoot) {
 }
 
 /** Read a media file's duration from ffmpeg's banner (no ffprobe dependency). */
-function probeDuration(command, file) {
+export function probeDuration(command, file, { signal } = {}) {
   return new Promise((resolvePromise) => {
     let child
     try {
-      child = spawn(command, ['-hide_banner', '-i', file], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], signal: AbortSignal.timeout(15000) })
+      const timeout = AbortSignal.timeout(15000)
+      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
+      child = spawn(command, ['-hide_banner', '-i', file], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], signal: combined })
     } catch {
       resolvePromise(null)
       return
@@ -92,11 +94,11 @@ function probeDuration(command, file) {
   })
 }
 
-async function muxVideo(videoPath, audioPath, outputPath, { audioDurationSec, videoDurationSec: probed } = {}) {
+export async function muxVideo(videoPath, audioPath, outputPath, { audioDurationSec, videoDurationSec: probed, signal } = {}) {
   const ffmpeg = findFfmpeg()
   if (!ffmpeg) return { ok: false, error: 'ffmpeg not found; the WAV is ready, mux it manually with ffmpeg or set ANYAUDIO_FFMPEG' }
   await mkdir(dirname(outputPath), { recursive: true })
-  const videoDurationSec = Number.isFinite(Number(probed)) && Number(probed) > 0 ? Number(probed) : await probeDuration(ffmpeg.command, videoPath)
+  const videoDurationSec = Number.isFinite(Number(probed)) && Number(probed) > 0 ? Number(probed) : await probeDuration(ffmpeg.command, videoPath, { signal })
   const warnings = []
   const args = [
     '-y', '-hide_banner', '-loglevel', 'error',
@@ -119,11 +121,11 @@ async function muxVideo(videoPath, audioPath, outputPath, { audioDurationSec, vi
   }
   args.push('-movflags', '+faststart', outputPath)
   try {
-    await runFfmpeg(ffmpeg.command, args)
+    await runFfmpeg(ffmpeg.command, args, { signal })
   } catch (error) {
     return { ok: false, file: outputPath, error: error.message, warnings }
   }
-  const writtenDurationSec = await probeDuration(ffmpeg.command, outputPath)
+  const writtenDurationSec = await probeDuration(ffmpeg.command, outputPath, { signal })
   if (videoDurationSec && writtenDurationSec && Math.abs(writtenDurationSec - videoDurationSec) > 0.1) {
     warnings.push(`the muxed video is ${writtenDurationSec.toFixed(2)}s but the source video is ${videoDurationSec.toFixed(2)}s`)
   }
@@ -134,7 +136,8 @@ export const mixToolDefinition = finalizeTool({
   name: 'anyaudio_mix',
   description:
     'Mix audio tracks onto one timeline and write a final WAV (optionally muxing it into a video with ffmpeg). ' +
-    'Finish every video deliverable with this tool: even a short clip sounds unfinished without a mix of music, effects and voice. ' +
+    'This produces one finished file that nobody can adjust afterwards. Audio a person will listen to and may want to change belongs in a clip bay project instead: anyaudio_music, anyaudio_tts and anyaudio_sfx write into a project directly, and anyaudio_project mode:"render" mixes it down to WAV/MP3/MP4. ' +
+    'Reach for this tool when a single ready-to-use file really is the whole point — a standalone sound bed with nothing left to tweak, or a picture whose final mix happens in one pass. ' +
     'Tracks are placed in order with per-track gain, pan, fades and looping; any track with role "narration" automatically lowers the level of all other tracks while the voice is present (ducking), which keeps dialogue intelligible. ' +
     'It balances the narration / music / sfx buses against each other; the balance between instruments inside the music is anyaudio_music\'s job (per-track gainDb), so fix a buried instrument there instead of pulling the whole music bus up. ' +
     'Always pass durationSec = the video length so audio and picture end together. ' +

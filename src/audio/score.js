@@ -88,6 +88,62 @@ export function parsePitch(value) {
   throw new Error(`invalid pitch: ${String(value)}`)
 }
 
+/**
+ * Instrument names close to `key`, so a typo can be fixed without a detour.
+ *
+ * "see the skill" is a round trip: the Agent leaves, reads a long list, comes
+ * back, and may still not find the name it wanted (`shaker` is not in the table;
+ * the nearest thing is `agogo`). Naming a few candidates in the error ends the
+ * round trip. This deliberately does not correct anything: guessing wrong is
+ * worse than being told what exists.
+ */
+export function suggestInstruments(key, limit = 4) {
+  const wanted = String(key ?? '').toLowerCase()
+  if (!wanted) return []
+  const distance = (a, b) => {
+    const rows = a.length + 1
+    const cols = b.length + 1
+    let previous = Array.from({ length: cols }, (_, index) => index)
+    for (let i = 1; i < rows; i++) {
+      const current = [i]
+      for (let j = 1; j < cols; j++) {
+        current[j] = Math.min(
+          previous[j] + 1,
+          current[j - 1] + 1,
+          previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        )
+      }
+      previous = current
+    }
+    return previous[cols - 1]
+  }
+  const longestShared = (a, b) => {
+    let best = 0
+    const row = new Array(b.length + 1).fill(0)
+    for (let i = 1; i <= a.length; i++) {
+      let diagonal = 0
+      for (let j = 1; j <= b.length; j++) {
+        const previous = row[j]
+        row[j] = a[i - 1] === b[j - 1] ? diagonal + 1 : 0
+        if (row[j] > best) best = row[j]
+        diagonal = previous
+      }
+    }
+    return best
+  }
+  const scored = Object.keys(INSTRUMENTS).map((name) => ({
+    name,
+    edits: distance(wanted, name),
+    shared: longestShared(wanted, name),
+  }))
+  // Two characters shared in a row is a real neighbour (`shaker` → `shakuhachi`),
+  // one is a coincidence (`zzzz` and `jazz-guitar`), and three edits covers a
+  // typo. Nothing passes for a name with no neighbours, and the message says so.
+  const close = scored.filter((entry) => entry.shared >= 3 || entry.edits <= 2)
+  close.sort((a, b) => (b.shared - a.shared) || (a.edits - b.edits) || a.name.localeCompare(b.name))
+  return close.slice(0, limit).map((entry) => entry.name)
+}
+
 export function resolveInstrument(spec) {
   if (spec === undefined || spec === null || spec === '') return { program: 0, bank: 0, label: 'piano' }
   if (typeof spec === 'number') {
@@ -99,7 +155,11 @@ export function resolveInstrument(spec) {
     if (key in INSTRUMENTS) return { program: INSTRUMENTS[key], bank: 0, label: key }
     const asNumber = Number(key)
     if (Number.isInteger(asNumber) && asNumber >= 0 && asNumber <= 127) return { program: asNumber, bank: 0, label: `program ${asNumber}` }
-    throw new Error(`unknown instrument "${spec}"; see the anyaudio-scoring skill for the instrument list or pass a GM program number`)
+    const nearby = suggestInstruments(key)
+    throw new Error(
+      `unknown instrument "${spec}"; ${nearby.length > 0 ? `closest names: ${nearby.join(', ')}. ` : 'there is nothing close to that name. '}`
+      + 'The full list is in the anyaudio-scoring skill, or pass a GM program number.',
+    )
   }
   if (typeof spec === 'object') {
     const base = resolveInstrument(spec.program ?? spec.presetName ?? 0)
@@ -187,11 +247,29 @@ function automationEvents(automation, warn) {
   if (cc === undefined) throw new Error(`unknown automation controller "${controller}"`)
   const points = automation.points
   if (!Array.isArray(points) || points.length === 0) throw new Error(`automation for "${trackName}" needs points`)
+  const clamped = []
   const parsed = points.map((point, index) => {
     const [t, raw] = Array.isArray(point) ? point : [point.t, point.v ?? point.value]
     const value = number(raw, `automation point #${index} value`)
+    if (value < 0 || value > 127) {
+      clamped.push({ index, value, to: Math.max(0, Math.min(127, value)) })
+    }
     return { t: Math.max(0, number(t, `automation point #${index} time`)), value: Math.max(0, Math.min(127, value)) }
   })
+  // A CC value is 0..127. Writing dB here (-26, -20) is the mistake that is
+  // easiest to make — gainDb on the same track takes dB, so the two look alike —
+  // and the clamp then turns every negative into 0, which is silence. One real
+  // session shipped a warm pad that was digit-for-digit zero for 64 seconds
+  // because of this, and the only warning said it sat "102.6 dB below the
+  // loudest track", pointing at gainDb instead of at these points.
+  if (clamped.length > 0) {
+    const worst = clamped[0]
+    warn(
+      `automation for "${trackName}": ${clamped.length} point(s) fall outside 0..127 and were clamped — point #${worst.index} is ${worst.value}, clamped to ${worst.to}`
+      + `${clamped.some((entry) => entry.to === 0) ? ', and 0 silences the controller for its whole span' : ''}.`
+      + ' CC values are 0..127, not dB: use 127 for the loudest, 0 for silence, and roughly 100 for a -12 dB part.',
+    )
+  }
   parsed.sort((a, b) => a.t - b.t)
   const events = []
   const step = 1 / 20
@@ -291,7 +369,16 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
   for (const automation of score.automation ?? []) {
     const { trackName, events } = automationEvents(automation, warn)
     const target = byName.get(trackName)
-    if (!target) throw new ScoreError(`automation references unknown track "${trackName}"`)
+    // The name is the identifier here, and the mistake in a real session was
+    // passing the track's index instead. Naming what is available ends it; a bare
+    // "unknown track" leaves the model guessing at the same wrong value.
+    if (!target) {
+      const available = tracks.map((track, index) => `#${index} "${track.name}"`).join(', ')
+      throw new ScoreError(
+        `automation references unknown track "${trackName}". This score has: ${available || '(none)'}. `
+        + 'automation.track takes the track name, not its index or MIDI channel.',
+      )
+    }
     for (const event of events) target.events.push({ ...event, channel: target.channel })
     target.events.sort((a, b) => a.t - b.t)
   }

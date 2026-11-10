@@ -17,6 +17,7 @@
     "scripts/fetch-font.mjs",
     "scripts/smoke.mjs",
     "scripts/anyaudio-cli.mjs",
+    "scripts/build-client.mjs",
     "test/verify.mjs",
     "test/client-bundle.mjs",
     "test/settings.mjs",
@@ -47,6 +48,7 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
+    "build": "node scripts/build-client.mjs",
     "font": "node scripts/fetch-font.mjs",
     "smoke": "node scripts/smoke.mjs",
     "render": "node scripts/anyaudio-cli.mjs",
@@ -55,9 +57,9 @@
     "test:settings": "node test/settings.mjs"
   },
   "dependencies": {
+    "https-proxy-agent": "^7.0.6",
     "node-edge-tts": "^1.2.11",
-    "spessasynth_core": "^4.3.22",
-    "https-proxy-agent": "^7.0.6"
+    "spessasynth_core": "^4.3.22"
   },
   "keywords": [
     "dsh-plugin",
@@ -71,5 +73,8 @@
     "mixing",
     "video"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
 }

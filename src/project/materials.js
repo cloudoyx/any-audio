@@ -1,0 +1,195 @@
+/**
+ * Material registry: the index is the "what is this and where did it come from"
+ * half of the pair (spec §6.4). It never stores arrangement, and references are
+ * counted from project.json on demand — a separate counter would be a second
+ * source of truth that drifts.
+ */
+import { existsSync } from 'node:fs'
+import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { analyzeChannels } from '../audio/peaks.js'
+import { conformChannels, parseWav } from '../audio/wav.js'
+import { assertRelativePath, MATERIAL_KINDS, ProjectSchemaError } from './schema.js'
+import {
+  MATERIALS_DIR,
+  materialsDir,
+  newMaterialId,
+  projectDir as projectDirOf,
+  resolveInside,
+  SOURCES_DIR,
+} from './paths.js'
+import { readMaterialIndex, readProject, writeMaterialIndex } from './store.js'
+
+export class MaterialError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'MaterialError'
+  }
+}
+
+export function findMaterial(index, materialId) {
+  return (index?.materials ?? []).find((entry) => entry.id === materialId) ?? null
+}
+
+export function validateMaterial(entry, path = 'material') {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new ProjectSchemaError(`${path} must be an object`)
+  if (typeof entry.id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(entry.id)) {
+    throw new ProjectSchemaError(`${path}.id may only contain letters, digits, "-" and "_"`)
+  }
+  assertRelativePath(entry.file, `${path}.file`)
+  if (typeof entry.durationSec !== 'number' || !(entry.durationSec > 0)) {
+    throw new ProjectSchemaError(`${path}.durationSec must be a positive number`)
+  }
+  if (!MATERIAL_KINDS.includes(entry.kind)) {
+    throw new ProjectSchemaError(`${path}.kind must be one of ${MATERIAL_KINDS.join(' | ')}`)
+  }
+  // A material's level is part of its identity, next to its length (improvement
+  // plan 03, I-37). Both are optional because every material registered before
+  // this existed has neither, and a project must still open: a missing value
+  // means "not measured yet", never "silent".
+  for (const field of ['peakDb', 'rmsDb']) {
+    const value = entry[field]
+    if (value === undefined || value === null) continue
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new ProjectSchemaError(`${path}.${field} must be a finite number or null`)
+    }
+  }
+  if (entry.source && typeof entry.source === 'object' && entry.source.snapshot !== undefined) {
+    assertRelativePath(entry.source.snapshot, `${path}.source.snapshot`)
+  }
+  return entry
+}
+
+/**
+ * Register a material that already exists in `materials/`. Returns the stored
+ * entry; an id collision is an error rather than an overwrite.
+ */
+export async function registerMaterial(workspaceRoot, projectId, entry) {
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const record = validateMaterial({ ...entry, id: entry.id ?? newMaterialId() })
+  if (findMaterial(index, record.id)) {
+    throw new MaterialError(`material "${record.id}" already exists in project "${projectId}"`)
+  }
+  index.materials.push(record)
+  await writeMaterialIndex(workspaceRoot, projectId, index)
+  return record
+}
+
+export async function updateMaterial(workspaceRoot, projectId, materialId, patch) {
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const existing = findMaterial(index, materialId)
+  if (!existing) throw new MaterialError(`material "${materialId}" is not in project "${projectId}"`)
+  const merged = validateMaterial({ ...existing, ...patch, id: existing.id })
+  index.materials = index.materials.map((row) => (row.id === materialId ? merged : row))
+  await writeMaterialIndex(workspaceRoot, projectId, index)
+  return merged
+}
+
+export async function removeMaterialRecord(workspaceRoot, projectId, materialId) {
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const next = index.materials.filter((row) => row.id !== materialId)
+  if (next.length === index.materials.length) throw new MaterialError(`material "${materialId}" is not in project "${projectId}"`)
+  index.materials = next
+  await writeMaterialIndex(workspaceRoot, projectId, index)
+  return true
+}
+
+/** Every item in the project pointing at this material, with its track. */
+export function referencesFor(project, materialId) {
+  const rows = []
+  for (const track of project?.tracks ?? []) {
+    for (const item of track?.items ?? []) {
+      if (item.material === materialId) rows.push({ trackId: track.id, trackName: track.name, itemId: item.id, label: item.label })
+    }
+  }
+  return rows
+}
+
+/**
+ * Delete a material only when nothing references it. Deleting an item never
+ * touches the material (spec §6.5): the same material can be used twice.
+ */
+export async function deleteMaterial(workspaceRoot, projectId, materialId, { deleteFiles = true } = {}) {
+  const project = await readProject(workspaceRoot, projectId)
+  const used = referencesFor(project, materialId)
+  if (used.length > 0) {
+    const plural = used.length === 1 ? 'clip' : 'clips'
+    // Naming the clips is the difference between "refused" and "here is what to
+    // do next": an Agent that is told only the count sends the same call again
+    // (improvement plan 03, I-40).
+    const where = used
+      .slice(0, 6)
+      .map((row) => `${row.label || row.itemId} on "${row.trackName}"`)
+      .join(', ')
+    const more = used.length > 6 ? ` and ${used.length - 6} more` : ''
+    throw new MaterialError(
+      `this material is still used by ${used.length} ${plural} (${where}${more}); remove or re-point those clips first, then delete it`,
+    )
+  }
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const entry = findMaterial(index, materialId)
+  if (!entry) throw new MaterialError(`material "${materialId}" is not in project "${projectId}"`)
+
+  if (deleteFiles) {
+    const dir = projectDirOf(workspaceRoot, projectId)
+    await rm(resolveInside(dir, entry.file), { force: true })
+    await rm(resolveInside(dir, `${MATERIALS_DIR}/${materialId}.peaks.json`), { force: true })
+    const sources = resolveInside(dir, SOURCES_DIR)
+    if (existsSync(sources)) {
+      for (const name of await readdir(sources)) {
+        if (name.startsWith(`${materialId}.`)) await rm(resolveInside(dir, `${SOURCES_DIR}/${name}`), { force: true })
+      }
+    }
+  }
+  await removeMaterialRecord(workspaceRoot, projectId, materialId)
+  return { deleted: true, materialId, usedBefore: 0 }
+}
+
+/**
+ * Give every material in the index a measured level, writing back the ones that
+ * had none.
+ *
+ * A material's loudness is a fact about the file, so it belongs in the file's
+ * record next to its length (improvement plan 03, I-37). Materials registered
+ * before that existed have no level, and re-importing them is not an option — an
+ * external file cannot be re-rendered at all, and a user's own library is exactly
+ * the case that needs it most.
+ *
+ * Costs one read of each unmeasured file. A file that has gone missing is left as
+ * `null` rather than failing: the project still describes an arrangement, and the
+ * caller is usually the read path whose job is to say what is wrong.
+ */
+export async function ensureMaterialLevels(workspaceRoot, projectId, index) {
+  const rows = index ?? (await readMaterialIndex(workspaceRoot, projectId))
+  const missing = (rows.materials ?? []).filter((material) => material.rmsDb === null || material.rmsDb === undefined || material.peakDb === null || material.peakDb === undefined)
+  if (missing.length === 0) return rows
+  const dir = projectDirOf(workspaceRoot, projectId)
+  let changed = false
+  for (const material of missing) {
+    let channels
+    let durationSec
+    try {
+      const wav = parseWav(await readFile(resolveInside(dir, material.file)))
+      channels = conformChannels(wav.channels, 2)
+      durationSec = channels[0].length / wav.sampleRate
+    } catch {
+      continue
+    }
+    const analysis = analyzeChannels(channels, durationSec)
+    material.peakDb = analysis.peakDb
+    material.rmsDb = analysis.rmsDb
+    changed = true
+  }
+  if (changed) await writeMaterialIndex(workspaceRoot, projectId, rows)
+  return rows
+}
+
+/** Absolute path of a registered material file, with an existence check. */export async function materialPath(workspaceRoot, projectId, materialId) {
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const entry = findMaterial(index, materialId)
+  if (!entry) throw new MaterialError(`material "${materialId}" is not in project "${projectId}"`)
+  const path = resolveInside(projectDirOf(workspaceRoot, projectId), entry.file)
+  await stat(path)
+  return path
+}
+
+export { materialsDir, SOURCES_DIR }

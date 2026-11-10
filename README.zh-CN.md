@@ -93,6 +93,8 @@ dsh plugin --profile desktop add "<克隆目录的绝对路径>"
 
 路径要写绝对路径（Windows 上形如 `D:/any-audio`），添加后同样要重启一次 DSH。`npm run font` 会把两套建议音源（约 72 MB）下载进共享音源库，适合想在打开设置页之前就把音源准备好的情况。
 
+浏览器端代码是构建产物：改 `src/client/` 下的源码，跑 `npm run build` 重新生成 DSH 加载的那一个 bundle（`lib/client.js`）。从 npm 安装时这个文件已经打包好，不需要构建；只有从克隆安装才多这一步。
+
 克隆下来的仓库还带一个免 DSH 的离线渲染器，适合先单独把谱子调好：
 
 ```bash

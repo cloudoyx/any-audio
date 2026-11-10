@@ -15,9 +15,11 @@
 
 ## 三步工作流
 
-1. **确定时间轴**：视频总时长、分镜/情绪节点、旁白区间。优先读取项目已有文件（分镜表、字幕、timing.json、narration.json），不要凭空猜时间。
-2. **渲染音乐**：`anyaudio_music` 写一个 score（秒为单位，直接对视频时间轴），得到 WAV。
-3. **混音交付**：`anyaudio_mix` 把音乐、旁白、音效放到同一条时间轴，开启旁白 ducking，对齐视频总长，必要时直接 mux 出 MP4。
+1. **建工程**：`anyaudio_project` 的 `mode:"create"`，名字用内容本身（主题、曲名、集数），不要用 `untitled` 或时间戳。拿到 `projectId`。
+2. **生成素材**：`anyaudio_music` / `anyaudio_tts` / `anyaudio_sfx` 都要求传 `projectId`——它们会自动把产出登记进工程、建好轨道、放好片段。时间轴仍要先定好：优先读项目已有文件（分镜表、字幕、timing.json、narration.json），不要凭空猜时间。
+3. **渲染成品**：`anyaudio_project` 的 `mode:"render"` 出 WAV/MP3/MP4。工程本身留在 `.anyaudio/projects/` 下，用户随时可以打开剪辑台审听和调整。
+
+**不要用 `anyaudio_mix` 组装交付物。** 它产出的是一个窗口期过后就改不动的成品：某个音效想挪 0.5 秒、某句旁白想重配，都得整条重跑。它只在「一个成品文件就是全部目标」时才用。
 
 第一次使用若报"没有安装音源"，先调 `anyaudio_sources`（action `install`）安装 GeneralUser GS，再渲染。
 
@@ -67,11 +69,14 @@
 
 ## 旁白（anyaudio_tts）
 
-- 视频需要配音、但项目里没有现成录音时，**必须用 `anyaudio_tts`**：单条 `{text}`，或多条 `{items:[{text, voice}]}`。输出 48kHz 单声道 WAV，可直接放进 `anyaudio_mix` 的 `role: "narration"` 轨。
+- 视频需要配音、但项目里没有现成录音时，**必须用 `anyaudio_tts`**：单条 `{text}`，或多条 `{items:[{text, voice}]}`。它要求 `projectId`，产出直接登记进工程并落轨——和音乐、音效走同一条路，不要绕去 `anyaudio_mix`。
 - 不要自己调 `edge-tts`、`ttsmaker` 或任何 Python/node 的 TTS 库：那样会绕过用户在 Settings → AnyAudio 里选的引擎和音色（例如 MiMo），用户改了默认引擎也不会生效。
-- 不传 `provider` 时用用户配置的默认引擎（Edge；用户切到 MiMo 就用 MiMo）。默认音色 `zh-CN-YunjianNeural`；Edge 可选 `zh-CN-XiaoxiaoNeural`、`zh-CN-YunxiNeural`、`zh-CN-XiaoyiNeural`、`en-US-AriaNeural` 等。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
-- Edge TTS 是网络服务（非官方接口），失败先查网络/代理再重试，必要时给 `proxy`；需要 ffmpeg 把 MP3 转成 WAV。连续试听过多会触发限流（429），等一分钟或换 MiMo。
-- 长旁白按分句拆成多条，每条单独放置，便于和分镜时间轴精确对齐。已有旁白音频时不要重复生成。
+- **两个引擎各有自己的音色，名字不能混用**（传了不属于该引擎的名字，服务端会报错或干脆不理你）：
+  - `edge`：`zh-CN-XiaoxiaoNeural`、`zh-CN-YunxiNeural`、`zh-CN-YunjianNeural`、`zh-CN-XiaoyiNeural`、`zh-CN-YunyangNeural`、`zh-CN-liaoning-XiaobeiNeural`、`zh-CN-shaanxi-XiaoniNeural`、`en-US-AriaNeural`、`en-US-JennyNeural`、`en-US-GuyNeural`、`ja-JP-NanamiNeural`。**网络服务、不需要 key**，中文旁白常用的默认音色是 `zh-CN-YunjianNeural`。
+  - `mimo`：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。`mimo_default` 由服务端集群决定，不同集群可能不同。**需要在 Settings → AnyAudio 里配好 MiMo API Key**；没配 key 就不要选它。
+- 不传 `provider` 就用用户配置的默认引擎（两个都可能），不传 `voice` 就用该引擎的默认音色——两者都不是固定值。**默认就是用户的设置：只有用户在这一轮明确要求某个引擎或音色时才传，其它情况一律不传。**「我觉得这个音色更好听」不是覆盖的理由——那会把用户自己在设置里选的引擎悄悄换掉（真实事故：用户设了 MiMo，Agent 为了"音色可控"传了 edge，用户听到的是完全不同的声音）。`anyaudio_project` 的 create 回包会写明当前默认引擎与音色，照着它判断。`voice`/`rate`/`pitch`/`provider` 写在顶层会应用到这一批的每一句，单个 item 写了就以 item 为准。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
+- Edge TTS 是网络服务（非官方接口），失败先查网络/代理再重试，必要时给 `proxy`；需要 ffmpeg 把 MP3 转成 WAV。连续试听过多会触发限流（429）：等一分钟重试，或传 `provider:"mimo"` 换引擎（前提是用户配了 key）。**批量中途失败时这一批已经落下的片段会被回滚**，工程保持原样，改好再整批重来即可——不要因为一次失败就另建工程。
+- 长旁白按分句拆成多条**是为了对齐时间轴，不是为了分轨**：它们仍然落在同一条旁白轨上，只是各自有不同的 `startSec`。已有旁白音频时不要重复生成。
 
 ## 音符怎么发音（ADSR）
 
@@ -87,7 +92,8 @@
 - **音区分离**：低频（bass/cello）< 200Hz，中频铺底 200–800Hz，旋律 500Hz–2kHz，高频装饰（bell/glockenspiel）> 2kHz。避免所有乐器挤在同一个音区。
 - **节奏层**：脉冲式低音、轻打击（`shaker`/`taiko`）、拨弦分解，用于动作段落；安静段落撤掉节奏层。
 - **动态**：渐强用增加声部/提高力度/加入高八度实现；渐弱反向操作；不要只靠整体音量。
-- **分轨平衡**：每条轨的 `gainDb` 是它在音乐总线里的真实比例，母带归一化不会重新平衡各轨。旋律可以比铺底高 6–10dB，但别把伴奏压到 15dB 以下（除非刻意留白）。写完用 `anyaudio_music` 的 `analyze: true` 或 `stems: true` 看每轨 RMS：任何一轨比最响轨低 12dB 以上，它基本就听不见了。分轨 WAV 现在保留母带相对电平，不再逐轨归一化。
+- **分轨平衡**：每条轨的 `gainDb` 决定这条分轨**生成出来**时多响（母带归一化不会重新平衡各轨），它是既成事实；`anyaudio_music` 每次调用都会顺便把每轨实测一遍，结果直接写在返回值和素材档案里，**不用再传 `analyze` 或 `stems` 去另测**。看完电平之后要调平衡，改**片段增益**（`anyaudio_project` 的 `target:"clip"`, `field:"gainDb"`），不要重新生成整首曲子——重新生成会换掉素材，代价是全部轨道重渲。旋律可以比铺底高 6–10dB，别把伴奏压到 15dB 以下（除非刻意留白）。
+- **注意测量的代价**：逐轨测量等于每轨各合成一遍。实测 12 轨 64 秒的谱子，混音渲染 2.7 秒、逐轨十二遍 13.4 秒，一次调用总共约 16 秒（不测的话约 3 秒）。所以**别为了看一眼电平再调一次**，电平已经在返回值里了。
 - **进出场**：新乐器在乐句边界进入；转场处留 0.2–0.5s 空隙或用一个 whoosh。
 - **高潮**：叠加八度、加打击、提高力度，但峰值要给旁白留空间（混音阶段会 duck）。
 - **休止**：该停就停。关键时刻的静音比连续铺满更有力量。
@@ -99,7 +105,15 @@
 - 结尾留尾音自然收，不要突然截断（用 `tailSec` 或淡出）。
 - 有旁白的段落音乐让位：旋律稀疏、音区避开人声中频（300Hz–3kHz），把厚度放在低音与高频。
 
-## 混音（anyaudio_mix）
+## 混音（在工程里做，不是用 anyaudio_mix）
+
+平衡是在工程里调出来的：轨道音量、片段增益、淡入淡出都是工程数据，改完立刻能听。
+
+- 音乐通常比旁白低 6–10dB，音效低 4–8dB，旁白 0dB。
+- 看 `anyaudio_music` 返回的每个 score 轨道的 `rmsDb`：某条轨道比最响的低 12dB 以上会收到警告——**改那条轨上片段的增益**（一次 `update` 带多条 change 就能整轨一起动），不要去拉总线，也不要为了调平衡重新生成。
+- 长片结尾留 2–3 秒淡出，用 `anyaudio_project mode:"update"` 改片段的 `fadeOutSec`。
+
+**`anyaudio_mix` 的场合**：只有一个成品文件、之后不会有人再调（例如单独交一段音床）。它能做的 ducking 与 mux，工程侧目前只有 mux（`mode:"render"` 出 MP4）；需要旁白自动压低音乐的成品，暂时只能用 `anyaudio_mix`。
 
 ```json
 {
@@ -122,7 +136,7 @@
 - 音乐通常 -6 到 -10dB，音效 -4 到 -8dB，旁白 0dB；峰值留给 master（默认 -1.5dBFS）。返回的 `tracks[].rmsDb` 是每轨实际电平：旁白与音乐的 RMS 差通常留 6–12dB；如果音乐太轻，先看是不是峰值归一（稀疏音乐峰值高、RMS 低），可以调高音乐增益或重渲染时传 `peakDb: null`。
 - 淡入淡出用秒数，长片结尾至少 2–3s。
 - 检查 `anyaudio_mix` 返回的 `ducking.measuredDropDb`（实际压低了多少）和 `peakDb`。
-- 输出位置：相对路径一律按**用户当前项目目录**解析，默认写入 `<项目>/.anyaudio/out/`。想放到别的目录就传 `output`（相对项目或绝对路径）；不要假设插件会把文件写进 DSH 安装目录。
+- 输出位置：`output` 只是额外的一份副本。真正被工程使用的那份永远在工程目录下，工具会把两个路径都报出来；不要假设插件会把文件写进 DSH 安装目录。
 
 ## 音效
 
@@ -156,6 +170,26 @@ MuseScore General 另有一组更响的版本（`sea-shore`、`bird-tweet`、`te
 - 音效不要铺满；关键点之外保持干净。
 - 环境底噪可以用低音量 `wind`/`rain` 或 `preset:"wind"` 轨道（role `ambience`），它同样会被 ducking 压低。
 
+### 一种模式：每个音效都是一个片段
+
+`anyaudio_sfx` 只产出素材：N 个 items 产出 **N 个各自从 t=0 开始的短文件**，外加一份 `manifest.json`（文件、类别、时长、峰值）。每个文件同时落成工程里的一个片段，位置由 items 的 `startSec` 决定；不写时间就依次排在同类别轨道的末尾。
+
+它没有"把整段音效烤成一条"的模式了：那种产物里每个声音都没法单独挪动、单独调增益，正是剪辑台要避免的形状。只要一个不可拆的音床，用 `anyaudio_mix`。
+
+```json
+{ "items": [
+    { "preset": "rain", "startSec": 0, "durationSec": 30, "gainDb": -14 },
+    { "type": "impact", "durationSec": 0.8, "params": { "weight": 0.8 }, "startSec": 12.4 }
+  ],
+  "output": ".anyaudio/out/sfx" }
+```
+
+要点：
+
+- 每段必须有自己的 `durationSec`（程序化音效没有自然长度）；preset 的一次性音效不写就放完自然尾巴。
+- 清单里的「类别」是 spec §5.2 的分轨依据：环境音 / 动效 / 其他。同类别时间重叠 → 另起一条轨；不重叠 → 合并到同一条。
+- 每个文件的峰值单独报告，工具不会拿 `peakDb` 把各文件拉平——那样会改掉音效之间的相对关系。平衡在工程里用片段增益做。
+
 ## 验收清单
 
 渲染/混音完成后自检，并把结果写进最终回复：
@@ -175,12 +209,14 @@ MuseScore General 另有一组更响的版本（`sea-shore`、`bird-tweet`、`te
 - 时长没对齐视频 → 结尾音画不同步。
 - 用 numpy 手搓合成器代替真实音源 → 电子感。
 - 自己写 Python/Node 调 edge-tts 生成旁白 → 绕过用户的 TTS 引擎与音色设置，MiMo 永远用不上。
-- 把相对 `output` 当成 DSH 目录里的路径 → 文件跑到插件安装目录，用户找不到；相对路径按项目目录解析。
-- 只调 `anyaudio_music` 不看每轨电平 → 旋律把伴奏压没（用 `analyze: true` 或 `stems: true` 检查）。
+- 只调 `anyaudio_music` 不看每轨电平 → 旋律把伴奏压没。电平每次调用都会返回，不用另测；看到不平衡就改片段增益。
+- **为了调音量把整首曲子重新生成** → 最贵也最常见的一个：音符一个没动、只改了一个数字，却把全部轨道重渲了一遍。改片段增益不重渲，改乐器音色才需要重新生成。
 - 为了"专业"堆十几个轨道 → 浑浊，先做减法。
+- 直接给 `anyaudio_mix` 一串文件路径当交付 → 用户拿到的是改不动的成品；先建工程再生成，mix 只留给"一个成片就够"的场合。
 
 ## 与视频整合
 
-- 插件不重编码视频：`anyaudio_mix` 的 mux 用 `-c:v copy` 复制原视频流，只重编码音频为 AAC 192k。
+- 把画面交给工程：`anyaudio_project mode:"add_material"` 导入 MP4，它会抽出一条 `video-audio` 素材并自动落轨，工程从此有画面了。
+- 插件不重编码视频：`anyaudio_project mode:"render"`（及 `anyaudio_mix`）的 mux 都用 `-c:v copy` 复制原视频流，只重编码音频为 AAC 192k。
 - 没有 ffmpeg 时仍会输出 WAV，并提示手动 mux；也可以把 WAV 交给项目原有渲染流程（例如 imageio_ffmpeg）合并。
 - 不要覆盖原视频；输出到新文件（例如 `<原名>-anyaudio.mp4`）。

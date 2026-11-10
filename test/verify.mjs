@@ -16,6 +16,17 @@ const repoRoot = resolve('.')
 const anyaudioDir = join(repoRoot, '.anyaudio')
 const hadAnyAudioDir = existsSync(anyaudioDir)
 const tmpDir = join(anyaudioDir, 'test-tmp')
+// Generating tools stage their output in `.anyaudio/out` and put material into
+// `.anyaudio/projects` (improvement 01 / I-10), both outside `test-tmp`. Record
+// what was already there so the run can put the tree back exactly as it found
+// it instead of leaving dozens of scratch projects behind.
+const outDirPath = join(anyaudioDir, 'out')
+const projectsDirPath = join(anyaudioDir, 'projects')
+async function listing(path) {
+  return new Set(await readdir(path).catch(() => []))
+}
+const preexistingOut = await listing(outDirPath)
+const preexistingProjects = await listing(projectsDirPath)
 // The font bookkeeping lives in a machine-wide state file, and the config file
 // sits next to it by default: point both at the scratch folder before anything
 // reads them, or a test that deletes a font would rewrite the user's own state.
@@ -38,6 +49,18 @@ registerAllTools({
   logger: { info: () => {} },
   get: () => undefined,
 })
+const { createProject, readProject } = await import('../src/project/store.js')
+
+// Improvement 01 / I-10: the three generating tools refuse to run without a
+// project, because audio a person cannot adjust is the failure this suite is
+// guarding against. Each call gets a fresh project, so the 20-track limit never
+// leaks between tests.
+let attachProjectSeq = 0
+async function freshAttach() {
+  attachProjectSeq++
+  const project = await createProject(repoRoot, { name: `verify-attach-${attachProjectSeq}` })
+  return project.id
+}
 
 let passed = 0
 let failed = 0
@@ -206,6 +229,51 @@ await test('compileScore rejects impossible pitches with a clear message', async
   assert(message.includes('pitch'), `error should mention pitch, got "${message}"`)
 })
 
+await test('automation written in dB is clamped and says so', async () => {
+  // CC values are 0..127. Writing dB here is easy to do (gainDb on the same
+  // track takes dB) and the clamp turns every negative into 0, which is
+  // silence: one real project shipped a warm pad that was zero for 64 seconds.
+  // It has to be reported, not applied quietly.
+  const compiled = compileScore({
+    tracks: [{ name: 'pad', instrument: 'choir', gainDb: -20, notes: [[0, 2, 60, 80]] }],
+    automation: [{ track: 'pad', controller: 'volume', points: [[0, -26], [4, -20]] }],
+  })
+  const ccs = compiled.tracks[0].events.filter((event) => event.type === 'cc' && event.controller === 7)
+  assert(ccs.some((event) => event.value === 0), 'a negative point still clamps to 0')
+  const warning = compiled.warnings.find((entry) => entry.includes('automation for "pad"'))
+  assert(warning, `clamping must warn, got ${JSON.stringify(compiled.warnings)}`)
+  assert(warning.includes('0..127'), 'the warning must name the real range')
+  assert(warning.includes('not dB'), 'the warning must say the values are not dB')
+  assert(warning.includes('-26'), 'the warning must quote the offending value')
+})
+
+await test('automation inside 0..127 stays silent about clamping', async () => {
+  const compiled = compileScore({
+    tracks: [{ name: 'pad', instrument: 'choir', notes: [[0, 2, 60, 80]] }],
+    automation: [{ track: 'pad', controller: 'volume', points: [[0, 100], [4, 40]] }],
+  })
+  assert(!compiled.warnings.some((entry) => entry.includes('automation')), `a valid curve must not warn, got ${JSON.stringify(compiled.warnings)}`)
+})
+
+await test('automation naming an unknown track lists what the score has', async () => {
+  let message = ''
+  try {
+    compileScore({
+      tracks: [
+        { name: '卡林巴旋律', instrument: 'kalimba', notes: [[0, 1, 60, 80]] },
+        { name: '贝斯', instrument: 'bass', notes: [[0, 1, 40, 80]] },
+      ],
+      // The real mistake: the track's index, not its name.
+      automation: [{ track: 2, controller: 'volume', points: [[0, 90]] }],
+    })
+  } catch (error) {
+    message = error.message
+  }
+  assert(message.includes('unknown track "2"'), `should name the bad value, got "${message}"`)
+  assert(message.includes('卡林巴旋律') && message.includes('贝斯'), `should list the available tracks, got "${message}"`)
+  assert(message.includes('not its index'), 'should name the index-versus-name confusion')
+})
+
 await test('drum tracks accept drum-kit names as pitches', async () => {
   const compiled = compileScore({
     tracks: [{ name: 'perc', instrument: 'drums', drums: true, notes: [[0, 0.2, 'kick'], [0.5, 0.2, 'taiko'], [1, 0.2, 'gong']] }],
@@ -222,6 +290,7 @@ await test('per-track gainDb is the real relative level of each track', async ()
   const levels = async (gains) => {
     const result = await tools.get('anyaudio_music').execute(
       {
+        projectId: await freshAttach(),
         score: {
           tracks: gains.map((gainDb, index) => ({
             name: `t${index}`,
@@ -337,7 +406,7 @@ await test('sources action "use" really persists the default bank', async () => 
     const after = (await readConfig()).config.music.font
     assert(after && after !== before, `config.music.font must change, was "${before}", now "${after}"`)
     const rendered = await tools.get('anyaudio_music').execute(
-      { score: { tracks: [{ name: 'a', instrument: 'strings', notes: [[0, 0.6, 'C4', 90]] }] }, durationSec: 1, output: '.anyaudio/test-tmp/use-default.wav' },
+      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument: 'strings', notes: [[0, 0.6, 'C4', 90]] }] }, durationSec: 1, output: '.anyaudio/test-tmp/use-default.wav' },
       exec,
     )
     assert(rendered.font && rendered.font.toLowerCase().endsWith(general.name.toLowerCase()), `the render must use the new default, got ${rendered.font}`)
@@ -350,6 +419,7 @@ await test('sources action "use" really persists the default bank', async () => 
 await test('render produces audio with the requested exact duration', async () => {
   const result = await tools.get('anyaudio_music').execute(
     {
+      projectId: await freshAttach(),
       score: { tracks: [{ name: 'lead', instrument: 'koto', notes: [[0, 1, 'D4', 80], [1, 1, 'A4', 90]] }] },
       durationSec: 2,
       output: '.anyaudio/test-tmp/render-exact.wav',
@@ -366,7 +436,7 @@ await test('render produces audio with the requested exact duration', async () =
 await test('different instruments produce audibly different spectra', async () => {
   const render = async (instrument, file) => {
     const result = await tools.get('anyaudio_music').execute(
-      { score: { tracks: [{ name: 'a', instrument, notes: [[0, 1.2, 'D4', 90]] }] }, durationSec: 1.5, output: file },
+      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument, notes: [[0, 1.2, 'D4', 90]] }] }, durationSec: 1.5, output: file },
       exec,
     )
     return parseWav(await readFile(result.absolutePath))
@@ -388,7 +458,7 @@ await test('different instruments produce audibly different spectra', async () =
 await test('velocity controls loudness (dynamic response)', async () => {
   const render = async (velocity, file) => {
     const result = await tools.get('anyaudio_music').execute(
-      { score: { tracks: [{ name: 'a', instrument: 'piano', notes: [[0, 1, 'C4', velocity]] }] }, durationSec: 1.2, peakDb: null, output: file },
+      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument: 'piano', notes: [[0, 1, 'C4', velocity]] }] }, durationSec: 1.2, peakDb: null, output: file },
       exec,
     )
     return parseWav(await readFile(result.absolutePath))
@@ -399,18 +469,19 @@ await test('velocity controls loudness (dynamic response)', async () => {
   assert(ratio > 8, `velocity 120 should be much louder than 30, measured ${ratio.toFixed(1)} dB`)
 })
 
-await test('sfx renderer is deterministic and honours the timeline', async () => {
+await test('sfx renderer is deterministic', async () => {
   const a = synthesizeSfx({ type: 'wind', durationSec: 1.5, sampleRate: 48000, params: { intensity: 0.6 }, seed: 42 })
   const b = synthesizeSfx({ type: 'wind', durationSec: 1.5, sampleRate: 48000, params: { intensity: 0.6 }, seed: 42 })
   assert(a[0].length === b[0].length && a[0].length === 72000, 'expected 1.5s at 48kHz')
   let maxDiff = 0
   for (let i = 0; i < a[0].length; i++) maxDiff = Math.max(maxDiff, Math.abs(a[0][i] - b[0][i]))
   assert(maxDiff === 0, `same seed must give identical audio, max difference ${maxDiff}`)
-  const result = await tools.get('anyaudio_sfx').execute(
-    { items: [{ type: 'impact', startSec: 0.5, durationSec: 0.5 }], durationSec: 2, output: '.anyaudio/test-tmp/sfx.wav' },
-    exec,
-  )
-  near(result.durationSec, 2, 0.001, 'sfx timeline length')
+  // A different seed has to give different audio, or "deterministic" would also
+  // be satisfied by a generator that ignores its seed entirely.
+  const c = synthesizeSfx({ type: 'wind', durationSec: 1.5, sampleRate: 48000, params: { intensity: 0.6 }, seed: 43 })
+  let different = 0
+  for (let i = 0; i < a[0].length; i += 97) different = Math.max(different, Math.abs(a[0][i] - c[0][i]))
+  assert(different > 1e-6, 'a different seed must give different audio')
 })
 
 await test('ducking lowers the music bed while narration is present', async () => {
@@ -521,7 +592,7 @@ await test('muxing keeps the video length when the audio is shorter or longer', 
 })
 
 await test('tool definitions are complete and discoverable', async () => {
-  assert(tools.size === 5, `expected 5 tools, got ${tools.size}: ${[...tools.keys()].join(', ')}`)
+  assert(tools.size === 6, `expected 6 tools, got ${tools.size}: ${[...tools.keys()].join(', ')}`)
   for (const definition of tools.values()) {
     assert(typeof definition.name === 'string' && definition.name.startsWith('anyaudio_'), `bad tool name ${definition.name}`)
     assert(definition.description.length > 80, `${definition.name} needs a descriptive description`)
@@ -557,14 +628,14 @@ await test('every tool return value matches its declared output schema', async (
 
   const scorePath = join(tmpDir, 'schema-score.json')
   await writeFile(scorePath, JSON.stringify({ tracks: [{ name: 'lead', instrument: 'koto', notes: [[0, 0.4, 'D4', 80]] }] }))
-  const music = await tools.get('anyaudio_music').execute({ score: scorePath, output: '.anyaudio/test-tmp/schema-music.wav', tailSec: 0.2 }, exec)
+  const music = await tools.get('anyaudio_music').execute({ projectId: await freshAttach(), score: scorePath, output: '.anyaudio/test-tmp/schema-music.wav', tailSec: 0.2 }, exec)
   assertMatchesOutputSchema(tools.get('anyaudio_music'), music)
   assert(music.ok === true, 'a score given as a file path should render')
 
   const sfx = await tools.get('anyaudio_sfx').execute({ action: 'catalog' }, exec)
   assertMatchesOutputSchema(tools.get('anyaudio_sfx'), sfx)
   const sfxItems = await tools.get('anyaudio_sfx').execute(
-    { items: [{ type: 'impact', startSec: 0, durationSec: 0.4 }], durationSec: 0.5, output: '.anyaudio/test-tmp/schema-sfx.wav' },
+    { projectId: await freshAttach(), items: [{ type: 'impact', startSec: 0, durationSec: 0.4 }], durationSec: 0.5, output: '.anyaudio/test-tmp/schema-sfx.wav' },
     exec,
   )
   assertMatchesOutputSchema(tools.get('anyaudio_sfx'), sfxItems)
@@ -638,6 +709,7 @@ await test('score tracks carry an optional source and unknown sources fail clear
   try {
     await tools.get('anyaudio_music').execute(
       {
+        projectId: await freshAttach(),
         score: { tracks: [{ name: 'g', instrument: 'guitar', source: 'no-such-font', notes: [[0, 0.5, 'E3', 80]] }] },
         durationSec: 0.6,
         output: '.anyaudio/test-tmp/bad-source.wav',
@@ -653,6 +725,7 @@ await test('score tracks carry an optional source and unknown sources fail clear
 await test('per-track source and auto both render and report the plan', async () => {
   const result = await tools.get('anyaudio_music').execute(
     {
+      projectId: await freshAttach(),
       score: {
         tracks: [
           { name: 'explicit', instrument: 'koto', source: 'generaluser', notes: [[0, 1, 'D4', 80]] },
@@ -680,6 +753,7 @@ await test('per-track source and auto both render and report the plan', async ()
 await test('stems keep the authored balance instead of being re-normalised', async () => {
   const result = await tools.get('anyaudio_music').execute(
     {
+      projectId: await freshAttach(),
       score: {
         title: 'balance',
         tracks: [
@@ -698,10 +772,98 @@ await test('stems keep the authored balance instead of being re-normalised', asy
   assert(drop > 8, `the lead should sit clearly above the pad, measured ${drop.toFixed(1)} dB`)
   assert(result.stemsNormalized === false, 'stems must be reported as not normalised')
   assert(result.warnings.some((warning) => warning.includes('below the loudest')), 'a buried part must raise a balance warning')
-  const lead = parseWav(await readFile(join(repoRoot, '.anyaudio/test-tmp/balance-lead.wav')))
-  const pad = parseWav(await readFile(join(repoRoot, '.anyaudio/test-tmp/balance-pad.wav')))
+  // Since I-39 the stem file is scratch: it is copied into materials/ and then
+  // deleted, so `stems[]` names the project's own copy — the file the clip bay
+  // plays. `stems` and `attached` are built in the same iteration, so the two
+  // arrays line up and each path can be matched to the track it came from.
+  const stemOf = (name) => result.stems[result.attached.findIndex((entry) => entry.trackName === name)]
+  const lead = parseWav(await readFile(join(repoRoot, stemOf('lead'))))
+  const pad = parseWav(await readFile(join(repoRoot, stemOf('pad'))))
   const fileRatio = toDb(rmsOf(lead.channels) / Math.max(1e-9, rmsOf(pad.channels)))
   assert(fileRatio > 8, `stem files must preserve the authored difference, measured ${fileRatio.toFixed(1)} dB`)
+  // Each stem is its own clip on its own track, so a person can rebalance them.
+  assert(result.attached.length === 2, `both stems must land in the project, got ${result.attached.length}`)
+  assert(result.attached.every((entry) => entry.trackName && entry.clipId), 'each stem needs its own track and clip')
+  // Improvement plan 03, I-39: the stems are material, not deliverables. out/
+  // held 539 MB of byte-identical copies of what materials/ already had.
+  const outDir = join(repoRoot, '.anyaudio', 'out')
+  const outNames = existsSync(outDir) ? await readdir(outDir) : []
+  assert(!outNames.some((name) => name.startsWith('stem-')), `no stem may be left in out/, found ${outNames.filter((name) => name.startsWith('stem-')).join(', ')}`)
+})
+
+await test('stems with Chinese track names get distinct files', async () => {
+  // `\w` is ASCII-only, so every Chinese name collapsed to the same `_`: a
+  // five-part score wrote all five stems to one path (only the last survived)
+  // and the reply listed that same path five times. Measured on a real project:
+  // out/ held a single `score-...-_.wav` for five tracks.
+  const result = await tools.get('anyaudio_music').execute(
+    {
+      projectId: await freshAttach(),
+      score: {
+        title: 'chinese-stems',
+        tracks: [
+          { name: '卡林巴旋律', instrument: 'kalimba', gainDb: -4, notes: [[0, 0.6, 76, 90]] },
+          { name: '贝斯', instrument: 'finger-bass', gainDb: -6, notes: [[0, 0.6, 40, 90]] },
+          { name: '暖垫和声', instrument: 'warm-pad', gainDb: -10, notes: [[0, 0.8, [60, 64], 70]] },
+        ],
+      },
+      durationSec: 1,
+      stems: true,
+      output: '.anyaudio/test-tmp/chinese-stems.wav',
+    },
+    exec,
+  )
+  assert(result.stems.length === 3, `three stems, got ${result.stems.length}`)
+  const unique = new Set(result.stems)
+  assert(unique.size === 3, `each stem needs its own path, got ${JSON.stringify(result.stems)}`)
+  // I-39 moved the reported path to the project's own copy, whose name is the
+  // material id; the track name survives on the material record instead, so this
+  // checks the three stems really are three different files with their own names.
+  const trackNames = result.attached.map((entry) => entry.trackName).sort()
+  assert(unique.size === 3 && trackNames.length === 3, `three distinct stems on three tracks, saw ${JSON.stringify(trackNames)}`)
+  assert(new Set(trackNames).size === 3, `each stem needs its own track, got ${JSON.stringify(trackNames)}`)
+  // The files have to be readable at those paths, and hold different audio.
+  const levels = await Promise.all(result.stems.map(async (entry) => rmsOf(parseWav(await readFile(join(repoRoot, entry))).channels)))
+  assert(levels.every((level) => level > 0), `no stem may be empty, got ${JSON.stringify(levels)}`)
+  // And they are not one file written three times: the three parts were authored
+  // 4, 6 and 10 dB down from each other, so identical bytes would be a bug.
+  assert(new Set(levels.map((level) => level.toFixed(6))).size === 3, `the three stems must differ, got ${JSON.stringify(levels)}`)
+})
+
+await test('a stem that renders to silence is reported as silent, not as quiet', async () => {
+  // A pad whose automation was written in dB (CC7 is 0..127) clamped to 0 and
+  // produced a file that is all zeros but for the first few samples, which slip
+  // through before the CC curve lands. The only warning said it sat "91.3 dB
+  // below the loudest track", which points at gainDb — a knob that cannot
+  // restore a track something else silenced. Name the real condition.
+  const result = await tools.get('anyaudio_music').execute(
+    {
+      projectId: await freshAttach(),
+      score: {
+        title: 'silent-pad',
+        tracks: [
+          { name: 'lead', instrument: 'koto', gainDb: 0, notes: [[0, 1.6, 'D5', 110]] },
+          { name: 'pad', instrument: 'choir', gainDb: -4, notes: [[0, 1.6, 60, 80]] },
+        ],
+        automation: [{ track: 'pad', controller: 'volume', points: [[0, -26], [1.6, -20]] }],
+      },
+      durationSec: 1.8,
+      analyze: true,
+      output: '.anyaudio/test-tmp/silent-pad.wav',
+    },
+    exec,
+  )
+  const silenced = result.warnings.find((warning) => warning.includes('automation points') && warning.includes('pad'))
+  assert(silenced, `a silenced track must be pointed at its automation, got ${JSON.stringify(result.warnings)}`)
+  assert(
+    !result.warnings.some((warning) => warning.includes('below the loudest track') && warning.includes('per-track gainDb is the balance knob') && warning.includes('pad')),
+    'the generic "raise its gainDb" advice must not fire for a track something else silenced',
+  )
+  // And the clamp itself is reported by the score compiler, in the same reply.
+  assert(
+    result.warnings.some((warning) => warning.includes('automation for "pad"') && warning.includes('not dB')),
+    'the dB-versus-CC mistake must also be named directly',
+  )
 })
 
 await test('workspace comes from the working-directory service, not process.cwd()', async () => {
@@ -743,6 +905,94 @@ await test('the runtime skill declares a string source for the dsh-skill contrac
   assert(typeof payload.whenToUse === 'string' && payload.whenToUse.length > 0, 'skill should advertise whenToUse')
 })
 
+await test('the system prompt keeps the rules that decide whether a project survives', async () => {
+  // The skill is only loaded when the agent thinks to load it. In the session
+  // that prompted this, `skill` was called zero times in a whole build — so
+  // everything that lived only in `anyaudio-clipbay.md` was invisible, and one
+  // narrator ended up spread across eleven tracks. The rules that change whether
+  // the deliverable is still editable therefore have to be in the prompt itself,
+  // which is injected every turn.
+  const { apply } = await import('../src/index.js')
+  let text = null
+  const ctx = {
+    get: (id) => (id === 'systemPrompt' ? { section: (value) => { text = value.text } } : undefined),
+    tools: { register: () => {} },
+    logger: { info: () => {} },
+  }
+  apply(ctx, { routes: false })
+  for (let attempt = 0; attempt < 40 && !text; attempt++) await new Promise((resolve) => setTimeout(resolve, 25))
+  assert(text, 'the prompt section was not registered')
+
+  // One assertion per rule, so deleting a rule fails here rather than showing up
+  // as a bad project three turns later.
+  assert(/never one track per sentence/i.test(text), 'the narration track rule has to be stated')
+  assert(/every line of one voice/i.test(text), 'and it has to say what to do instead')
+  assert(/never one track for everything/i.test(text), 'the opposite mistake must be closed too')
+  assert(/mode:"read"/.test(text) && /only the range/i.test(text), 'reading first and staying inside the range')
+  assert(/there is no undo/i.test(text), 'and why a broad edit is destructive')
+  assert(/never overwrite or delete a material/i.test(text), 'frozen snapshots')
+  assert(/no direct ffmpeg/i.test(text), 'the finished file comes from render only')
+  assert(/do not re-normalise/i.test(text), 'normalisation happens once')
+  assert(!/one track per narration line/i.test(text), 'the old wording that caused this must not come back')
+})
+
+await test('the prompt says rebalancing is a clip field, not a second render', async () => {
+  // Improvement plan 03, I-42. The "render four times" loop was not the Agent
+  // being careless: the guidance told it that per-track gainDb was the balance
+  // knob, and the only way to change that was to render the score again.
+  const { apply } = await import('../src/index.js')
+  let text = null
+  const ctx = {
+    get: (id) => (id === 'systemPrompt' ? { section: (value) => { text = value.text } } : undefined),
+    tools: { register: () => {} },
+    logger: { info: () => {} },
+  }
+  apply(ctx, { routes: false })
+  for (let attempt = 0; attempt < 40 && !text; attempt++) await new Promise((resolve) => setTimeout(resolve, 25))
+  assert(text, 'the prompt section was not registered')
+  assert(/change the balance with clip gain/i.test(text), 'the rule has to be stated, not implied')
+  assert(/not by rendering the material again/i.test(text), 'and it has to name the wrong path it replaces')
+  assert(/re-generating a whole score/i.test(text), 'including the exact waste it is meant to stop')
+})
+
+await test('the music tool no longer sells the old balance story', async () => {
+  // The parameter text is what an Agent reads on *every* call, so it outranks the
+  // skill. I-18 taught this: a rule that lives only in a skill is invisible to a
+  // session that never loads it.
+  const music = await readFile(join(repoRoot, 'src', 'tools', 'music.js'), 'utf8')
+  assert(!/its real share of the music bus/.test(music), 'the "gainDb is the mix knob" wording must be gone')
+  assert(!/Render with analyze:true \(or stems:true\) to see per-track RMS/.test(music), 'and the instruction to call again for RMS')
+  assert(!/Use this to check the balance/.test(music), 'the analyze parameter must not promise to turn measurement on')
+  assert(/its level is its stem is rendered at|the level its stem is rendered at/i.test(music), 'the new wording says gainDb is a fact about the file')
+  assert(/measured during this render|measured as part of rendering/i.test(music), 'and that levels come back without asking')
+  assert(/trackName.? is ignored/i.test(music), 'stems:true has to say that trackName is ignored')
+})
+
+await test('no document still calls a track a fader', async () => {
+  // A track is a grouping now (I-41). "一条轨就是一个推子" was true for one round
+  // and would send the next Agent looking for a control that no longer exists.
+  for (const rel of ['src/skills/anyaudio-clipbay.md', 'src/skills/anyaudio-scoring.md']) {
+    const text = await readFile(join(repoRoot, rel), 'utf8')
+    assert(!/一条轨就是一个推子/.test(text), `${rel} still calls a track a fader`)
+    assert(!/用那条轨道的 `?gainDb`? 修/.test(text), `${rel} still sends the Agent to the score's gainDb`)
+  }
+  const scoring = await readFile(join(repoRoot, 'src', 'skills', 'anyaudio-scoring.md'), 'utf8')
+  assert(/改片段增益|改\*\*片段增益\*\*/.test(scoring), 'the skill has to name clip gain as the way to rebalance')
+  assert(/为了调音量把整首曲子重新生成/.test(scoring), 'and the anti-pattern has to be written down somewhere')
+})
+
+await test('creating a project points at the clip bay skill', async () => {
+  // B of the same fix: a file listed in the catalog does not tell an agent when
+  // to open it, but a sentence in the reply it is already reading does.
+  const result = await tools.get('anyaudio_project').execute({ mode: 'create', name: '提示用工程' }, { agent: { workspaceRoot: repoRoot } })
+  const rendered = tools.get('anyaudio_project').output.render({ mode: 'create' }, result)
+  const text = rendered.map((block) => block.text ?? '').join('\n')
+  assert(/anyaudio-clipbay/.test(text), 'the reply has to name the skill')
+  assert(/never/i.test(text) || /do not/i.test(text), 'and say what not to do')
+  assert(!/give each generated file its own track/i.test(text), 'the sentence that split one narrator across eleven tracks must not come back')
+  await rm(join(repoRoot, '.anyaudio', 'projects', result.projectId), { recursive: true, force: true })
+})
+
 await test('tts tool exposes edge and mimo providers', async () => {
   const definition = tools.get('anyaudio_tts')
   assert(definition, 'anyaudio_tts should be registered')
@@ -779,36 +1029,194 @@ await test('sfx catalog lists default-bank presets by scene', async () => {
   assert(weather.presets.some((entry) => entry.id === 'seashore'), 'seashore belongs to weather')
 })
 
-await test('sfx preset renders real audio and keeps timeline length', async () => {
-  const output = join(tmpDir, 'sfx-preset.wav')
+await test('sfx preset renders real audio, one file per effect', async () => {
+  const output = join(tmpDir, 'sfx-preset')
   const result = await tools.get('anyaudio_sfx').execute(
     {
+      projectId: await freshAttach(),
       items: [
         { preset: 'rain', startSec: 0.5, durationSec: 2.5, gainDb: -6 },
         { preset: 'gun-shot', startSec: 0, gainDb: -8 },
       ],
-      durationSec: 3,
       peakDb: null,
       output,
     },
     exec,
   )
-  const wav = parseWav(await readFile(output))
-  assert(Math.abs(wav.durationSec - 3) < 0.01, `expected 3s, got ${wav.durationSec}`)
-  assert(peakOf(wav.channels) > 0.001, 'preset render must not be silent')
-  assert(result.items.length === 2 && result.items.every((item) => item.preset), 'report should name both presets')
-  assert(result.items.some((item) => item.presetName.includes('雨')), 'report should use the Chinese name')
+  // Each effect is its own file now, so there is no shared bed length to check:
+  // the material length is what the clip plays, and it has to be real audio.
+  assert(result.materials.length === 2, `expected 2 materials, got ${result.materials.length}`)
+  for (const entry of result.materials) {
+    const wav = parseWav(await readFile(entry.absolutePath))
+    assert(peakOf(wav.channels) > 0.001, `${entry.file} must not be silent`)
+    assert(Math.abs(wav.durationSec - entry.durationSec) < 0.05, `${entry.file}: report says ${entry.durationSec}s, file is ${wav.durationSec}s`)
+  }
+  const rain = result.materials.find((entry) => entry.preset === 'rain')
+  assert(rain, 'the report should name the rain preset')
+  assert(rain.presetName.includes('雨'), 'report should use the Chinese name')
+  assert(Math.abs(rain.durationSec - 2.5) < 0.05, `rain should be cut at 2.5s, got ${rain.durationSec}`)
+  assert(result.materials.every((entry) => entry.attached?.clipId), 'both effects must land as clips')
 })
 
 await test('unknown sfx preset points at the catalog', async () => {
   let error = null
   try {
-    await tools.get('anyaudio_sfx').execute({ items: [{ preset: 'dragon-roar', startSec: 0 }], durationSec: 1 }, exec)
+    await tools.get('anyaudio_sfx').execute({ projectId: await freshAttach(), items: [{ preset: 'dragon-roar', startSec: 0 }], durationSec: 1 }, exec)
   } catch (caught) {
     error = caught
   }
   assert(error, 'unknown preset should fail')
   assert(/action:"catalog"/.test(error.message), 'error should point at the catalog')
+})
+
+await test('sfx materials mode writes one file per item, each from t=0', async () => {
+  const dir = join(tmpDir, 'sfx-materials')
+  const result = await tools.get('anyaudio_sfx').execute(
+    {
+      projectId: await freshAttach(),
+      mode: 'materials',
+      items: [
+        { type: 'impact', durationSec: 0.8, params: { weight: 0.8 } },
+        { preset: 'rain', durationSec: 1.5, gainDb: -6 },
+        { type: 'whoosh', durationSec: 0.6 },
+      ],
+      output: dir,
+      peakDb: null,
+    },
+    exec,
+  )
+  assert(result.mode === 'materials', 'the mode should be echoed')
+  assert(result.materials.length === 3, `expected 3 materials, got ${result.materials.length}`)
+  // Every material also becomes its own clip, so one effect can be moved without
+  // re-rendering the others (improvement 01 / I-10).
+  assert(result.materials.every((entry) => entry.attached?.clipId), 'every material must land as a clip')
+  const categories = result.materials.map((entry) => entry.attached.trackName)
+  assert(new Set(categories).size >= 2, `effects of different categories should not share a track, got ${categories.join(' | ')}`)
+  // One file per entry, and every file starts at t=0: that is the whole point of
+  // the materials split — placement belongs to the project, not the tool.
+  for (const entry of result.materials) {
+    const wav = parseWav(await readFile(entry.absolutePath))
+    assert(wav.channels[0][0] !== undefined, `${entry.file} must exist and decode`)
+    assert(peakOf(wav.channels) > 0.0005, `${entry.file} must not be silent`)
+    assert(Math.abs(wav.durationSec - entry.durationSec) < 0.05, `${entry.file}: report says ${entry.durationSec}s, file is ${wav.durationSec}s`)
+  }
+  assert(result.materials[0].category === '动效', `impact is 动效, got ${result.materials[0].category}`)
+  assert(result.materials[1].category === '环境音', `rain is 环境音, got ${result.materials[1].category}`)
+  assert(result.materials[2].category === '其他', `whoosh is 其他, got ${result.materials[2].category}`)
+  // The per-item length is honoured, not the preset's natural tail.
+  assert(Math.abs(result.materials[1].durationSec - 1.5) < 0.02, `rain should be cut at 1.5s, got ${result.materials[1].durationSec}`)
+  const manifestRaw = await readFile(join(dir, 'manifest.json'), 'utf8')
+  const manifest = JSON.parse(manifestRaw)
+  assert(manifest.materials.length === 3, 'the manifest must list every material')
+  assert(manifest.materials.every((entry) => typeof entry.category === 'string'), 'each manifest row carries a category')
+})
+
+await test('sfx materials mode refuses an item without a length', async () => {
+  let error = null
+  try {
+    await tools.get('anyaudio_sfx').execute({ projectId: await freshAttach(), mode: 'materials', items: [{ type: 'wind' }], output: join(tmpDir, 'sfx-materials-2') }, exec)
+  } catch (caught) {
+    error = caught
+  }
+  assert(error, 'an unbounded material should fail')
+  assert(/needs durationSec/.test(error.message), `message should name the missing length, got: ${error.message}`)
+})
+
+await test('sfx has a single mode and it places events as clips', async () => {
+  // Improvement plan 02, I-01. "timeline" mode used to bake every effect into one
+  // full-length clip, so nothing inside it could be moved or rebalanced — the
+  // exact shape a clip bay exists to prevent. It is gone, and the default with it.
+  const output = join(tmpDir, 'sfx-default')
+  const result = await tools.get('anyaudio_sfx').execute(
+    {
+      projectId: await freshAttach(),
+      items: [
+        { type: 'impact', startSec: 0.3, durationSec: 0.4 },
+        { type: 'whoosh', durationSec: 0.4 },
+      ],
+      output,
+      peakDb: null,
+    },
+    exec,
+  )
+  assert(result.mode === 'materials', `the only mode is materials, got ${result.mode}`)
+  assert(result.materials.length === 2, `one file per effect, got ${result.materials.length}`)
+  assert(result.materials.every((entry) => entry.attached?.clipId), 'each effect lands as its own clip')
+  assert(result.materials.every((entry) => entry.file), 'and its own file')
+  const placed = await readProject(repoRoot, result.projectId)
+  const clips = placed.tracks.flatMap((track) => track.items)
+  assert(clips.length === 2, `the project should hold two clips, it holds ${clips.length}`)
+  assert(clips.some((item) => Math.abs(item.startSec - 0.3) < 1e-6), `the explicit startSec must be honoured, got ${clips.map((item) => item.startSec).join(', ')}`)
+})
+
+await test('sfx refuses mode:"timeline" and points at the alternative', async () => {
+  let error = null
+  try {
+    await tools.get('anyaudio_sfx').execute(
+      { projectId: await freshAttach(), mode: 'timeline', items: [{ type: 'wind', durationSec: 1 }] },
+      exec,
+    )
+  } catch (caught) {
+    error = caught
+  }
+  assert(error, 'the removed mode must fail')
+  assert(/Use mode:"materials"/.test(error.message), `it must name the surviving mode, got: ${error.message}`)
+  assert(/anyaudio_mix/.test(error.message), 'and where a flat bed comes from now')
+})
+
+await test('a batch of sfx without startSec chains onto one track instead of stacking at 0', async () => {
+  // Improvement plan 02, I-02. Every effect used to land at 0s, so freeTrack saw
+  // the track busy and opened the next one: ten effects became ten tracks and the
+  // project hit its 20-track limit. The rule the person actually wants is
+  // "same category that does not overlap shares a track", which needs the start
+  // to advance along the category's tracks.
+  const result = await tools.get('anyaudio_sfx').execute(
+    {
+      projectId: await freshAttach(),
+      items: [
+        { type: 'thunder', durationSec: 0.5 },
+        { type: 'thunder', durationSec: 0.5 },
+        { type: 'thunder', durationSec: 0.5 },
+        { type: 'bell', durationSec: 0.5 },
+      ],
+      output: join(tmpDir, 'sfx-chain'),
+      peakDb: null,
+    },
+    exec,
+  )
+  const placed = await readProject(repoRoot, result.projectId)
+  const ambientTracks = placed.tracks.filter((track) => track.category === 'ambience')
+  assert(ambientTracks.length === 1, `four ambient effects should share one track, they took ${ambientTracks.length}`)
+  assert(placed.tracks.length === 2, `ambience + foley = 2 tracks, got ${placed.tracks.map((t) => `${t.name}[${t.category}]`).join(', ')}`)
+  const starts = ambientTracks[0].items.map((item) => item.startSec).sort((a, b) => a - b)
+  assert(starts.length === 3, `three thunder clips on the ambient track, got ${starts.length}`)
+  assert(starts[0] === 0, `the first starts at 0, got ${starts[0]}`)
+  for (let index = 1; index < starts.length; index++) {
+    assert(starts[index] > starts[index - 1], `clips advance in time, got ${starts.join(', ')}`)
+  }
+  // And the fade of a clip is not what decides its place: the chain is by length.
+  assert(Math.abs(starts[1] - 0.5) < 0.02, `the second starts after the first ends, got ${starts[1]}`)
+})
+
+await test('an explicit sfx startSec overlapping another effect gets its own track', async () => {
+  // The other half of the same rule: overlapping effects must stay separable, so
+  // asking for two sounds at the same instant has to open a second track.
+  const result = await tools.get('anyaudio_sfx').execute(
+    {
+      projectId: await freshAttach(),
+      items: [
+        { type: 'bell', startSec: 0, durationSec: 1 },
+        { type: 'bell', startSec: 0.2, durationSec: 1 },
+      ],
+      output: join(tmpDir, 'sfx-overlap'),
+      peakDb: null,
+    },
+    exec,
+  )
+  const placed = await readProject(repoRoot, result.projectId)
+  const foley = placed.tracks.filter((track) => track.category === 'foley')
+  assert(foley.length === 2, `two overlapping bells are two tracks, got ${foley.length}`)
+  assert(foley.map((track) => track.name).sort().join(' | ') === '音效 · 动效 | 音效 · 动效 2', `suffixes only appear when needed, got ${foley.map((t) => t.name).join(' | ')}`)
 })
 
 await test('both general banks are suggested, GeneralUser is the default', async () => {
@@ -826,8 +1234,48 @@ await test('the machine-wide state file was never touched', async () => {
 })
 
 await rm(tmpDir, { recursive: true, force: true })
+// Remove only what this run created: the scratch projects and staged files the
+// generating tools wrote outside test-tmp. A project that was already in the
+// workspace belongs to the user and must survive the test.
+for (const name of await listing(outDirPath)) {
+  if (!preexistingOut.has(name)) await rm(join(outDirPath, name), { recursive: true, force: true })
+}
+for (const name of await listing(projectsDirPath)) {
+  if (!preexistingProjects.has(name)) await rm(join(projectsDirPath, name), { recursive: true, force: true })
+}
 // Restore the pre-run state of the scratch parent: when `.anyaudio` did not
 // exist before the run, leave the tree exactly as it was.
+await test('an unknown instrument names what is close instead of pointing at a list', async () => {
+  // Improvement plan 03, I-48. "see the skill" is a round trip: read a long list,
+  // come back, and still not find the name — `shaker` is not in the table at all,
+  // so the closest thing has to be named for the answer to be usable.
+  const { suggestInstruments } = await import('../src/audio/score.js')
+  const nearby = suggestInstruments('shaker')
+  assert(nearby.length > 0, 'shaker should have candidates')
+
+  let message = ''
+  try {
+    compileScore({ tracks: [{ name: 'perc', instrument: 'shaker', notes: [[0, 0.2, 'C4', 80]] }] })
+  } catch (error) {
+    message = error.message
+  }
+  assert(/unknown instrument "shaker"/.test(message), `the error must still name the value, got "${message}"`)
+  assert(nearby.some((name) => message.includes(name)), `the error must list a real instrument name, got "${message}"`)
+  assert(/GM program number/.test(message), 'and keep the escape hatch: a numeric program')
+
+  let nonsense = ''
+  try {
+    compileScore({ tracks: [{ name: 'x', instrument: 'zzzz', notes: [[0, 0.2, 'C4', 80]] }] })
+  } catch (error) {
+    nonsense = error.message
+  }
+  assert(/nothing close/i.test(nonsense), `a name with no neighbours must say so, got "${nonsense}"`)
+
+  // A legal name is untouched.
+  const { resolveInstrument } = await import('../src/audio/score.js')
+  assert(resolveInstrument('piano').program === 0, 'a known instrument still resolves')
+})
+
 if (!hadAnyAudioDir) {
   const leftover = await readdir(anyaudioDir).catch(() => [])
   if (leftover.length === 0) await rm(anyaudioDir, { recursive: true, force: true })

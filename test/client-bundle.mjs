@@ -37,14 +37,21 @@ assert.equal(mod.name, 'any-audio')
 assert.deepEqual(mod.inject, ['slots', 'locale'])
 
 const sections = []
+const views = []
+// A stand-in for the shell's locale service: `active` moves and the subscribers
+// hear about it, which is exactly what the tab label has to follow.
+const localeState = { active: 'zh-CN', listeners: new Set() }
+const localeService = {
+  getSnapshot: () => ({ active: localeState.active }),
+  subscribe: (fn) => { localeState.listeners.add(fn); return () => localeState.listeners.delete(fn) },
+}
 mod.apply({
+  get: (name) => (name === 'locale' ? localeService : undefined),
   slots: {
-    inject: (name, fn) => {
-      assert.equal(name, 'settings.section')
-      fn()
-    },
+    inject: (name, fn) => { fn() },
     register: (spec, component) => {
-      sections.push({ spec, component })
+      if (spec.name === 'settings.section') sections.push({ spec, component })
+      else if (spec.name === 'conversation.view') views.push({ spec, component })
       return () => {}
     },
   },
@@ -58,6 +65,22 @@ assert.equal(section.spec.order, 210)
 assert.equal(typeof section.spec.label, 'function')
 assert.equal(section.spec.label(), 'AnyAudio')
 assert.equal(typeof section.component, 'function', 'section must render a component')
+
+// The clip bay lives in the same tab row as 对话 / 轨迹 / 画廊 / 上下文 / 编队 /
+// 记忆系统, which is the session-scoped `conversation.view` list slot.
+assert.equal(views.length, 1, 'expected one clip bay view')
+assert.equal(views[0].spec.id, 'clip-bay')
+assert.equal(typeof views[0].component, 'function', 'the view must render a component')
+assert.equal(typeof views[0].spec.label, 'function', 'the tab label must be a thunk so it follows the locale')
+assert.equal(views[0].spec.label(), '剪辑台')
+// The label is read by the shell on its own schedule, outside every component:
+// it has to resolve the language itself, or the tab stays Chinese while the rest
+// of the interface has switched (2026-11-10).
+localeState.active = 'en-US'
+for (const listener of localeState.listeners) listener()
+assert.equal(views[0].spec.label(), 'DAW', 'the tab label follows the shell locale live')
+assert.ok(Number.isFinite(views[0].spec.order), 'the view needs an order to sit at a stable place in the row')
+
 assert.equal(mod.__test.bytes(1536), '2 KB')
 assert.equal(mod.__test.bytes(42), '42 B')
 assert.equal(mod.__test.bytes(1.5 * 1024 * 1024), '1.5 MB')

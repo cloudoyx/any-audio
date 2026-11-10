@@ -1,41 +1,18 @@
 import { compileScore } from '../audio/score.js'
 import { loadSoundBank, renderCompiled } from '../audio/synth.js'
 import { findRecommendedByFile, listFonts, sha256File } from '../audio/fonts.js'
-import { renderSfxTimeline, SFX_HELP, SFX_TYPES } from '../audio/sfx.js'
+import { renderSfxMaterial, SFX_TYPES, categoryOf } from '../audio/sfx.js'
 import { listSfxPresets, resolveSfxPreset, SFX_FONTS, SFX_GROUPS } from '../audio/sfx-presets.js'
-import { fromDb, peakOf, rmsOf, toDb } from '../audio/wav.js'
-import { basename } from 'node:path'
-import { stat } from 'node:fs/promises'
-import { finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, resolveOutputPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
+import { padOrTrim, peakOf, rmsOf, toDb } from '../audio/wav.js'
+import { basename, dirname, join, resolve } from 'node:path'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { finalizeTool, deliverCopy, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, resolveOutputPath, scratchPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 import { readConfig } from '../config.js'
+import { attachMaterialFile } from '../project/attach.js'
+import { projectDir } from '../project/paths.js'
 
-function normalizeTimeline(channels, targetPeakDb) {
-  if (targetPeakDb === null || targetPeakDb === undefined) return channels
-  const peak = peakOf(channels)
-  if (peak <= 0) return channels
-  const target = Math.pow(10, Number(targetPeakDb) / 20)
-  const gain = target / peak
-  return channels.map((channel) => {
-    const out = new Float32Array(channel.length)
-    for (let i = 0; i < channel.length; i++) out[i] = channel[i] * gain
-    return out
-  })
-}
-
-function addSegment(target, source, offsetFrames, gainDb, fadeInSec, fadeOutSec, sampleRate) {
-  const gain = Number.isFinite(gainDb) ? fromDb(gainDb) : 1
-  const start = Math.max(0, Math.round(offsetFrames))
-  const fadeIn = Math.max(0, Math.round((fadeInSec ?? 0) * sampleRate))
-  const fadeOut = Math.max(0, Math.round((fadeOutSec ?? 0) * sampleRate))
-  const length = Math.min(source.length, target.length - start)
-  for (let i = 0; i < length; i++) {
-    let envelope = 1
-    if (fadeIn > 0 && i < fadeIn) envelope *= 0.5 - 0.5 * Math.cos((Math.PI * i) / fadeIn)
-    const tail = length - 1 - i
-    if (fadeOut > 0 && tail < fadeOut) envelope *= 0.5 - 0.5 * Math.cos((Math.PI * tail) / fadeOut)
-    target[i] = target[i] + source[i] * gain * envelope
-  }
-}
+/** Effect categories map onto the project's track categories (spec §5.2). */
+const SFX_TRACK_CATEGORY = { 环境音: 'ambience', 动效: 'foley', 其他: 'other' }
 
 function installedFontPaths(fonts) {
   const map = new Map()
@@ -122,25 +99,238 @@ async function renderPresetItem(item, { sampleRate, durationSec, paths, bankCach
   return { entry, channels: rendered.channels, holdSec, note, velocity }
 }
 
+async function renderMaterials(args, projectId, items, { workspaceRoot, config, paths }) {
+  const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.sfx.sampleRate, config.sfx.sampleRate)) || config.sfx.sampleRate
+  // Scratch, not `out/`: every file here is copied into the project before the
+  // call returns, so a second copy in `out/` was a duplicate — measured on a real
+  // project as 12.8 MB of non-deliverables, of which the narration WAVs were
+  // byte-identical to `materials/` (improvement plan 04). `out/` is where a person
+  // looks for what a tool produced, so only a delivered copy belongs there.
+  const directory = scratchPath(workspaceRoot, `sfx-materials-${nowStamp()}`)
+  await mkdir(directory, { recursive: true })
+
+  const fallbackLength = Number.isFinite(Number(args.durationSec)) ? Number(args.durationSec) : null
+  const bankCache = new Map()
+  const usedFonts = new Set()
+  const materials = []
+  const taken = new Set()
+  // One decision per track family, not per item: a batch of six whooshes asks
+  // "was this family already here?" once, and a `replace` clears it once.
+  const replacedFamilies = new Set()
+  const layoutNotes = []
+
+  for (const [index, item] of items.entries()) {
+    const gainDb = Number.isFinite(Number(item.gainDb)) ? Number(item.gainDb) : 0
+    let channels
+    let entry = null
+    let lengthSec
+    if (item.preset || item.sfx) {
+      const rendered = await renderPresetItem(item, { sampleRate, durationSec: fallbackLength ?? 60, paths, bankCache })
+      entry = rendered.entry
+      usedFonts.add(entry.font)
+      // A preset renders its release tail on top of the hold, which is right for a
+      // timeline but wrong for a material: the project places the file itself, so
+      // the file has to be exactly as long as the caller asked for.
+      const wanted = Number.isFinite(Number(item.durationSec ?? item.duration))
+        ? Number(item.durationSec ?? item.duration)
+        : null
+      channels = wanted && wanted > 0
+        ? padOrTrim(rendered.channels, Math.max(1, Math.round(wanted * sampleRate)))
+        : rendered.channels
+      lengthSec = channels[0].length / sampleRate
+    } else {
+      const type = item.type ?? item.name
+      if (!type) throw new Error(`sfx item #${index} needs a preset or a type`)
+      if (!Number.isFinite(Number(item.durationSec ?? item.duration)) && fallbackLength === null) {
+        throw new Error(`sfx item #${index} ("${type}") needs durationSec in materials mode: each material has a length of its own, so there is no timeline to fall back on`)
+      }
+      const wanted = Number(item.durationSec ?? item.duration ?? fallbackLength)
+      if (!Number.isFinite(wanted) || wanted <= 0) throw new Error(`sfx item #${index} has an invalid durationSec`)
+      const seed = Number.isFinite(Number(item.seed)) ? Number(item.seed) : index * 104729 + 17
+      channels = renderSfxMaterial({ type, durationSec: wanted, sampleRate, params: item.params ?? {}, seed, gainDb })
+      lengthSec = channels[0].length / sampleRate
+    }
+
+    const slug = (entry?.id ?? item.type ?? item.name ?? 'sfx').replace(/[^A-Za-z0-9_-]+/g, '-')
+    let name = `${String(index + 1).padStart(2, '0')}-${slug}.wav`
+    if (taken.has(name)) {
+      let suffix = 2
+      while (taken.has(name)) name = `${String(index + 1).padStart(2, '0')}-${slug}-${suffix++}.wav`
+    }
+    taken.add(name)
+    const written = await writeWavFile(join(directory, name), channels, sampleRate)
+    const category = entry ? categoryOf({ group: entry.group }) : categoryOf({ type: item.type ?? item.name })
+    const label = entry ? `${entry.name}（${entry.zh}）` : String(item.type ?? item.name)
+    // Each effect is its own material on the timeline, placed where the caller
+    // asked. Without an explicit start it follows the last clip of its category
+    // instead of landing at 0s: ten effects stacked on the same instant are ten
+    // tracks, which is how a batch used to run the project into the 20-track
+    // limit. Effects that never overlap still share a track (spec §5.2), because
+    // an effect overlapping another one is an error, not an arrangement choice.
+    const wantedStart = Number(item.startSec ?? item.start ?? args.startSec)
+    const wantedTrackName = item.trackName || args.trackName || `音效 · ${category}`
+    // Replace-or-append, decided per family before the first clip of that family
+    // lands. Re-running a batch after changing levels is the ordinary case, and
+    // it used to append: the family was busy on the same span, so `freeTrack`
+    // opened `音效 · 动效 2` and the project kept both sets. `replace` clears the
+    // family first; without it the append still happens (a second take beside the
+    // first is a legitimate want) but the reply says what it did.
+    if (args.replace === true && !replacedFamilies.has(wantedTrackName)) {
+      replacedFamilies.add(wantedTrackName)
+      const { readProject, saveProject } = await import('../project/store.js')
+      const { trackFamily, removeTrackFamily } = await import('../project/attach.js')
+      const project = await readProject(workspaceRoot, projectId)
+      if (trackFamily(project, wantedTrackName).length > 0) {
+        const removed = removeTrackFamily(project, wantedTrackName)
+        await saveProject(workspaceRoot, project, { by: 'agent', note: `替换音效：移除旧轨道 ${removed.join('、')}` })
+        layoutNotes.push(`replace: removed the previous ${removed.join('、')} before adding this batch.`)
+      }
+    } else if (!replacedFamilies.has(wantedTrackName) && args.replace !== true) {
+      replacedFamilies.add(wantedTrackName)
+      const { readProject } = await import('../project/store.js')
+      const { trackFamily } = await import('../project/attach.js')
+      const project = await readProject(workspaceRoot, projectId)
+      if (trackFamily(project, wantedTrackName).length > 0) {
+        layoutNotes.push(
+          `this project already had ${wantedTrackName}; this call APPENDED to it rather than replacing. `
+          + 'If the batch was meant to replace the old one, pass replace:true next time, or remove the old clips with anyaudio_project mode:"update" field:"delete".',
+        )
+      }
+    }
+    // The level is measured here for the reply. It goes into the index too, so a
+    // person asking a week later — or the clip bay's own meter — reads the same
+    // number instead of re-reading the file (improvement plan 03, I-36).
+    const peakDb = Number(toDb(peakOf(channels)).toFixed(2))
+    const rmsDb = Number(toDb(rmsOf(channels)).toFixed(3))
+    const attached = await attachMaterialFile(workspaceRoot, projectId, written.path, {
+      kind: category === '环境音' ? 'ambience' : 'sfx',
+      trackName: wantedTrackName,
+      category: SFX_TRACK_CATEGORY[category] ?? 'other',
+      snapshot: entry ? { preset: entry.id, durationSec: lengthSec, gainDb } : { type: item.type ?? item.name, params: item.params ?? {}, seed: Number.isFinite(Number(item.seed)) ? Number(item.seed) : undefined, durationSec: lengthSec, gainDb },
+      snapshotKind: 'sfx',
+      tool: 'anyaudio_sfx',
+      label,
+      startSec: Number.isFinite(wantedStart) ? Number(wantedStart) : undefined,
+      autoStart: !Number.isFinite(wantedStart),
+      peakDb,
+      rmsDb,
+    })
+    // The project's copy is what the clip bay plays and what the reply has to
+    // name: the scratch file is removed once the batch is done.
+    const projectCopy = join(projectDir(workspaceRoot, projectId), attached.file)
+    materials.push({
+      file: relativeToWorkspace(workspaceRoot, projectCopy),
+      absolutePath: projectCopy,
+      category,
+      durationSec: Number(lengthSec.toFixed(3)),
+      peakDb,
+      rmsDb,
+      ...(entry
+        ? { preset: entry.id, presetName: `${entry.name}（${entry.zh}）`, font: entry.font, program: entry.program, bank: entry.bank }
+        : { type: item.type ?? item.name }),
+      gainDb,
+      params: item.params ?? {},
+      attached,
+    })
+  }
+
+  const calibration = []
+  for (const fontId of usedFonts) {
+    const fontPath = paths.get(fontId)
+    if (fontPath) calibration.push(await fontCalibration(fontId, fontPath))
+  }
+  const warnings = [...calibration.filter((item) => item.note).map((item) => item.note), ...layoutNotes]
+  // A per-file peak target cannot be applied here without silently rebalancing
+  // the mix relative to what the caller asked for, and the manifest already
+  // reports each peak, so materials mode keeps the raw levels.
+  if (args.peakDb !== undefined && args.peakDb !== null) {
+    warnings.push('materials mode keeps raw levels; peakDb is ignored because normalising each file separately would change the relative balance between effects')
+  }
+
+  const manifestPath = join(directory, 'manifest.json')
+  const manifest = {
+    mode: 'materials',
+    sampleRate,
+    createdAt: new Date().toISOString(),
+    materials: materials.map((entry) => ({
+      file: entry.file,
+      category: entry.category,
+      durationSec: entry.durationSec,
+      peakDb: entry.peakDb,
+      rmsDb: entry.rmsDb,
+      ...(entry.preset ? { preset: entry.preset } : { type: entry.type }),
+      gainDb: entry.gainDb,
+      params: entry.params,
+    })),
+  }
+  const { writeFile: writeTextFile } = await import('node:fs/promises')
+  await writeTextFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+
+  // `output` is only where a delivered copy goes. The project already holds the
+  // files it plays, so this is a convenience for the person, not the record.
+  let deliveredDir = null
+  if (typeof args.output === 'string' && args.output.trim()) {
+    const requested = args.output.trim()
+    deliveredDir = requested.toLowerCase().endsWith('.wav')
+      ? dirname(resolveOutputPath({ workspaceRoot, requested, defaultName: 'x.wav' }))
+      : resolveOutputPath({ workspaceRoot, requested, defaultName: '.' })
+    if (resolve(deliveredDir) !== resolve(directory)) {
+      for (const entry of materials) {
+        await deliverCopy(entry.absolutePath, join(deliveredDir, basename(entry.absolutePath)))
+      }
+      await deliverCopy(manifestPath, join(deliveredDir, 'manifest.json'))
+    }
+  }
+
+  // Only a delivered copy is a deliverable; the scratch folder exists so the
+  // project can take its copy and the manifest can be handed over, then it goes.
+  await rm(directory, { recursive: true, force: true })
+  return {
+    ok: true,
+    projectId,
+    mode: 'materials',
+    ...(deliveredDir
+      ? {
+          deliveredDirectory: relativeToWorkspace(workspaceRoot, deliveredDir),
+          deliveredDirectoryAbsolutePath: deliveredDir,
+          manifest: relativeToWorkspace(workspaceRoot, join(deliveredDir, 'manifest.json')),
+        }
+      : {}),
+    sampleRate,
+    materials,
+    calibration,
+    warnings,
+  }
+}
+
 export const sfxToolDefinition = finalizeTool({
   name: 'anyaudio_sfx',
   description:
-    'Synthesise a timeline of sound effects and write a WAV. Two engines: ' +
+    'Synthesise sound effects and add them to a clip bay project, so the person can open, hear and move them. ' +
+    'Two engines: ' +
     '① presets from the default SoundFont banks — {preset:"rain"} or {preset:"gun-shot"}; these are real samples of birds, seashore, wind, door, car, applause, explosion and so on (run action:"catalog" to see them with notes on shape and level); ' +
     '② procedural generators — {type:"wind"} etc. (wind, rain, water, fire, birds, footsteps, stones, whoosh, impact, bell, gong, drum, riser, heartbeat, thunder). ' +
-    'Items are placed on the video timeline in seconds and mix together: {items:[{preset|type, startSec, durationSec?, gainDb?, fadeInSec?, fadeOutSec?, note?, velocity?, params?, seed?}], durationSec}. ' +
-    'Use presets for recognisable real-world sounds, procedural generators when no preset fits or when you need a controllable bed. Music itself comes from anyaudio_music; narration from anyaudio_tts.',
+    'Every effect becomes its own clip: one short WAV per item, each starting at t=0, plus a manifest with file, category (环境音/动效/其他), duration and peak. ' +
+    'The clips are placed on the project timeline as they are created — pass startSec to say where, or leave it out and each effect follows the previous one on its own track. ' +
+    'It needs projectId; a copy of every file is kept under the project folder. ' +
+    'Music itself comes from anyaudio_music; narration from anyaudio_tts. ' +
+    'For one flat audio bed instead of editable clips, use anyaudio_mix — this tool no longer bakes effects together.',
   parameters: {
     type: 'object',
     properties: {
       action: { type: 'string', description: "Set to \"catalog\" to list the sound-effect presets in the default banks (optionally filter with group/query). Otherwise omit and pass items." },
-      items: { oneOf: [{ type: 'array', items: { type: 'object', additionalProperties: true } }, { type: 'string' }], description: 'SFX events: preset or type, startSec, optional durationSec/gainDb/fades/note/velocity/params/seed. A path to a .json file holding the array is also accepted.' },
-      output: { type: 'string', description: "Output WAV path. Relative paths resolve against the user's project; defaults to <project>/.anyaudio/out/sfx-<timestamp>.wav." },
-      durationSec: { type: 'number', description: 'Total timeline length; defaults to the latest item end.' },
+      projectId: { type: 'string', description: 'The clip bay project these effects belong to. Required whenever you pass items: run anyaudio_project mode:"create" first when the task has no project yet. action:"catalog" does not need it.' },
+      trackName: { type: 'string', description: 'Track name, default 音效 · <类别>. Effects that never overlap in time share one track; overlapping ones move to the next free track automatically. Everything in one call lands on its own category track.' },
+      startSec: { type: 'number', description: 'Where an effect sits on the project timeline. Omitted, each effect starts right after the previous one on the same track, so a batch laid down in order plays back to back instead of stacking at 0s. An item may set its own startSec.' },
+      mode: { type: 'string', enum: ['materials'], description: 'Kept for compatibility; "materials" is the only mode, and it is the default. Each effect becomes its own clip, which is what makes it adjustable.' },
+      items: { oneOf: [{ type: 'array', items: { type: 'object', additionalProperties: true } }, { type: 'string' }], description: 'SFX events: preset or type, optional startSec/durationSec/gainDb/fades/note/velocity/params/seed. A path to a .json file holding the array is also accepted. Each item becomes its own file, so one can be moved without re-rendering the others.' },
+      output: { type: 'string', description: "Optional extra copy of the delivered files: the folder that receives one file per item plus manifest.json. Relative paths resolve against the user's project. The project's own copies are always written under the project folder." },
+      durationSec: { type: 'number', description: 'Fallback length for an item that names none. A preset with its own natural tail does not need it; a procedural generator does.' },
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
-      peakDb: { type: 'number', description: 'Peak normalisation in dBFS, default -4. null keeps raw level.' },
+      peakDb: { type: 'number', description: 'Ignored, with a warning: normalising each file separately would change the relative balance between effects. Set each item\'s gainDb instead, or adjust the clip gain in the project.' },
       group: { type: 'string', description: 'Catalog filter: noise, weather, animals, home, traffic, crowd or weapons.' },
       query: { type: 'string', description: 'Catalog search text (name, Chinese name or tag).' },
+      replace: { type: 'boolean', description: 'Replace instead of append. When this is a second pass over effects the project already holds (you changed levels or swapped presets and are generating again), pass true: the track family these effects land in is cleared first, so the project keeps one set rather than gaining a second. Without it a re-run appends, which is how "音效 · 动效" and "音效 · 动效 2" end up side by side.' },
     },
     required: [],
   },
@@ -151,13 +341,23 @@ export const sfxToolDefinition = finalizeTool({
       properties: {
         ok: { type: 'boolean' },
         action: { type: 'string' },
+        projectId: { type: 'string' },
+        mode: { type: 'string' },
         file: { type: 'string' },
         absolutePath: { type: 'string' },
+        delivered: { type: 'string' },
+        deliveredAbsolutePath: { type: 'string' },
+        deliveredDirectory: { type: 'string' },
+        deliveredDirectoryAbsolutePath: { type: 'string' },
+        attached: { type: 'object', additionalProperties: true },
+        directory: { type: 'string' },
+        manifest: { type: 'string' },
         durationSec: { type: 'number' },
         sampleRate: { type: 'number' },
         peakDb: { type: 'number' },
         rmsDb: { type: 'number' },
         items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        materials: { type: 'array', items: { type: 'object', additionalProperties: true } },
         presets: { type: 'array', items: { type: 'object', additionalProperties: true } },
         calibration: { type: 'array', items: { type: 'object', additionalProperties: true } },
         warnings: { type: 'array' },
@@ -184,18 +384,17 @@ export const sfxToolDefinition = finalizeTool({
         }
         return lines.join('\n')
       }
-      const lines = [
-        `Created ${value.durationSec.toFixed(2)}s SFX bed → ${value.file} (peak ${value.peakDb.toFixed(1)} dBFS, RMS ${value.rmsDb.toFixed(1)} dBFS)`,
-        'Events:',
-        ...value.items.map((item) => {
-          if (item.preset) return `- preset ${item.presetName} @ ${item.startSec.toFixed(2)}s for ${item.durationSec.toFixed(2)}s (${item.font}, gain ${item.gainDb}dB)`
-          return `- ${item.type} @ ${item.startSec.toFixed(2)}s for ${item.durationSec.toFixed(2)}s`
-        }),
-        'Procedural types: ' + SFX_TYPES.join(', '),
-        'SFX presets: run action:"catalog" to list the default-bank sound effects.',
-        ...(value.warnings ?? []).map((warning) => `! ${warning}`),
-      ]
-      return lines.join('\n')
+      if (value.mode === 'materials') {
+        const lines = [
+          `Wrote ${value.materials.length} sound material(s) into project ${value.projectId}${value.deliveredDirectory ? `; a delivered copy is in ${value.deliveredDirectory}` : ''}`,
+          'Materials (each starts at t=0):',
+          ...value.materials.map((entry) => `- ${entry.file} · ${entry.category} · ${entry.durationSec.toFixed(2)}s · peak ${entry.peakDb.toFixed(1)} dBFS${entry.attached ? ` → track "${entry.attached.trackName}" @ ${Number(entry.attached.startSec).toFixed(2)}s` : ''}`),
+          `In project ${value.projectId}: each effect is its own clip, so one can be moved or dropped without re-rendering the others.`,
+          ...(value.warnings ?? []).map((warning) => `! ${warning}`),
+        ]
+        return lines.join('\n')
+      }
+      return `Wrote ${value.materials?.length ?? 0} sound material(s) in project ${value.projectId}.`
     }),
   },
   async execute(args, exec) {
@@ -223,90 +422,22 @@ export const sfxToolDefinition = finalizeTool({
 
     const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items', { workspaceRoot })
     if (!Array.isArray(items) || items.length === 0) throw new Error('items must be a non-empty array (or use action:"catalog")')
-    const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.sfx.sampleRate, config.sfx.sampleRate)) || config.sfx.sampleRate
-    const latestEnd = items.reduce((max, item) => {
-      const start = Number(item.startSec ?? item.start ?? 0)
-      const length = Number(item.durationSec ?? item.duration ?? 0)
-      return Math.max(max, (Number.isFinite(start) ? start : 0) + (Number.isFinite(length) ? length : 0))
-    }, 0)
-    const durationSec = clampSeconds(args.durationSec, latestEnd || 1)
-
-    const procedural = []
-    const presets = []
-    for (const item of items) {
-      if (item && (item.preset || item.sfx)) presets.push(item)
-      else procedural.push(item)
+    const projectId = requireProjectId(args, 'anyaudio_sfx')
+    // "timeline" mode used to bake every effect into one full-length clip, so
+    // nothing on it could be moved, faded or rebalanced — the exact thing a clip
+    // bay exists to prevent. It is gone; say where the alternative is instead of
+    // failing on an unknown enum.
+    if (String(args.mode ?? '').toLowerCase() === 'timeline') {
+      throw new Error(
+        '"timeline" mode was removed: it baked every effect into one clip, so nothing on it could be adjusted. '
+        + 'Use mode:"materials" — each effect becomes its own clip you can move, fade and rebalance. '
+        + 'If you really need one flat audio bed, use anyaudio_mix.',
+      )
     }
-
-    const totalFrames = Math.max(1, Math.ceil(durationSec * sampleRate))
-    const mixed = [new Float32Array(totalFrames), new Float32Array(totalFrames)]
-    const report = []
-    const bankCache = new Map()
-
-    if (procedural.length > 0) {
-      const rendered = renderSfxTimeline({ items: procedural, durationSec, sampleRate })
-      for (let channel = 0; channel < 2; channel++) {
-        const source = rendered.channels[channel] ?? rendered.channels[0]
-        for (let i = 0; i < Math.min(source.length, totalFrames); i++) mixed[channel][i] += source[i]
-      }
-      report.push(...rendered.report)
+    if (args.mode !== undefined && String(args.mode).toLowerCase() !== 'materials') {
+      throw new Error(`unknown mode "${args.mode}"; "materials" is the only mode`)
     }
-
-    for (const item of presets) {
-      const rendered = await renderPresetItem(item, { sampleRate, durationSec, paths, bankCache })
-      const startSec = Math.max(0, Number(item.startSec ?? item.start ?? 0) || 0)
-      const gainDb = Number.isFinite(Number(item.gainDb)) ? Number(item.gainDb) : 0
-      const segmentPeak = peakOf(rendered.channels)
-      const segmentRms = rmsOf(rendered.channels)
-      for (let channel = 0; channel < 2; channel++) {
-        addSegment(
-          mixed[channel],
-          rendered.channels[channel] ?? rendered.channels[0],
-          startSec * sampleRate,
-          gainDb,
-          item.fadeInSec,
-          item.fadeOutSec,
-          sampleRate,
-        )
-      }
-      report.push({
-        preset: rendered.entry.id,
-        presetName: `${rendered.entry.name}（${rendered.entry.zh}）`,
-        font: rendered.entry.font,
-        program: rendered.entry.program,
-        bank: rendered.entry.bank,
-        startSec,
-        durationSec: rendered.channels[0].length / sampleRate,
-        gainDb,
-        peakDb: Number(toDb(segmentPeak).toFixed(2)),
-        rmsDb: Number(toDb(segmentRms).toFixed(2)),
-      })
-    }
-
-    const peakDbRequested = args.peakDb === undefined ? config.sfx.peakDb : args.peakDb
-    const channels = normalizeTimeline(mixed, peakDbRequested)
-    const usedFonts = [...new Set(report.filter((entry) => entry.preset).map((entry) => entry.font))]
-    const calibration = []
-    for (const fontId of usedFonts) {
-      const fontPath = paths.get(fontId)
-      if (fontPath) calibration.push(await fontCalibration(fontId, fontPath))
-    }
-    const warnings = calibration.filter((item) => item.note).map((item) => item.note)
-    const target = resolveOutputPath({ workspaceRoot, outputDir: config.output.dir, requested: args.output, defaultName: `sfx-${nowStamp()}.wav` })
-    const written = await writeWavFile(target, channels, sampleRate)
-    return {
-      ok: true,
-      file: relativeToWorkspace(workspaceRoot, written.path),
-      absolutePath: written.path,
-      durationSec: Number((channels[0].length / sampleRate).toFixed(3)),
-      sampleRate,
-      peakDb: Number(toDb(peakOf(channels)).toFixed(2)),
-      rmsDb: Number(toDb(rmsOf(channels)).toFixed(2)),
-      items: report,
-      calibration,
-      warnings,
-      help: SFX_HELP,
-    }
+    return renderMaterials(args, projectId, items, { workspaceRoot, config, paths })
   },
 })
 

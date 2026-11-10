@@ -1,0 +1,436 @@
+/**
+ * UI language.
+ *
+ * "auto" follows the shell locale; "zh" or "en" pin it. The preference lives in
+ * the plugin's own config file under `ui.language`, so this module owns the
+ * lookup table and nothing else.
+ *
+ * The Chinese string is the lookup key and the English table is the translation,
+ * which keeps every call site readable in the language actually being written.
+ */
+export const EN = {
+  '界面语言': 'Language',
+  '跟随系统': 'Follow system',
+  '中文': '中文',
+  'English': 'English',
+  '语言已保存': 'Language saved',
+  '个音源': 'sound sources',
+  '尚未安装音源': 'No sound sources yet',
+  'ffmpeg 可用': 'ffmpeg ready',
+  'ffmpeg 缺失': 'ffmpeg missing',
+  '刷新': 'Refresh',
+  '重试': 'Retry',
+  '正在读取 AnyAudio 设置…': 'Loading AnyAudio settings…',
+  '无法读取设置：{0}。确认插件已启用，并重启一次 DSH。': 'Could not read settings: {0}. Make sure the plugin is enabled and restart DSH once.',
+  '给视频自动配乐的插件。设置保存在本机一份文件里，不随 DSH 账户或 profile 变化；API Key 单独存在 DSH 凭据库。': 'Video scoring for DeepSeek Harness. Settings live in one file on this machine, shared across DSH profiles; API keys live in the DSH credential store.',
+  '音源': 'Sound sources',
+  '配音': 'Narration',
+  '混音与输出': 'Mix & output',
+  '诊断': 'Diagnostics',
+  '高级': 'Advanced',
+  '音源（SoundFont）': 'Sound sources (SoundFont)',
+  '乐器声音来自这里。装一套 32 MB 的 GeneralUser GS 就能覆盖大部分配乐；想更真实可以再加一套。文件只放在本机，不进 git、不进插件包。': 'Instrument sounds come from SoundFont banks. GeneralUser GS (32 MB) covers most cues; add MuseScore General for a fuller orchestra. Files stay on this machine — never in git or the plugin package.',
+  '正在安装': 'Installing',
+  '完成：{0}': 'Done: {0}',
+  '失败：{0}': 'Failed: {0}',
+  '试听：{0}': 'Preview: {0}',
+  '音色': 'Preset',
+  '默认': 'Default',
+  '建议安装': 'Suggested',
+  '已安装': 'Installed',
+  '文件被修改': 'File modified',
+  '已安装（未登记）': 'Installed (unmanaged)',
+  '未安装': 'Not installed',
+  '下载安装': 'Install',
+  '试听': 'Preview',
+  '校验': 'Verify',
+  '移除记录': 'Forget',
+  '删除文件': 'Delete file',
+  '删除 {0} 的文件？\n\n之后需要重新下载才能使用。': 'Delete {0}? The bank will have to be downloaded again before use.',
+  '许可证：{0}': 'License: {0}',
+  'SHA-256：{0}…（{1}）': 'SHA-256: {0}… ({1})',
+  '记录一致': 'matches record',
+  '与记录不一致': 'does not match record',
+  '手动下载：{0}': 'Manual download: {0}',
+  '已安装的其它音源': 'Other installed banks',
+  '不在推荐列表里的音源也会被识别，按文件名或路径引用即可。': 'Banks outside the suggested list still work; reference them by file name or path.',
+  '暂无。把 .sf2 放进音源目录，或在上面按文件安装。': 'None yet. Put a .sf2 in the sound source folder, or install one by path above.',
+  '从本机文件安装（7z/zip 请先解压出 .sf2/.sf3/.dls）': 'Install from a local file (extract .sf2/.sf3/.dls from 7z/zip first)',
+  '安装文件': 'Install file',
+  '从网址安装（直链 .sf2/.sf3/.dls）': 'Install from a URL (direct .sf2/.sf3/.dls link)',
+  '音源目录': 'Sound source folders',
+  '整台机器共用这一个音源库；环境变量 ANYAUDIO_FONTS 可以追加目录。': 'One shared library for the whole machine; ANYAUDIO_FONTS can add more folders.',
+  '你选的默认音源：{0}': 'Your default bank: {0}',
+  '你选的默认音源：未选择（没选时使用 {0}）': 'Your default bank: not chosen (falls back to {0})',
+  '未选择（用 {0}）': 'not chosen (using {0})',
+  '已设为默认音源': 'Default bank saved',
+  '设为默认': 'Set as default',
+  '当前默认': 'Default',
+  '未安装音源': 'No bank installed',
+  '音源已安装': 'Sound source installed',
+  '开始下载，关掉设置页后仍会继续': 'Download started — it keeps running after you close this page',
+  '已有一个下载任务在进行': 'A download is already running',
+  '校验通过': 'Verification passed',
+  '校验失败：文件与记录不一致': 'Verification failed: file does not match its record',
+  '已处理': 'Done',
+  '这个音源没有可试听的旋律预设': 'This bank has no melodic presets to preview',
+  '正在读取': 'Loading',
+
+  '配音（TTS）': 'Narration (TTS)',
+  '给视频配旁白。Edge 默认可用、不需要 Key；MiMo-V2.5 需要普通 Open Platform API Key。只影响没有显式指定 voice/provider 的新任务。': 'Narration for videos. Edge works out of the box; MiMo-V2.5 needs a normal Open Platform API key. Applies to new tasks that do not set voice/provider explicitly.',
+  'Edge TTS（默认，免费）': 'Edge TTS (default, free)',
+  'MiMo-V2.5-TTS（需要 API Key）': 'MiMo-V2.5-TTS (needs an API key)',
+  '默认音色': 'Default voice',
+  'Yunjian 为男声，Xiaoxiao 为女声': 'Yunjian is male, Xiaoxiao is female',
+  '语速': 'Rate',
+  '例如 -12%（负数更慢）': 'e.g. -12% (negative is slower)',
+  '音高': 'Pitch',
+  '例如 -3Hz': 'e.g. -3Hz',
+  '音量': 'Volume',
+  '通常保持 +0%': 'Usually +0%',
+  '代理（可选）': 'Proxy (optional)',
+  '国内网络必要时填 http://127.0.0.1:7890': 'Set http://127.0.0.1:7890 if your network needs a proxy',
+  '默认直连；若系统代理或规则会改写 MiMo 请求，填 http://127.0.0.1:7890 这类地址': 'Direct by default. If a system proxy or rules rewrite MiMo requests, enter an address such as http://127.0.0.1:7890',
+  '只支持普通 Open Platform API Key，不支持 Token Plan；Key 保存在 DSH 凭据库（本机 YAML，权限仅当前用户，不是加密存储），不会回传给浏览器。': 'Only normal Open Platform API keys are supported. The key is stored in the DSH credential store (local YAML, current-user permissions, not encrypted at rest) and is never sent back to the browser.',
+  'mimo_default 由服务端集群决定，不同集群音色可能不同': 'mimo_default is resolved by the service cluster and may differ between clusters',
+  '默认风格（可选）': 'Default style (optional)',
+  '用一句话描述语气，例如「温柔、缓慢、纪录片旁白」': 'One sentence of direction, e.g. "gentle, slow, documentary narration"',
+  '模型': 'Model',
+  '默认 mimo-v2.5-tts；声音克隆/设计模型见文档': 'Defaults to mimo-v2.5-tts; see the docs for voice clone/design models',
+  'API 地址': 'API base URL',
+  '一般不需要修改': 'Usually unchanged',
+  'Key 状态：已配置': 'Key status: configured',
+  'Key 状态：未配置': 'Key status: not configured',
+  '已配置，如需更换请重新填写': 'Configured — fill again to replace',
+  '粘贴 Open Platform API Key': 'Paste an Open Platform API key',
+  '保存 Key': 'Save key',
+  '删除 Key': 'Delete key',
+  '保存为默认值': 'Save as defaults',
+  '已保存为默认值（新任务生效，正在运行的任务不受影响）': 'Saved. New tasks use these defaults; running tasks are unaffected.',
+  'Key 已保存到 DSH 凭据库': 'Key saved to the DSH credential store',
+  'Key 已删除': 'Key deleted',
+  '用当前设置合成一句，确认音色、语速与情绪。': 'Synthesise one sentence with the current settings to check voice, pace and tone.',
+  '生成中…': 'Generating…',
+  '生成试听': 'Generate preview',
+  '先保存 Key 才能试听 MiMo': 'Save a key before previewing MiMo',
+  '试听已生成': 'Preview ready',
+
+  '这些是工具没写参数时采用的默认值；工具调用里显式写的参数永远优先。': 'Defaults used when a tool call does not set the value; explicit tool arguments always win.',
+  '母带峰值上限 (dBFS)': 'Master peak ceiling (dBFS)',
+  '-1.5 留出余量；设成「不归一」会保留原始电平': '-1.5 leaves headroom; "No normalisation" keeps the raw level',
+  '恢复归一': 'Normalise again',
+  '不归一': 'No normalisation',
+  '音乐峰值 (dBFS)': 'Music peak (dBFS)',
+  '渲染音乐时默认归一到的峰值': 'Peak that music is normalised to by default',
+  '音乐尾音 (秒)': 'Music tail (seconds)',
+  '最后一个音符结束后额外渲染的释放与混响': 'Extra release and reverb rendered after the last note',
+  '音效峰值 (dBFS)': 'SFX peak (dBFS)',
+  '输出目录': 'Output folder',
+  '留空 = 项目下 .anyaudio/out；也可以填绝对路径': 'Empty = <project>/.anyaudio/out; an absolute path also works',
+  '旁白 ducking': 'Narration ducking',
+  '旁白出现时把音乐压下去，保证说话清楚。改的是新任务的默认值。': 'Lowers music while narration plays so speech stays clear. Applies to new tasks.',
+  '默认启用 ducking': 'Enable ducking by default',
+  '压低幅度 (dB)': 'Reduction (dB)',
+  '-9 表示最多降低 9 dB；越小越不明显': '-9 means up to 9 dB lower; smaller is subtler',
+  '触发阈值 (dBFS)': 'Trigger threshold (dBFS)',
+  '-42 表示超过这个电平的旁白才触发': '-42 means narration above this level triggers ducking',
+  '已保存。显式参数仍然优先于这些默认值': 'Saved. Explicit tool arguments still win.',
+
+  '运行状态': 'Diagnostics',
+  '排查问题先看这里。': 'Start here when something looks wrong.',
+  '插件版本': 'Plugin version',
+  '配置文件': 'Config file',
+  '默认音源': 'Default bank',
+  '未找到：TTS 转 WAV 与视频封装会失败，纯 WAV 混音不受影响': 'Not found: TTS-to-WAV and video muxing will fail; pure WAV mixing still works',
+  '重新检测': 'Check again',
+  '复制配置路径': 'Copy config path',
+  '路径已复制': 'Path copied',
+  '复制失败，请手动选择': 'Copy failed — select it manually',
+  '恢复默认设置': 'Reset settings',
+  '把 AnyAudio 的所有设置恢复为默认值？（音源文件不会删除，API Key 也不会删除）': 'Reset every AnyAudio setting to its default? SoundFont files and API keys are kept.',
+  '设置已恢复默认': 'Settings reset',
+  '音源搜索目录': 'Sound source search folders',
+
+  '高级：原始配置': 'Advanced: raw config',
+  '整个配置文件就是这一份 JSON，机器上所有 profile 共用。未知字段会在保存时被丢弃。': 'The whole config is this one JSON file, shared by every profile on the machine. Unknown fields are dropped on save.',
+  '保存': 'Save',
+  '放弃': 'Discard',
+  '保存到工程文件': 'Save to the project file',
+  '放弃未保存的修改': 'Discard unsaved changes',
+  '工程有未保存的修改': 'This project has unsaved changes',
+  '保存后离开，或放弃这些修改回到上次保存的版本。': 'Save and leave, or discard these changes and go back to the last saved version.',
+  '取消': 'Cancel',
+  '放弃并离开': 'Discard and leave',
+  '保存并离开': 'Save and leave',
+  '重新载入': 'Reload',
+  '已保存': 'Saved',
+  '未知': 'Unknown',
+
+  '剪辑台': 'DAW',
+  '正在读取工程…': 'Loading projects…',
+  '这个会话还没有归属的工作区。先打开一个工作区，再回到剪辑台。': 'This session has no workspace yet. Open one, then come back to the DAW.',
+  '含视频': 'Video',
+  '个工程': 'projects',
+  '轨': 'tracks',
+  '个素材': 'materials',
+  // Level readouts (improvement plan 03, I-38; named after the measure in 04).
+  // "dBFS" alone made a -20.3 RMS reading look wrong next to a peak of -3.9.
+  '素材平均 dBFS': 'material average dBFS',
+  '片段 dB': 'clip dB',
+  '实际平均 dBFS': 'actual average dBFS',
+  '峰值': 'peak',
+  '素材电平未知': 'material level unknown',
+  '电平未知': 'level unknown',
+  '素材平均电平 → 片段增益 → 实际平均电平；峰值是素材里最高的那一个采样': 'material average level → clip gain → actual average level; peak is the single loudest sample in the material',
+  '这条轨上最响素材的实测电平': 'measured level of the loudest material on this track',
+  '这个轨道上的素材还没有测过电平': 'the material on this track has not been measured yet',
+  // The material bin (improvement plan 03, I-40).
+  '素材箱': 'Materials',
+  '条未被引用': 'unused',
+  '未引用': 'unused',
+  '个片段': 'clips',
+  '实测电平': 'measured level',
+  '被引用': 'used by',
+  '操作': 'Actions',
+  '类型': 'Kind',
+  '时长': 'Length',
+  '这个工程还没有素材。': 'This project has no materials yet.',
+  '这段素材没能播放': 'this material could not be played',
+  '删除': 'Delete',
+  '删除这个没有被引用的素材（不可撤销）': 'delete this unused material (cannot be undone)',
+  '点 ▶ 试听；被片段引用的素材不能删，先删掉那些片段。': 'Press ▶ to listen; a material a clip uses cannot be deleted — remove those clips first.',
+  '缩小': 'Zoom out',
+  '放大': 'Zoom in',
+  '播放': 'Play',
+  '暂停': 'Pause',
+  '选中一个片段后可以在这里改增益、声像和淡入淡出。': 'Select a clip to change its gain, pan and fades here.',
+  '增益 (dB)': 'Gain (dB)',
+  '声像 (-1=极左, 1=极右)': 'Pan (-1=hard left, 1=hard right)',
+  '取消选择': 'Clear selection',
+  '淡入 (秒)': 'Fade in (s)',
+  '淡出 (秒)': 'Fade out (s)',
+  '静音这个片段': 'Mute this clip',
+  '在播放头分割': 'Split at playhead',
+  '分割': 'Split',
+  '复制': 'Duplicate',
+  '所属轨道': 'Track',
+  '声像': 'pan',
+  '双击改名': 'Double-click to rename',
+  '删除轨道': 'Delete track',
+  '静音': 'Mute',
+  '独奏': 'Solo',
+  '撤销': 'Undo',
+  '重做': 'Redo',
+  '保存失败': 'Save failed',
+  '编辑仍在这里，可以重试。': 'The edit is still here, so you can retry.',
+  '段': 'clips',
+  '这个工程还没有轨道。': 'This project has no tracks yet.',
+  '← 返回': '← Back',
+  '添加到对话': 'Add to conversation',
+  '选中一个片段或一条轨道，再点这里把它放进对话。': 'Select a clip or a track first, then add it to the conversation.',
+  '已加入对话输入框，切到「对话」继续补充要求。': 'Added to the chat draft — switch to 对话 and describe the change.',
+  '加入失败：{0}': 'Could not add it: {0}',
+  '这个工程只有音频，没有画面。': 'This project is audio only — there is no picture.',
+  '读不出这个工程的视频，时间轴还能用。': 'The video could not be read; the timeline still works.',
+  '画面读得比声音慢，播放时可能停住；导出完整成片后播放即可。': 'The picture cannot keep up with the sound and may stand still while playing. Play the exported file instead.',
+  '导出': 'Export',
+  '总线音量': 'Bus',
+  '总线音量：整条混音的推子，作用在总线效果之前': 'Bus level: the whole mix, applied before the bus effects',
+  '取消导出': 'Cancel export',
+  '导出时归一化': 'Normalise on export',
+  '正在渲染…': 'Rendering…',
+  '正在渲染第 {0} / {1} 轨…': 'Rendering track {0} of {1}…',
+  '正在编码 {0}…': 'Encoding {0}…',
+  '导出完成：{0}': 'Export finished: {0}',
+  '导出失败': 'Export failed',
+  '已取消。': 'Cancelled.',
+  '帮助': 'Help',
+  '剪辑台使用说明': 'DAW guide',
+  '一句话': 'The short version',
+  'Agent 负责生成素材和批量修改；你负责试听、微调和拍板。': 'The Agent generates material and makes bulk changes; you listen, fine-tune and decide.',
+  '保存与草稿': 'Saving and drafts',
+  '你在这里改的是草稿，不会立刻写进工程文件。': 'What you change here is a draft; nothing is written to the project file until you save.',
+  '点「保存」才写进工程，Agent 才能看到你的修改。': 'Press Save to write it into the project — only then can the Agent see your changes.',
+  '不点保存就离开，会弹窗提醒；选「放弃」就回到上次保存的版本。': 'Leaving without saving asks first; Discard returns to the last saved version.',
+  '「导出」用的是当前状态，不是上次保存的版本。': 'Export uses the current state, not the last saved version.',
+  '片段怎么调': 'Editing a clip',
+  '点一下选中，右侧改增益、声像、淡入淡出。': 'Click to select, then edit gain, pan and fades on the right.',
+  '拖动片段移动；拖左右边缘裁剪；在播放头处点「分割」。': 'Drag a clip to move it, drag an edge to trim it, or split at the playhead.',
+  'M 静音这条轨，S 独奏这条轨；轨道只是分组，没有音量。': 'M mutes the track, S solos it; a track is only a group and has no level of its own.',
+  '选中片段或轨道 → 点「添加到对话」→ 输入框出现引用 → 切到「对话」补充要求再发送。': 'Select a clip or track → Add to chat → the composer holds a reference → switch to Chat, add your request and send.',
+  '它不会自己发消息，只是把引用放进输入框。': 'It does not send anything; it only puts the reference in the composer.',
+  '文件都在哪': 'Where the files live',
+  '快捷键': 'Shortcuts',
+  '空格：播放 / 暂停': 'Space: play / pause',
+  'Delete：删除选中片段': 'Delete: remove the selected clip',
+  'Ctrl+D：复制选中片段': 'Ctrl+D: duplicate the selected clip',
+  'Ctrl+Z / Ctrl+Shift+Z：撤销 / 重做': 'Ctrl+Z / Ctrl+Shift+Z: undo / redo',
+  'Esc：取消选择': 'Esc: clear the selection',
+  '工程': 'Project',
+  '素材': 'Material',
+  '草稿': 'Draft',
+  '临时': 'Scratch',
+  '临时目录可以随时删；素材和工程别手动改，交给剪辑台或 Agent。': 'The scratch folder is safe to delete; leave materials and the project to the DAW or the Agent.',
+  '做一个 30 秒的水墨动画：石缝里的一粒种子长成树苗。配一点中国风音乐和风声，不要旁白。': 'Make a 30-second ink-wash animation: a seed in a rock crevice grows into a sapling. Add a little Chinese-style music and wind, no narration.',
+  '古筝主旋律，弦乐铺底，大提琴走低音；人声出现时把音乐压下去。': 'Guzheng lead, strings bed, cello on the low end; pull the music down when the voice enters.',
+  '帮我写一首日式 RPG 的战斗曲目，可无限循环，30 秒到 60 秒。乐器用鼓组 + 电吉他 + 弦乐。': 'Write me a Japanese RPG battle theme, loopable, 30 to 60 seconds. Drums, electric guitar and strings.',
+  '帮我把《三国演义》第一章做成有声小说，旁白低沉浑厚，角色音色要有所区分，配一些简单的配乐和音效即可。': 'Turn Chapter 1 of Romance of the Three Kingdoms into an audiobook — deep, rich narration, distinguishable character voices, with simple background music and effects.',
+  '把当前草稿写进工程文件。不点保存，Agent 看到的是上次保存的版本。': 'Writes the current draft into the project. Until you save, the Agent sees the last saved version.',
+  '用当前状态渲染成品，导出后工程不会自动保存。': 'Renders the finished file from the current state. Export does not save the project.',
+  '把选中的片段或轨道作为引用放进输入框。它不会自己发消息，你可以先引用，再给指令。举例：「这段台词换个音色」「重新编排这段旋律」。': 'Puts the selected clip or track into the composer as a reference. It does not send anything: quote first, then give the instruction (for example “give this line another voice” or “rearrange this melody”).',
+  '有未保存的修改：导出使用当前状态，Agent 读取的是上次保存的版本。': 'Unsaved changes: export uses the current state; the Agent reads the last saved version.',
+  '删除这段': 'Remove this',
+  '+ 频段': '+ Band',
+  '乒乓': 'Ping-pong',
+  '侧链来源': 'Side-chain source',
+  '选择轨道': 'Choose a track',
+  '保持音高': 'Keep pitch',
+  '打开：只改变长度，音高不变': 'On: changes length only, pitch stays',
+  '总线效果': 'Bus effects',
+  '轨道效果': 'Track effects',
+  '片段效果': 'Clip effects',
+  '先选中一个片段': 'Select a clip first',
+  '+ 添加效果': '+ Add effect',
+  '这条链是空的，声音原样通过。': 'This chain is empty; the sound passes through unchanged.',
+  '上移': 'Move up',
+  '下移': 'Move down',
+  '删除这个效果': 'Remove this effect',
+  '总线效果：作用在母带推子之后的整条混音上': 'Bus effects: applied to the whole mix after the master fader',
+  '总线': 'Bus',
+  '返回片段属性': 'Back to clip properties',
+  '拖动调整轨道头宽度': 'Drag to resize the track head',
+  '移动片段「{0}」到 {1}s': 'Moved clip “{0}” to {1}s',
+  '裁剪片段「{0}」': 'Trimmed clip “{0}”',
+  '删除片段「{0}」': 'Deleted clip “{0}”',
+  '复制片段「{0}」': 'Duplicated clip “{0}”',
+  '调整片段「{0}」增益 {1} dB': 'Set clip “{0}” gain to {1} dB',
+  '调整片段「{0}」声像 {1}': 'Set clip “{0}” pan to {1}',
+  '调整片段「{0}」淡入淡出': 'Changed fades on clip “{0}”',
+  '重命名轨道「{0}」为「{1}」': 'Renamed track “{0}” to “{1}”',
+  '（同时取消独奏）': ' (solo cleared)',
+  '（同时取消静音）': ' (mute cleared)',
+  '删除轨道「{0}」及其 {1} 个片段': 'Deleted track “{0}” and its {1} clips',
+  '删除轨道「{0}」': 'Deleted track “{0}”',
+  '压缩': 'Compressor',
+  '限幅': 'Limiter',
+  '混响': 'Reverb',
+  '延迟': 'Delay',
+  '侧链': 'Duck',
+  '变速变调': 'Rate/pitch',
+  '空': 'Empty',
+  '设置片段「{0}」效果链（{1}）': 'Set the effect chain on clip “{0}” ({1})',
+  '调整总线音量 {0} dB': 'Set the bus level to {0} dB',
+  '设置总线效果链（{0}）': 'Set the bus effect chain ({0})',
+  '这个工作区还没有工程。在会话里像平时一样提需求，Agent 会自己建工程并渲染音频：': 'This workspace has no projects yet. Describe the work in a chat as usual and the Agent creates one and renders the audio:',
+  '已复制': 'Copied',
+  '也可以直接说「新建一个剪辑台工程」，先有一个空工程再让它往里加东西。': 'You can also just say “create a DAW project” and add material to the empty project afterwards.',
+  '未保存': 'unsaved',
+  '刚刚修改': 'edited just now',
+  '{0} 分钟前修改': 'edited {0} min ago',
+  '{0} 小时前修改': 'edited {0} h ago',
+  '{0} 天前修改': 'edited {0} d ago',
+  '关闭': 'Close',
+  '它不会自己发消息，只是把引用放进输入框。你可以先引用，再给指令，例如「这段台词换个音色」。': 'It does not send anything; it only puts the reference in the composer. Quote first, then give the instruction — for example “give this line another voice”.',
+  '阈值 dB': 'Threshold dB',
+  '比率': 'Ratio',
+  '增益 dB': 'Gain dB',
+  '起音 s': 'Attack s',
+  '释放 s': 'Release s',
+  '膝 dB': 'Knee dB',
+  '封顶 dB': 'Ceiling dB',
+  '时间 s': 'Time s',
+  '反馈': 'Feedback',
+  '压低 dB': 'Duck by dB',
+  '速率': 'Rate',
+  '半音': 'Semitones',
+  '房间': 'Room',
+  '阻尼': 'Damping',
+  '湿声': 'Wet',
+  '干声': 'Dry',
+  '宽度': 'Width',
+  '低架': 'Low shelf',
+  '高架': 'High shelf',
+  '按频段加减；六段够用': 'Boost or cut per band; six is plenty',
+  '超过阈值就压，人声更贴': 'Compresses above the threshold, which sits a voice forward',
+  '封顶，保证不削波': 'Caps the level so nothing clips',
+  '空间感；与导出一致': 'Space; matches what the export renders',
+  '回声；反馈决定衰减': 'Echo; feedback sets how quickly it dies away',
+  '旁白出现时压低这条': 'Pulls this down whenever the narration speaks',
+  '变速/变调；与导出一致': 'Rate and pitch; matches what the export renders',
+}
+
+// Start from the system language so the first frame is already right; the
+// configured preference overrides it once /state arrives.
+let LANG = detectLanguage(null)
+
+// The configured preference, kept outside React: the shell reads the tab label
+// through a plain thunk, so the label cannot wait for a component to re-render
+// before it reads the right language (2026-11-10).
+let PREFERENCE = 'auto'
+
+/** Current language, after the settings page has loaded the config. */
+export function language() {
+  return LANG
+}
+
+/** Adopt the configured language. Called once the state arrives. */
+export function setLanguage(value) {
+  LANG = value === 'en' ? 'en' : 'zh'
+  return LANG
+}
+
+/** Remember whether the person pinned a language or left it on "auto". */
+export function setLanguagePreference(value) {
+  PREFERENCE = value === 'zh' || value === 'en' ? value : 'auto'
+  return PREFERENCE
+}
+
+/**
+ * What the interface should be showing right now, given the shell's locale.
+ *
+ * A pinned `zh` / `en` wins — that is what the person chose on the settings page.
+ * Otherwise it is whatever the shell is showing, falling back to the language
+ * already adopted.
+ */
+export function resolveLanguage(locale) {
+  if (PREFERENCE === 'zh' || PREFERENCE === 'en') return PREFERENCE
+  return languageFromLocale(locale) ?? LANG
+}
+
+export function detectLanguage(config) {
+  const preference = config?.ui?.language || 'auto'
+  if (preference === 'zh' || preference === 'en') return preference
+  const nav = typeof navigator === 'undefined'
+    ? 'zh'
+    : String((navigator.languages && navigator.languages[0]) || navigator.language || 'zh')
+  return /^zh/i.test(nav) ? 'zh' : 'en'
+}
+
+/**
+ * The language the shell is currently showing, as `zh` or `en`.
+ *
+ * `locale` is the shell's own service: `getSnapshot().active` is a BCP 47 tag.
+ * Used only when the plugin preference is "auto" — a pinned `zh` or `en` wins,
+ * because that is what the person asked for on the settings page.
+ */
+export function languageFromLocale(locale) {
+  const active = locale?.getSnapshot?.()?.active
+  if (typeof active !== 'string' || active === '') return null
+  return /^zh/i.test(active) ? 'zh' : 'en'
+}
+
+export function t(key, ...args) {
+  return translate(LANG, key, ...args)
+}
+
+/**
+ * Translate into a language given explicitly.
+ *
+ * The tab label is read by the shell through a plain thunk, outside any component,
+ * so it cannot rely on the module variable having been updated by a mounted
+ * panel. It resolves the language on every call instead (2026-11-10).
+ */
+export function translate(lang, key, ...args) {
+  const template = lang === 'zh' ? key : (EN[key] ?? key)
+  return template.replace(/\{(\d+)\}/g, (_, index) => String(args[Number(index)] ?? ''))
+}

@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { encodeWav } from '../audio/wav.js'
 
 let workingDirectoryService
@@ -54,6 +54,79 @@ export function resolveOutput(workspaceRoot, output, defaultName) {
     return candidate
   }
   return join(outputDir(workspaceRoot), defaultName)
+}
+
+/**
+ * Where a generated file is written before it belongs to anything.
+ *
+ * Always inside the workspace's `.anyaudio/`, so a task can never leave audio in
+ * a place the project does not know about. The generating tools attach this file
+ * to a project and only then copy it out to wherever the person asked for it
+ * (improvement plan 01, I-10).
+ */
+export function stageDir(workspaceRoot) {
+  return join(workspaceRoot, '.anyaudio', 'out')
+}
+
+export function stagePath(workspaceRoot, defaultName) {
+  return join(stageDir(workspaceRoot), defaultName)
+}
+
+/**
+ * Scratch space for a file whose only purpose is to be copied somewhere else.
+ *
+ * Deliberately not `out/`: that directory is where a person looks for what a
+ * tool produced, and a stem exists for exactly as long as it takes to land in
+ * `materials/` (improvement plan 03, I-39). Keeping the two apart is the
+ * difference between "this project is 586 MB" and "this project is 47 MB and
+ * the other 539 MB was the same audio written twice".
+ */
+export function scratchDir(workspaceRoot) {
+  return join(workspaceRoot, '.anyaudio', 'tmp')
+}
+
+export function scratchPath(workspaceRoot, defaultName) {
+  return join(scratchDir(workspaceRoot), defaultName)
+}
+
+/**
+ * Where the delivered copy goes. `requested` wins when the caller named a path;
+ * otherwise the configured output directory; otherwise the staging file itself is
+ * the only copy and nothing else is written.
+ */
+export function deliveryPath({ workspaceRoot, outputDir: configuredDir, requested, stagedPath }) {
+  if (typeof requested === 'string' && requested.trim()) {
+    return isAbsolute(requested) ? requested : resolve(workspaceRoot, requested)
+  }
+  const base = configuredDir && String(configuredDir).trim()
+    ? (isAbsolute(String(configuredDir).trim()) ? String(configuredDir).trim() : resolve(workspaceRoot, String(configuredDir).trim()))
+    : null
+  if (!base) return null
+  return join(base, basename(stagedPath))
+}
+
+/** Copy `from` to `to` unless they are the same file. Returns the delivered path. */
+export async function deliverCopy(from, to) {
+  if (!to) return null
+  if (resolve(from) === resolve(to)) return to
+  await mkdir(dirname(to), { recursive: true })
+  await copyFile(from, to)
+  return to
+}
+
+/**
+ * A generating tool without a project is the failure this whole change exists to
+ * stop: the audio would be delivered as a loose file nobody can adjust. The
+ * message has to name the next step, because the Agent reads it and acts.
+ */
+export function requireProjectId(args, toolName) {
+  const projectId = typeof args?.projectId === 'string' ? args.projectId.trim() : ''
+  if (projectId) return projectId
+  throw new Error(
+    `${toolName} writes into a clip bay project: pass "projectId". `
+    + 'Run anyaudio_project mode:"create" first when this task has no project yet, '
+    + 'then pass the id it returns — the result has to be something the person can open and adjust.',
+  )
 }
 
 export function relativeToWorkspace(workspaceRoot, path) {
@@ -179,15 +252,58 @@ export function findFfmpeg() {
   return ffmpegCache
 }
 
-export function runFfmpeg(command, args, { timeoutMs = 600000 } = {}) {
+function abortError() {
+  const error = new Error('the media process was cancelled')
+  error.name = 'AbortError'
+  return error
+}
+
+/** Kill the whole process tree: on Windows a killed parent leaves children running. */
+function killTree(child) {
+  if (!child?.pid) return
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+      return
+    } catch {
+      // fall through to the plain kill below
+    }
+  }
+  try {
+    child.kill('SIGKILL')
+  } catch {
+    // the process already exited
+  }
+}
+
+export function runFfmpeg(command, args, { timeoutMs = 600000, signal } = {}) {
   return new Promise((resolvePromise, reject) => {
+    if (signal?.aborted) {
+      reject(abortError())
+      return
+    }
     const child = spawn(command, args, { windowsHide: true })
     let stderr = ''
     let stdout = ''
+    let settled = false
+    const settle = (run) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      run()
+    }
+    const onAbort = () => {
+      // Cancelling must reach the process itself, not just stop waiting: an
+      // orphaned encoder keeps burning CPU and keeps writing the output file.
+      killTree(child)
+      settle(() => reject(abortError()))
+    }
     const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error(`ffmpeg timed out after ${Math.round(timeoutMs / 1000)}s`))
+      killTree(child)
+      settle(() => reject(new Error(`ffmpeg timed out after ${Math.round(timeoutMs / 1000)}s`)))
     }, timeoutMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
     child.stdout?.on('data', (chunk) => {
       stdout += chunk
     })
@@ -195,13 +311,11 @@ export function runFfmpeg(command, args, { timeoutMs = 600000 } = {}) {
       stderr += chunk
     })
     child.on('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
+      settle(() => reject(error))
     })
     child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code === 0) resolvePromise({ stdout, stderr })
-      else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim().split('\n').slice(-3).join(' ')}`))
+      if (code === 0) settle(() => resolvePromise({ stdout, stderr }))
+      else settle(() => reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim().split('\n').slice(-3).join(' ')}`)))
     })
   })
 }
