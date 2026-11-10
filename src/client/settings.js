@@ -7,7 +7,7 @@
  * cannot be the source of truth.
  */
 import { h, Fragment, useState, useEffect, useCallback, useMemo, C, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card } from './ui.js'
-import { t, detectLanguage, setLanguage, language } from './i18n.js'
+import { t, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
 import { api } from './api.js'
 
 function FontsTab({ state, reload, notify }) {
@@ -521,6 +521,10 @@ function Page() {
   }
   if (!state) return h('div', { style: S.page }, h('p', { style: S.desc }, t('正在读取 AnyAudio 设置…')))
 
+  // Record the preference as well as adopting it: the clip bay's tab label is
+  // translated outside any component, so it resolves the language on every read
+  // and needs to know whether a language is pinned or left on "auto".
+  setLanguagePreference(state.config?.ui?.language || 'auto')
   setLanguage(detectLanguage(state.config))
   if (language() === 'en') document.documentElement.lang = 'en'
 

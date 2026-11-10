@@ -14,7 +14,8 @@
 import { h } from './ui.js'
 import { Page } from './settings.js'
 import { ClipBayPanel, CLIP_BAY_ID } from './clipbay/panel.js'
-import { detectLanguage, t } from './i18n.js'
+import { detectLanguage, resolveLanguage, setLanguagePreference, translate } from './i18n.js'
+import { api } from './api.js'
 import { bytes } from './ui.js'
 
 export const name = 'any-audio'
@@ -27,6 +28,16 @@ function apply(ctx) {
   // load time: every other tab switches the moment the setting changes, and a
   // clip bay that needs a refresh looks broken next to them (2026-11-10).
   const locale = ctx.get('locale')
+
+  // The tab label is a thunk the shell calls on its own schedule — outside any
+  // component, and before the panel has ever mounted. So the preference is read
+  // here, once, from the plugin's own config, and the label resolves the
+  // language on every call rather than trusting a module variable a mounted
+  // component happened to set. Without this the tab stayed 剪辑台 after the rest
+  // of the interface had switched to English.
+  api('/state')
+    .then((data) => setLanguagePreference(data.config?.ui?.language || 'auto'))
+    .catch(() => {})
 
   try {
     ctx.slots.inject('settings.section', () => ctx.slots.register({
@@ -49,7 +60,7 @@ function apply(ctx) {
       name: 'conversation.view',
       id: CLIP_BAY_ID,
       order: 40,
-      label: () => t('剪辑台'),
+      label: () => translate(resolveLanguage(locale), '剪辑台'),
     }, (props) => h(ClipBayPanel, { ...props, locale })))
   } catch (error) {
     console.error('[any-audio] clip bay view failed', error)

@@ -15,7 +15,7 @@
  */
 import { h, useState, useEffect, useCallback, S, C, Btn, Notice, Select, Slider, Switch, useSurface } from '../ui.js'
 import { api, API } from '../api.js'
-import { t, detectLanguage, setLanguage, languageFromLocale } from '../i18n.js'
+import { t, detectLanguage, setLanguage, languageFromLocale, setLanguagePreference } from '../i18n.js'
 import { useProject } from './state.js'
 import { usePlayback } from './audio.js'
 import { useDraftAutosave } from './saving.js'
@@ -879,19 +879,36 @@ export function ClipBayPanel({ useWorkspaces, sessionId, inputActions, useInput,
   useEffect(() => { setOpened(null) }, [workspace?.path])
 
   // The panel has no config of its own; it borrows the settings page's language
-  // preference so both halves of the plugin read the same way.
+  // preference so both halves of the plugin read the same way. The preference is
+  // recorded in the shared module too, because the tab label is resolved outside
+  // this component and has to agree with what is drawn here.
   useEffect(() => {
     let cancelled = false
     api('/state')
       .then((data) => {
         if (cancelled) return
-        const value = data.config?.ui?.language || 'auto'
+        const value = setLanguagePreference(data.config?.ui?.language || 'auto')
         setPreference(value)
         adoptLanguage(detectLanguage(data.config))
       })
       .catch(() => {})
     return () => { cancelled = true }
   }, [])
+
+  // "auto" means "whatever the shell is showing", and the shell publishes that as
+  // its own locale service. Subscribing here is what makes the tab follow a
+  // language change the same instant every other tab does, instead of waiting for
+  // a reload. A pinned zh/en ignores it — that is what the person chose.
+  useEffect(() => {
+    if (!locale?.subscribe) return undefined
+    const apply = () => {
+      if (preference !== null && preference !== 'auto') return
+      const next = languageFromLocale(locale)
+      if (next) adoptLanguage(next)
+    }
+    apply()
+    return locale.subscribe(apply)
+  }, [locale, preference])
 
   // "auto" means "whatever the shell is showing", and the shell publishes that as
   // its own locale service. Subscribing here is what makes the tab follow a

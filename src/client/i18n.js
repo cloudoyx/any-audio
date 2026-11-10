@@ -166,9 +166,9 @@ export const EN = {
   '已保存': 'Saved',
   '未知': 'Unknown',
 
-  '剪辑台': 'Clip bay',
+  '剪辑台': 'DAW',
   '正在读取工程…': 'Loading projects…',
-  '这个会话还没有归属的工作区。先打开一个工作区，再回到剪辑台。': 'This session has no workspace yet. Open one, then come back to the clip bay.',
+  '这个会话还没有归属的工作区。先打开一个工作区，再回到剪辑台。': 'This session has no workspace yet. Open one, then come back to the DAW.',
   '含视频': 'Video',
   '个工程': 'projects',
   '轨': 'tracks',
@@ -245,7 +245,7 @@ export const EN = {
   '导出失败': 'Export failed',
   '已取消。': 'Cancelled.',
   '帮助': 'Help',
-  '剪辑台使用说明': 'Clip bay guide',
+  '剪辑台使用说明': 'DAW guide',
   '一句话': 'The short version',
   'Agent 负责生成素材和批量修改；你负责试听、微调和拍板。': 'The Agent generates material and makes bulk changes; you listen, fine-tune and decide.',
   '保存与草稿': 'Saving and drafts',
@@ -270,7 +270,7 @@ export const EN = {
   '素材': 'Material',
   '草稿': 'Draft',
   '临时': 'Scratch',
-  '临时目录可以随时删；素材和工程别手动改，交给剪辑台或 Agent。': 'The scratch folder is safe to delete; leave materials and the project to the clip bay or the Agent.',
+  '临时目录可以随时删；素材和工程别手动改，交给剪辑台或 Agent。': 'The scratch folder is safe to delete; leave materials and the project to the DAW or the Agent.',
   '做一个 30 秒的水墨动画：石缝里的一粒种子长成树苗。配一点中国风音乐和风声，不要旁白。': 'Make a 30-second ink-wash animation: a seed in a rock crevice grows into a sapling. Add a little Chinese-style music and wind, no narration.',
   '古筝主旋律，弦乐铺底，大提琴走低音；人声出现时把音乐压下去。': 'Guzheng lead, strings bed, cello on the low end; pull the music down when the voice enters.',
   '帮我写一首日式 RPG 的战斗曲目，可无限循环，30 秒到 60 秒。乐器用鼓组 + 电吉他 + 弦乐。': 'Write me a Japanese RPG battle theme, loopable, 30 to 60 seconds. Drums, electric guitar and strings.',
@@ -323,7 +323,7 @@ export const EN = {
   '设置总线效果链（{0}）': 'Set the bus effect chain ({0})',
   '这个工作区还没有工程。在会话里像平时一样提需求，Agent 会自己建工程并渲染音频：': 'This workspace has no projects yet. Describe the work in a chat as usual and the Agent creates one and renders the audio:',
   '已复制': 'Copied',
-  '也可以直接说「新建一个剪辑台工程」，先有一个空工程再让它往里加东西。': 'You can also just say “create a clip bay project” and add material to the empty project afterwards.',
+  '也可以直接说「新建一个剪辑台工程」，先有一个空工程再让它往里加东西。': 'You can also just say “create a DAW project” and add material to the empty project afterwards.',
   '未保存': 'unsaved',
   '刚刚修改': 'edited just now',
   '{0} 分钟前修改': 'edited {0} min ago',
@@ -363,6 +363,11 @@ export const EN = {
 // configured preference overrides it once /state arrives.
 let LANG = detectLanguage(null)
 
+// The configured preference, kept outside React: the shell reads the tab label
+// through a plain thunk, so the label cannot wait for a component to re-render
+// before it reads the right language (2026-11-10).
+let PREFERENCE = 'auto'
+
 /** Current language, after the settings page has loaded the config. */
 export function language() {
   return LANG
@@ -372,6 +377,24 @@ export function language() {
 export function setLanguage(value) {
   LANG = value === 'en' ? 'en' : 'zh'
   return LANG
+}
+
+/** Remember whether the person pinned a language or left it on "auto". */
+export function setLanguagePreference(value) {
+  PREFERENCE = value === 'zh' || value === 'en' ? value : 'auto'
+  return PREFERENCE
+}
+
+/**
+ * What the interface should be showing right now, given the shell's locale.
+ *
+ * A pinned `zh` / `en` wins — that is what the person chose on the settings page.
+ * Otherwise it is whatever the shell is showing, falling back to the language
+ * already adopted.
+ */
+export function resolveLanguage(locale) {
+  if (PREFERENCE === 'zh' || PREFERENCE === 'en') return PREFERENCE
+  return languageFromLocale(locale) ?? LANG
 }
 
 export function detectLanguage(config) {
@@ -397,6 +420,17 @@ export function languageFromLocale(locale) {
 }
 
 export function t(key, ...args) {
-  const template = LANG === 'zh' ? key : (EN[key] ?? key)
+  return translate(LANG, key, ...args)
+}
+
+/**
+ * Translate into a language given explicitly.
+ *
+ * The tab label is read by the shell through a plain thunk, outside any component,
+ * so it cannot rely on the module variable having been updated by a mounted
+ * panel. It resolves the language on every call instead (2026-11-10).
+ */
+export function translate(lang, key, ...args) {
+  const template = lang === 'zh' ? key : (EN[key] ?? key)
   return template.replace(/\{(\d+)\}/g, (_, index) => String(args[Number(index)] ?? ''))
 }
