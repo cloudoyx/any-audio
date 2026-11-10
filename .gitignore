@@ -17,4 +17,9 @@ samples/*-spectrogram.png
 docs/assets/demo.mp3
 docs/assets/demo-waveform.png
 docs/assets/settings-*.png
+docs/clip-bay-spec.md
+docs/clip-bay-plan.md
+docs/clip-bay-acceptance.md
+docs/clip-bay-improvement-*.md
+dsh-image-gen/
 output
