@@ -7,15 +7,20 @@
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4b6bfb.svg)](#install)
 [![Status](https://img.shields.io/badge/status-early%20release-orange.svg)](#known-limitations)
 
-[Hear the difference](#hear-the-difference) · [Install](#install) · [Sound sources](#sound-sources) · [Speech TTS](#speech-tts) · [中文说明](https://github.com/cloudoyx/any-audio/blob/main/README.zh-CN.md)
+[Hear the difference](#hear-the-difference) · [The DAW](#the-daw) · [Install](#install) · [Sound sources](#sound-sources) · [Speech TTS](#speech-tts) · [中文说明](https://github.com/cloudoyx/any-audio/blob/main/README.zh-CN.md)
 
 </div>
 
 ---
 
-AnyAudio is an audio production toolkit for AI agents. It turns a sound idea into an actual audio project: write notes and render real instruments, write lines and generate speech, drop in sound effects, arrange the structure, and mix the multitrack result. Video soundtracks are just one use — scenes, sound design, standalone music, audiobooks, podcasts and game audio all come out of the same pipeline.
+AnyAudio is an audio production toolkit for AI agents. It turns a sound idea into an actual audio project: write notes and render real instruments, write lines and generate speech, drop in sound effects, arrange the structure, mix the multitrack result, then open it in the DAW to audition and fine-tune it track by track. Video soundtracks are just one use — scenes, sound design, standalone music, audiobooks, podcasts and game audio all come out of the same pipeline.
 
 The agent keeps the creative decisions. AnyAudio supplies the tools and execution needed to turn a sound idea into a finished audio file.
+
+<div align="center">
+  <img src="docs/assets/daw.png" alt="A real project inside the DAW" width="100%">
+  <sub>A real project in the DAW: narration, glockenspiel, marimba, plucked bass, a warm pad and light percussion each on their own track — six tracks, eleven clips, voices and music on one timeline</sub>
+</div>
 
 ## What it solves
 
@@ -23,7 +28,7 @@ Models can already write code that makes sound, but it rarely sounds like an ins
 
 - **Real instrument timbres** — rendered from local sample banks instead of hand-written oscillators.
 - **Notes land directly on the timeline** — millisecond accuracy; music, narration and effects share one clock.
-- **Automatic mix balance** — tracks are placed in order with per-track gain, pan and fades; declaring a track as `narration` makes the plugin duck the other buses under the voice, and the master is peak-normalised so the whole mix does not clip.
+- **Automatic mix balance** — tracks are placed in order with per-track gain, pan and fades; declaring a track as `narration` makes the plugin duck the other buses under the voice, and the master is peak-normalised so the whole mix does not clip. Every change can be auditioned section by section, and changed again.
 - **Effects and voices** — sound effects either sampled from the installed banks or generated procedurally, plus speech through Edge TTS and MiMo-V2.5-TTS (currently free).
 
 ## Hear the difference
@@ -61,6 +66,14 @@ The same 24-second scene, five lines of dialogue, plus rain, footsteps and a doo
 <table><tr><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-a-waveform.png" width="100%"><sub>Speech and effects version A — waveform and spectrogram</sub></td><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-b-waveform.png" width="100%"><sub>Speech and effects version B — waveform and spectrogram</sub></td></tr><tr><td>https://github.com/user-attachments/assets/c4ae1a17-d7bc-4db1-b96a-be244fd75358</td><td>https://github.com/user-attachments/assets/4fca1c9e-b373-4ab7-b18b-afe3e81ad102</td></tr></table>
 
 Version B's voices match the emotion and pacing of the scene more closely, and its effects are more realistic and more detailed.
+
+## The DAW
+
+A visual workbench. Once the agent's music, voices and effects land here you can see a waveform for every track, drag clips around, change clip gain, add fades, and listen to any part of it.
+
+A traditional DAW is built for a person, with AI as an assistant. This one is the other way round: **the agent generates and makes bulk changes, while you direct the agent and can also audition and fine-tune by hand.** A line that lands half a second late, an effect that buries the voice — fixing it by hand is far quicker than regenerating.
+
+Person and agent share one timeline. Select a range, press "Add to conversation", and that range becomes a reference; write what you want changed after it and the agent knows exactly where you mean. The reverse works too: adjust one clip yourself until it sounds right, then have the agent apply that to the rest.
 
 ## Install
 
@@ -113,6 +126,10 @@ You can even build an audiobook from scratch:
 
 > Turn Chapter 1 of Romance of the Three Kingdoms into an audiobook — deep, rich narration, distinguishable character voices, with simple background music and effects.
 
+Then open the **DAW** tab at the top; the audio is already laid out by track:
+
+> Move the third line half a second later, then take 2 dB off the whole narration track.
+
 ## Sound sources
 
 The repository does not bundle SoundFonts. The plugin offers two **suggested** banks — GeneralUser GS as the default foundation and MuseScore General as an extra general-purpose orchestral bank — and it can also load compatible SoundFont files (`.sf2`, `.sf3`, `.dls`) placed in `~/.dsh/anyaudio/fonts`. That directory is one shared library for every project and agent session on the machine, so a bank installed once is available everywhere.
@@ -139,6 +156,9 @@ MiMo is opt-in: saving a key does not switch the default engine, you choose it e
 
 ## Known limitations
 
+- **Project size caps** — a project is at most 15 minutes long and 20 tracks wide; going past either is an error.
+- **Audio only, for now** — a video can sit in the project as a reference picture, but this version does not trim, join or transition it.
+- **Tracks hold finished audio** — every clip on the timeline is an already-rendered wav/mp3 that can be auditioned on its own; MIDI, scores and parameters never go on the timeline.
 - **SoundFont only** — no SFZ, Kontakt or VST; converting other source formats is out of scope for this version.
 - **No per-note envelope control** — attack and release come from the preset; use short notes with gaps for staccato and velocity plus expression for dynamics.
 - **Chinese instruments are GM approximations** — `guzheng` maps to Koto, `dizi` to Flute, `erhu` to Fiddle; dedicated banks will do better.

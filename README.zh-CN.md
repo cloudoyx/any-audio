@@ -13,15 +13,20 @@ An agent-driven audio production toolkit for music, sound effects, narration, an
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4b6bfb.svg)](#安装)
 [![Status](https://img.shields.io/badge/status-early%20release-orange.svg)](#已知限制)
 
-[先听为快](#先听为快) · [安装](#安装) · [音源](#音源) · [语音-tts](#语音-tts) · [English](https://github.com/cloudoyx/any-audio/blob/main/README.md)
+[先听为快](#先听为快) · [剪辑台](#剪辑台) · [安装](#安装) · [音源](#音源) · [语音-tts](#语音-tts) · [English](https://github.com/cloudoyx/any-audio/blob/main/README.md)
 
 </div>
 
 ---
 
-AnyAudio 是面向 AI Agent 的音频制作工具。它把"声音创意"翻译成可执行的音频工程：写音符并渲染真实乐器、写台词并生成高质量语音、注入音效并编排结构、完成多轨混音。视频配乐、场景音效、独立音乐、有声书、播客、游戏音效，全部都可以用它做出来。
+AnyAudio 是面向 AI Agent 的音频制作工具。它把"声音创意"翻译成可执行的音频工程：写音符并渲染真实乐器、写台词并生成高质量语音、注入音效并编排结构、完成多轨混音，再进剪辑台逐轨试听和精调。视频配乐、场景音效、独立音乐、有声书、播客、游戏音效，全部都可以用它做出来。
 
 Agent 负责创意与编排，AnyAudio 提供将声音创意转化为实际音频作品所需的工具与执行能力。
+
+<div align="center">
+  <img src="docs/assets/daw.png" alt="剪辑台里的一个真实工程" width="100%">
+  <sub>剪辑台里的一个真实工程：旁白、钟琴、马林巴、拨弦低音、暖垫、轻打击各占一轨，六轨十一段素材，语音与音乐共用同一条时间轴</sub>
+</div>
 
 ## 它解决什么问题
 
@@ -29,7 +34,7 @@ Agent 负责创意与编排，AnyAudio 提供将声音创意转化为实际音�
 
 - **真实乐器音色**：用本地音源采样渲染，而不是手写振荡器。
 - **音符直接落在时间轴上**：精确到毫秒，音乐、旁白、音效共用同一个时钟。
-- **混音自动平衡**：按顺序放置多轨，支持每轨增益、声像与淡入淡出；把某轨标为 `narration` 时，插件会在人声出现时自动下压其它总线；母带做峰值归一，整体不会削波。
+- **混音自动平衡**：按顺序放置多轨，支持每轨增益、声像与淡入淡出；把某轨标为 `narration` 时，插件会在人声出现时自动下压其它总线；母带做峰值归一，整体不会削波。调完可以逐段试听，不满意再改。
 - **音效与配音**：音效既可取自已安装音源的采样，也可程序化合成；语音支持 Edge TTS 与 MiMo-V2.5-TTS（官方免费中）。
 
 ## 先听为快
@@ -67,6 +72,14 @@ B 版使用音源素材，声音更真实，高频细节更多、动态余量更
 <table><tr><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-a-waveform.png" width="100%"><sub>语音与音效 A 版 — 波形与频谱图</sub></td><td width="50%" valign="top"><img src="https://raw.githubusercontent.com/cloudoyx/any-audio/main/samples/tts-sfx-version-b-waveform.png" width="100%"><sub>语音与音效 B 版 — 波形与频谱图</sub></td></tr><tr><td>https://github.com/user-attachments/assets/c4ae1a17-d7bc-4db1-b96a-be244fd75358</td><td>https://github.com/user-attachments/assets/4fca1c9e-b373-4ab7-b18b-afe3e81ad102</td></tr></table>
 
 B 版人声情绪和节奏更贴合场景，音效更真实，细节更多。
+
+## 剪辑台
+
+一个可视化工作台。Agent 生成的音乐、配音、音效落进来之后，你能看到每一轨的波形，拖动位置、调音量、加淡入淡出、逐段试听。
+
+传统 DAW 是给人用的，AI 只是辅助。这个剪辑台反过来：**Agent 负责生成和批量调整，人负责给 Agent 下指令，也可以亲自试听并精调。** 某句台词晚了半秒、某个音效盖住了人声，亲手改比重新生成一遍快得多。
+
+人和 Agent 在同一条时间轴上协作：选中一段点「添加到对话」，那段就变成一句引用，在它后面写你要怎么改，Agent 就知道你说的是哪儿；反过来也可以先自己调一个片段当样板，试听满意了，再让 Agent 照这个批量改其他片段。
 
 ## 安装
 
@@ -119,6 +132,10 @@ node scripts/anyaudio-cli.mjs render score.json out.wav
 
 > 帮我把《三国演义》第一章做成有声小说，旁白低沉浑厚，角色音色要有所区分，配一些简单的配乐和音效即可。
 
+做完之后打开顶部的**剪辑台**，声音已经按轨摆好了：
+
+> 把第三句台词往后挪半秒，再把整条旁白轨降 2 dB。
+
 ## 音源
 
 仓库不打包 SoundFont。插件提供两套**建议安装**的音源——GeneralUser GS 作为默认基础音源，MuseScore General 作为额外的通用管弦乐音源——也支持加载放入 `~/.dsh/anyaudio/fonts` 的兼容 SoundFont 音源（`.sf2`、`.sf3`、`.dls`）。该目录是整台机器共用的音源库，所有项目与 Agent 会话共用同一份，装过一次即可处处可用。
@@ -145,6 +162,9 @@ MiMo 是手动选项：保存 Key 不会自动切换默认引擎，要显式选�
 
 ## 已知限制
 
+- **工程规模上限**：单个工程最长 15 分钟、最多 20 轨，超出会直接报错。
+- **这版只剪音频**：视频可以作为参考画面一起放进来，但画面上不做裁剪、拼接或转场。
+- **轨道里必须是成品音频**：放在时间轴上的每一段都是已经渲染好的 wav/mp3，可以单独试听；MIDI、乐谱和参数不会直接进时间轴。
 - **只支持 SoundFont**：不支持 SFZ、Kontakt、VST；转换其它音源格式不在本版范围。
 - **没有逐音符包络控制**：发音与释放由预设决定；断奏用短音符加缝隙，强弱用力度与表情控制。
 - **中国乐器是 GM 近似**：`guzheng` 映射 Koto、`dizi` 映射 Flute、`erhu` 映射 Fiddle；专用音源会更好。
