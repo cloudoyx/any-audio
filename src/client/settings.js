@@ -9,7 +9,7 @@
 import { h, Fragment, useState, useEffect, useCallback, useMemo, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card } from './ui.js'
 import { t, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
 import { api } from './api.js'
-import { BASE_PACK } from './base-pack.js'
+import { BASE_PACK, DownloadLinks } from './base-pack.js'
 
 function FontsTab({ state, reload, notify }) {
   const [job, setJob] = useState(null)
@@ -232,7 +232,7 @@ function FontsTab({ state, reload, notify }) {
     ),
     h(Card, { title: t('安装音源'), desc: t('填一个 .sf2 / .sf3 / .dls 文件的路径。7z / zip 请先解压。') },
       h('div', { style: S.row },
-        h(TextInput, { value: customPath, onChange: setCustomPath, placeholder: 'C:\\Downloads\\Piano.sf2' }),
+        h(TextInput, { value: customPath, onChange: setCustomPath, placeholder: t('粘贴文件路径') }),
         h(Btn, { disabled: !customPath.trim() || installing || busy.startsWith('install:'), onClick: () => install({ fromPath: customPath.trim() }) }, t('安装')),
       ),
     ),
@@ -530,17 +530,7 @@ function FxLibTab({ state, reload, notify }) {
             ),
             h('div', { style: S.desc }, t(BASE_PACK.summary)),
             h('div', { style: S.desc }, t('压缩包，下载后解压，把解压出来的 BaseSFX 目录路径填到下面「安装」。')),
-            showDownloads
-              ? h('div', { style: S.row },
-                BASE_PACK.downloads.map(item => h('a', {
-                  key: item.label,
-                  href: item.url,
-                  target: '_blank',
-                  rel: 'noreferrer',
-                  style: { ...S.btn('plain'), textDecoration: 'none', display: 'inline-block' },
-                }, item.note ? `${item.label}（${item.note}）` : item.label)),
-              )
-              : null,
+            showDownloads ? h(DownloadLinks, null) : null,
           ),
         ),
     ),
@@ -575,7 +565,7 @@ function FxLibTab({ state, reload, notify }) {
     ),
     h(Card, { title: t('安装音效包'), desc: t('填一个包含 manifest.json 的包目录。没有 manifest 的目录先用打包脚本生成。') },
       h('div', { style: S.row },
-        h(TextInput, { value: installPath, placeholder: 'D:\\Downloads\\BaseSFX', onChange: setInstallPath }),
+        h(TextInput, { value: installPath, placeholder: t('把解压出来的 BaseSFX 文件夹路径粘贴到这里'), onChange: setInstallPath }),
         h(Btn, { kind: 'primary', disabled: busy === 'install' || !installPath.trim(), onClick: install }, t('安装')),
       ),
     ),

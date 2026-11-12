@@ -14,7 +14,7 @@
 import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, TextInput, Notice, useSurface } from './ui.js'
 import { t } from './i18n.js'
 import { api, API } from './api.js'
-import { BASE_PACK } from './base-pack.js'
+import { BASE_PACK, DownloadLinks } from './base-pack.js'
 import { createPortal } from 'react-dom'
 
 /** Bump this to show the guide again after a release that adds steps. */
@@ -109,18 +109,6 @@ function Modal({ title, step, hero, children, onClose }) {
 
 function Actions({ children }) {
   return h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4, flexWrap: 'wrap' } }, children)
-}
-
-function Downloads() {
-  return h('div', { style: { ...S.row, gap: 8 } },
-    BASE_PACK.downloads.map((item) => h('a', {
-      key: item.label,
-      href: item.url,
-      target: '_blank',
-      rel: 'noreferrer',
-      style: { ...S.btn('plain'), textDecoration: 'none', display: 'inline-block' },
-    }, item.note ? `${item.label}（${item.note}）` : item.label)),
-  )
 }
 
 export function Guide() {
@@ -237,6 +225,9 @@ export function Guide() {
   const fontInstalled = Boolean(fonts?.rows?.length)
   const packInstalled = Boolean(packs?.some((pack) => pack.id === BASE_PACK.id))
   const percent = job && job.total ? Math.round((job.received / job.total) * 100) : 0
+  // The note belongs to the step that produced it: a download message from the
+  // sound-source step must not follow the person into the pack step.
+  const goTo = (next) => { setNote(''); setStep(next) }
 
   if (step === 0) {
     return h(Modal, { title: 'AnyAudio', step: 1, hero: HERO, onClose: finish },
@@ -244,7 +235,7 @@ export function Guide() {
       h('p', { style: S.desc }, t('它本身不带音源和音效包，需要装一次，大概 2 分钟。')),
       h(Actions, null,
         h(Btn, { onClick: finish }, t('跳过')),
-        h(Btn, { kind: 'primary', onClick: () => setStep(1) }, t('开始')),
+        h(Btn, { kind: 'primary', onClick: () => goTo(1) }, t('开始')),
       ),
     )
   }
@@ -262,7 +253,7 @@ export function Guide() {
       note ? h(Notice, null, note) : null,
       h(Actions, null,
         fontInstalled || job ? null : h(Btn, { kind: 'primary', disabled: busy === 'font', onClick: installFont }, t('下载安装')),
-        h(Btn, { onClick: () => setStep(2) }, fontInstalled || job ? t('下一步') : t('跳过')),
+        h(Btn, { onClick: () => goTo(2) }, fontInstalled || job ? t('下一步') : t('跳过')),
       ),
     )
   }
@@ -271,18 +262,18 @@ export function Guide() {
     return h(Modal, { title: t('装音效包'), step: 3, onClose: finish },
       h('p', { style: S.desc }, t('真实录音的音效库。基础包 BaseSFX 有 {0} 条：{1}。', BASE_PACK.count, t(BASE_PACK.summary))),
       packInstalled ? h(Notice, null, t('已安装')) : null,
-      downloadHint ? h(Downloads, null) : null,
+      downloadHint ? h(DownloadLinks, null) : null,
       downloadHint
         ? h(Notice, null, t('下载后解压，把解压出来的 BaseSFX 目录路径填在下面；也可以稍后在「设置 → AnyAudio → 音效包」里安装。建议先进入下一步。'))
         : null,
       h('div', { style: S.row },
-        h(TextInput, { value: installPath, placeholder: 'D:\\Downloads\\BaseSFX', onChange: setInstallPath }),
+        h(TextInput, { value: installPath, placeholder: t('把解压出来的 BaseSFX 文件夹路径粘贴到这里'), onChange: setInstallPath }),
         h(Btn, { kind: 'primary', disabled: busy === 'pack' || !installPath.trim(), onClick: installPack }, t('安装')),
       ),
       note ? h(Notice, null, note) : null,
       h(Actions, null,
         h(Btn, { onClick: () => { setDownloadHint(true) } }, t('去下载')),
-        h(Btn, { onClick: () => setStep(3) }, packInstalled ? t('下一步') : t('跳过')),
+        h(Btn, { onClick: () => goTo(3) }, packInstalled ? t('下一步') : t('跳过')),
       ),
     )
   }

@@ -102,6 +102,16 @@ function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
 
+// The font steps need one real bank to work with. A machine with none installed
+// is a normal state (the plugin ships without one), so those steps skip instead
+// of failing the whole run.
+function requireFont() {
+  if (seeded) return
+  const error = new Error('no SoundFont bank is installed on this machine; the font steps need one')
+  error.skip = true
+  throw error
+}
+
 server.listen(0, '127.0.0.1', async () => {
   const port = server.address().port
   const base = `http://127.0.0.1:${port}/api/dsh-any-audio`
@@ -131,8 +141,8 @@ server.listen(0, '127.0.0.1', async () => {
   await step('state exposes config, fonts and tts providers', () => {
     assert(state.ok, 'state not ok')
     assert(state.config?.tts?.provider === 'edge', `default provider should be edge, got ${JSON.stringify(state.config?.tts?.provider)}`)
-    assert(state.fonts.rows.length >= 1, 'installed fonts missing')
     assert(state.tts.providers.length === 2, 'two providers expected')
+    if (seeded) assert(state.fonts.rows.length >= 1, 'installed fonts missing')
   })
   console.log('  fonts:', state.fonts.rows.map((row) => `${row.name}:${row.status}`).join(', '))
   console.log('  default font:', state.fonts.defaultPath)
@@ -195,6 +205,7 @@ server.listen(0, '127.0.0.1', async () => {
   })
 
   await step('font preview renders a real WAV', async () => {
+    requireFont()
     const font = state.fonts.rows[0]
     const preview = await post('/sources/preview', { path: font.path })
     assert(preview.id, preview.error)
@@ -222,7 +233,9 @@ server.listen(0, '127.0.0.1', async () => {
     console.log(`  banner: ${bytes.length} bytes`)
   })
 
-  await step('font presets can be listed and previewed per program', async () => {    const font = state.fonts.rows.find((row) => row.recommendedId === 'generaluser') ?? state.fonts.rows[0]
+  await step('font presets can be listed and previewed per program', async () => {
+    requireFont()
+    const font = state.fonts.rows.find((row) => row.recommendedId === 'generaluser') ?? state.fonts.rows[0]
     const list = await get(`/sources/presets?path=${encodeURIComponent(font.path)}`)
     assert(list.ok && Array.isArray(list.presets), `preset list failed: ${list.error}`)
     assert(list.presets.length > 100, `expected a large GM preset list, got ${list.presets.length}`)
@@ -235,6 +248,7 @@ server.listen(0, '127.0.0.1', async () => {
   })
 
   await step('font verify compares sha256 with the recommended hash', async () => {
+    requireFont()
     const font = state.fonts.rows.find((row) => row.recommendedId === 'generaluser') ?? state.fonts.rows[0]
     const result = await post('/sources/verify', { path: font.path })
     assert(typeof result.ok === 'boolean', 'verify returned no verdict')
@@ -406,6 +420,7 @@ server.listen(0, '127.0.0.1', async () => {
   })
 
   await step('a saved default pointing at a missing path still renders, and page and render agree', async () => {
+    requireFont()
     const ghost = join(testRoot, 'gone-bank.sf2')
     await post('/config', { patch: { music: { font: ghost } } })
     const page = await get('/state')
@@ -420,6 +435,7 @@ server.listen(0, '127.0.0.1', async () => {
   })
 
   await step('an uninstalled saved default falls back, and page and render agree', async () => {
+    requireFont()
     await post('/config', { patch: { music: { font: 'electric-guitar-clean' } } })
     const page = await get('/state')
     assert(existsSync(page.fonts.defaultPath), `page default must exist, got ${page.fonts.defaultPath}`)
