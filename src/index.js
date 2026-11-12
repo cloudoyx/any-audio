@@ -7,9 +7,10 @@ import { setSfxHostServices } from './tools/sfx.js'
 import { setWorkingDirectoryService } from './tools/shared.js'
 
 export const name = 'any-audio'
-// `attachments` is what turns a drawn waveform into an image block the model can
-// see; `llm` is what says whether the current model can see one at all.
-export const inject = ['tools', 'attachments', 'llm']
+// Only `tools` is required: a missing attachments or llm service must degrade
+// the waveform picture to "no picture", never stop the plugin from loading. Both
+// are picked up lazily below, where absence is already handled.
+export const inject = ['tools']
 
 const SKILL_NAME = 'anyaudio-scoring'
 const SKILL_SOURCE = 'any-audio'
