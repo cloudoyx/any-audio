@@ -428,7 +428,7 @@ await step('MP4 export keeps the picture length when the audio is shorter', asyn
 
   const out = join(scratch, 'out', 'project.mp4')
   await exportProject({ project, workspaceRoot, outputPath: out, format: 'mp4' })
-  const { probeDuration } = await import('../src/tools/mix.js')
+  const { probeDuration } = await import('../src/audio/mux.js')
   const duration = await probeDuration(ffmpeg.command, out)
   near(duration, 3, 0.2, 'the MP4 must keep the 3s picture even though the project audio is 1s')
 })
