@@ -15,6 +15,7 @@ export const DEFAULTS = {
   version: CONFIG_VERSION,
   ui: {
     language: 'auto',
+    onboardedVersion: 0,
   },
   tts: {
     provider: 'edge',
@@ -157,6 +158,9 @@ export function normalizeConfig(input) {
   const uiRaw = isPlainObject(raw.ui) ? raw.ui : {}
   const language = UI_LANGUAGES.includes(uiRaw.language) ? uiRaw.language : DEFAULTS.ui.language
   if (uiRaw.language !== undefined && language !== uiRaw.language) issues.push(`ui.language "${String(uiRaw.language)}" is unknown; using "${language}"`)
+  // The first-run guide is versioned, not boolean: a later release can raise the
+  // number and show only the new steps to someone who already finished v1.
+  const onboardedVersion = Math.round(clampNumber(uiRaw.onboardedVersion, 0, 999, DEFAULTS.ui.onboardedVersion))
 
   const ttsRaw = isPlainObject(raw.tts) ? raw.tts : {}
   const provider = PROVIDERS.includes(ttsRaw.provider) ? ttsRaw.provider : DEFAULTS.tts.provider
@@ -198,6 +202,7 @@ export function normalizeConfig(input) {
       version: CONFIG_VERSION,
       ui: {
         language,
+        onboardedVersion,
       },
       tts: {
         provider,

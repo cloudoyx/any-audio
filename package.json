@@ -21,6 +21,7 @@
     "test/verify.mjs",
     "test/client-bundle.mjs",
     "test/settings.mjs",
+    "test/settings-ui.mjs",
     "README.md",
     "README.zh-CN.md",
     "LICENSE",
@@ -54,7 +55,8 @@
     "render": "node scripts/anyaudio-cli.mjs",
     "test": "node test/verify.mjs",
     "test:client": "node test/client-bundle.mjs",
-    "test:settings": "node test/settings.mjs"
+    "test:settings": "node test/settings.mjs",
+    "test:ui": "node test/settings-ui.mjs"
   },
   "dependencies": {
     "https-proxy-agent": "^7.0.6",

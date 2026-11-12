@@ -21,7 +21,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 
 const OUT = 'lib/client.js'
 const WORKLET_OUT = 'lib/reverb-worklet.js'
-const CLIENT_EXTERNAL = ['react', 'react/jsx-runtime']
+const CLIENT_EXTERNAL = ['react', 'react/jsx-runtime', 'react-dom']
 
 const result = await build({
   entryPoints: ['src/client/index.js'],

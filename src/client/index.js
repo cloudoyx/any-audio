@@ -12,7 +12,8 @@
  * uses only to decide its own display language.
  */
 import { h } from './ui.js'
-import { Page } from './settings.js'
+import { Page, FontsTab, FxLibTab } from './settings.js'
+import { Guide, primeOnboardingConfig, ONBOARDING_VERSION, onboardedVersion } from './onboarding.js'
 import { ClipBayPanel, CLIP_BAY_ID } from './clipbay/panel.js'
 import { detectLanguage, resolveLanguage, setLanguagePreference, translate } from './i18n.js'
 import { api } from './api.js'
@@ -36,7 +37,13 @@ function apply(ctx) {
   // component happened to set. Without this the tab stayed 剪辑台 after the rest
   // of the interface had switched to English.
   api('/state')
-    .then((data) => setLanguagePreference(data.config?.ui?.language || 'auto'))
+    .then((data) => {
+      setLanguagePreference(data.config?.ui?.language || 'auto')
+      // The onboarding slot mounts before this request could finish, so the
+      // config is handed over as soon as it arrives: without it the guide would
+      // flash for someone who finished it months ago.
+      primeOnboardingConfig(data.config)
+    })
     .catch(() => {})
 
   try {
@@ -48,6 +55,20 @@ function apply(ctx) {
     }, () => h(Page)))
   } catch (error) {
     console.error('[any-audio] settings section failed', error)
+  }
+
+  // The first-run guide is a `settings.onboarding` step, not a dialog of our own:
+  // the shell mounts it on a blank new conversation and stops offering it once
+  // `complete()` is called. The plugin still keeps its own version number,
+  // because the shell's "seen" set is per page load.
+  try {
+    ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
+      name: 'settings.onboarding',
+      id: 'any-audio-setup',
+      order: 50,
+    }, Guide))
+  } catch (error) {
+    console.error('[any-audio] onboarding step failed', error)
   }
 
   // The clip bay is one of the Conversation Views — the same row of tabs as
@@ -69,4 +90,4 @@ function apply(ctx) {
 
 export { apply }
 
-export const __test = { bytes, detectLanguage }
+export const __test = { bytes, detectLanguage, Page, Guide, FontsTab, FxLibTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig }

@@ -20,6 +20,10 @@ const react = {
   useMemo: (fn) => fn(),
 }
 
+// The first-run guide portals its dialog out of `#root`; the bundle only needs
+// the function to exist, never a real DOM.
+const reactDom = { createPortal: (node, container) => ({ type: 'portal', props: { node, container }, children: [] }) }
+
 let entry
 const windowStub = { __ModuleLoader__: { load: (value) => { entry = value } } }
 // `document` is touched only when the page renders in English; the bundle module
@@ -31,6 +35,7 @@ assert.equal(entry.id, 'dsh-any-audio')
 
 const mod = entry.factory((id) => {
   if (id === 'react') return react
+  if (id === 'react-dom') return reactDom
   throw new Error(`unexpected require(${JSON.stringify(id)})`)
 })
 assert.equal(mod.name, 'any-audio')
@@ -38,6 +43,7 @@ assert.deepEqual(mod.inject, ['slots', 'locale'])
 
 const sections = []
 const views = []
+const onboarding = []
 // A stand-in for the shell's locale service: `active` moves and the subscribers
 // hear about it, which is exactly what the tab label has to follow.
 const localeState = { active: 'zh-CN', listeners: new Set() }
@@ -52,6 +58,7 @@ mod.apply({
     register: (spec, component) => {
       if (spec.name === 'settings.section') sections.push({ spec, component })
       else if (spec.name === 'conversation.view') views.push({ spec, component })
+      else if (spec.name === 'settings.onboarding') onboarding.push({ spec, component })
       return () => {}
     },
   },
@@ -80,6 +87,13 @@ localeState.active = 'en-US'
 for (const listener of localeState.listeners) listener()
 assert.equal(views[0].spec.label(), 'DAW', 'the tab label follows the shell locale live')
 assert.ok(Number.isFinite(views[0].spec.order), 'the view needs an order to sit at a stable place in the row')
+
+// The first-run guide is a `settings.onboarding` step, not a section: it must not
+// add a second settings section (the shell shows one row per section).
+assert.equal(onboarding.length, 1, 'expected one onboarding step')
+assert.equal(onboarding[0].spec.id, 'any-audio-setup')
+assert.equal(onboarding[0].spec.order, 50)
+assert.equal(typeof onboarding[0].component, 'function', 'the step must render a component')
 
 assert.equal(mod.__test.bytes(1536), '2 KB')
 assert.equal(mod.__test.bytes(42), '42 B')

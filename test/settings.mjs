@@ -179,6 +179,21 @@ server.listen(0, '127.0.0.1', async () => {
     assert(again.config.music.peakDb === -3, 'peak default not restored')
   })
 
+  // The first-run guide keeps its own version number: the shell's "seen" set is
+  // per page load, so this is the only thing that stops the guide coming back.
+  await step('the onboarding version round-trips and resets to zero', async () => {
+    const fresh = await get('/state')
+    assert(fresh.config.ui.onboardedVersion === 0, `a fresh config must start at 0, got ${fresh.config.ui.onboardedVersion}`)
+    const saved = await post('/config', { patch: { ui: { onboardedVersion: 1 } } })
+    assert(saved.ok, saved.error)
+    assert(saved.config.ui.onboardedVersion === 1, 'the version was not saved')
+    const again = await get('/state')
+    assert(again.config.ui.onboardedVersion === 1, 'the version did not persist')
+    const reset = await post('/config/reset', {})
+    assert(reset.ok, reset.error)
+    assert(reset.config.ui.onboardedVersion === 0, 'reset must put the guide back')
+  })
+
   await step('font preview renders a real WAV', async () => {
     const font = state.fonts.rows[0]
     const preview = await post('/sources/preview', { path: font.path })
