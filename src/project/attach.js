@@ -261,6 +261,7 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
   rmsDb,
   note,
   library,
+  remote,
   findFfmpeg,
   signal,
 } = {}) {
@@ -270,6 +271,15 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
     const imported = await importLibraryMaterial(workspaceRoot, projectId, {
       sound: library.sound,
       packDir: library.packDir,
+      findFfmpeg,
+      signal,
+    })
+    material = imported.material
+  } else if (remote) {
+    const { importRemoteMaterial } = await import('./library-import.js')
+    const imported = await importRemoteMaterial(workspaceRoot, projectId, {
+      sound: remote.sound,
+      previewPath: remote.previewPath,
       findFfmpeg,
       signal,
     })

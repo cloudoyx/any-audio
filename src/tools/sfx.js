@@ -4,6 +4,7 @@ import { findRecommendedByFile, listFonts, sha256File } from '../audio/fonts.js'
 import { renderSfxMaterial, SFX_TYPES, categoryOf } from '../audio/sfx.js'
 import { listSfxPresets, resolveSfxPreset, SFX_FONTS, SFX_GROUPS } from '../audio/sfx-presets.js'
 import { isPriorityPack, listPacks, packPriority, resolveSound, search as searchLibrary, userSfxDir } from '../audio/sfx-library.js'
+import { downloadPreview, searchFreesound } from '../audio/freesound.js'
 import { padOrTrim, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { basename, dirname, join, resolve } from 'node:path'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
@@ -155,6 +156,58 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
     // resolves to one file in an installed pack, that file is converted into the
     // project once, and every placement after that reuses the same material.
     if (item.sound !== undefined) {
+      const wanted = String(item.sound)
+      // `freesound/<id>` is the online source. It is addressed the same way a
+      // pack sound is, so the agent has one syntax to remember and the search
+      // results can print the exact string to pass back.
+      if (wanted.startsWith('freesound/')) {
+        const soundId = Number(wanted.slice('freesound/'.length))
+        if (!Number.isFinite(soundId) || soundId <= 0) {
+          throw new Error(`"${wanted}" is not an online sound id; write it as "freesound/<id>"`)
+        }
+        const category = '其他'
+        const wantedStart = Number(item.startSec ?? item.start ?? args.startSec)
+        const wantedTrackName = item.trackName || args.trackName || `音效 · ${category}`
+        await prepareFamily(wantedTrackName)
+        const cached = await downloadPreview({ soundId, previewUrl: item.previewUrl })
+        const attached = await attachMaterialFile(workspaceRoot, projectId, null, {
+          remote: {
+            sound: {
+              soundId,
+              title: item.title ?? '',
+              author: item.author ?? '',
+              pageUrl: item.pageUrl ?? `https://freesound.org/s/${soundId}/`,
+            },
+            previewPath: cached.path,
+          },
+          trackName: wantedTrackName,
+          category: 'other',
+          label: item.title || `freesound/${soundId}`,
+          startSec: Number.isFinite(wantedStart) ? Number(wantedStart) : undefined,
+          autoStart: !Number.isFinite(wantedStart),
+          inSec: Number.isFinite(Number(item.inSec)) ? Number(item.inSec) : undefined,
+          outSec: Number.isFinite(Number(item.outSec ?? item.durationSec)) ? Number(item.outSec ?? item.durationSec) : undefined,
+          gainDb,
+          pan: Number.isFinite(Number(item.pan)) ? Number(item.pan) : 0,
+          fadeInSec: Number.isFinite(Number(item.fadeInSec)) ? Number(item.fadeInSec) : 0,
+          fadeOutSec: Number.isFinite(Number(item.fadeOutSec)) ? Number(item.fadeOutSec) : 0,
+          findFfmpeg,
+        })
+        const projectCopy = join(projectDir(workspaceRoot, projectId), attached.file)
+        materials.push({
+          file: relativeToWorkspace(workspaceRoot, projectCopy),
+          absolutePath: projectCopy,
+          category,
+          durationSec: Number(attached.durationSec.toFixed(3)),
+          peakDb: attached.peakDb,
+          rmsDb: attached.rmsDb,
+          sound: `freesound/${soundId}`,
+          remote: true,
+          gainDb,
+          attached,
+        })
+        continue
+      }
       const { packs } = await listPacks()
       const { sound, pack } = resolveSound(packs, item.sound)
       const category = LIBRARY_TYPE_LABEL[sound.type] ?? '其他'
@@ -417,8 +470,9 @@ export const sfxToolDefinition = finalizeTool({
     'Add sound effects to a clip bay project, so the person can open, hear and move them. ' +
     'Three sources, in this order: ' +
     '① the installed sound library — {sound:"门-木门-敲门-三下-中等"}; run action:"catalog" to see the names of the priority packs, and action:"search" to find one in the others; ' +
-    '② SoundFont presets — {preset:"rain"} or {preset:"gun-shot"} (birds, seashore, wind, door, car, applause, explosion …); ' +
-    '③ procedural generators — {type:"wind"} etc. (wind, rain, water, fire, birds, footsteps, stones, whoosh, impact, bell, gong, drum, riser, heartbeat, thunder). ' +
+    '② online CC0 — when the library has nothing, action:"search" also looks at Freesound and returns {sound:"freesound/<id>"} plus the previewUrl to pass back; ' +
+    '③ SoundFont presets — {preset:"rain"} or {preset:"gun-shot"} (birds, seashore, wind, door, car, applause, explosion …); ' +
+    '④ procedural generators — {type:"wind"} etc. (wind, rain, water, fire, birds, footsteps, stones, whoosh, impact, bell, gong, drum, riser, heartbeat, thunder). ' +
     'One name is one recording, and it may already contain several hits: 门-木门-敲门-三下 is three knocks. To make a sound denser or longer, place several clips offset in time — do not look for a "five knocks" entry, the library has none and should not. ' +
     'You decide how each clip is used: trim it with inSec/outSec, overlap two clips with fades, set gainDb and pan. The tool never splits a recording on its own (detecting hits is unreliable), but it does exactly what you ask. ' +
     'Every effect becomes its own clip; the clips are placed on the project timeline as they are created — pass startSec to say where, or leave it out and each effect follows the previous one on its own track. ' +
@@ -450,6 +504,7 @@ export const sfxToolDefinition = finalizeTool({
       },
       names: { oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }], description: 'For action:"inspect": the sound names to look at (up to 3 get a waveform image).' },
       limit: { type: 'number', description: 'For action:"search": how many names to return, default 30.' },
+      remote: { type: 'boolean', description: 'For action:"search": also look online (Freesound CC0) when the local library has no match. On by default; pass false to keep the search local.' },
       type: { type: 'string', description: 'For action:"search": only return sounds of this kind (foley, ambience, dsn).' },
       replace: { type: 'boolean', description: 'Replace instead of append. When this is a second pass over effects the project already holds (you changed levels or swapped presets and are generating again), pass true: the track family these effects land in is cleared first, so the project keeps one set rather than gaining a second. Without it a re-run appends, which is how "音效 · 动效" and "音效 · 动效 2" end up side by side.' },
     },
@@ -489,6 +544,7 @@ export const sfxToolDefinition = finalizeTool({
         shown: { type: 'number' },
         truncated: { type: 'boolean' },
         results: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        remote: { type: 'object', additionalProperties: true },
         warnings: { type: 'array' },
       },
     },
@@ -540,16 +596,24 @@ export const sfxToolDefinition = finalizeTool({
         return lines.join('\n')
       }
       if (value.action === 'search') {
+        const lines = []
         if (value.total === 0) {
-          const lines = [`库里没有匹配的名字："${value.query}"`]
-          for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
-          return lines.join('\n')
+          lines.push(`库里没有匹配的名字："${value.query}"`)
+        } else {
+          lines.push(...value.results.map((entry) => {
+            const mark = entry.priority ? '（优先）' : ''
+            return `${entry.name}${mark} | ${LIBRARY_TYPE_LABEL[entry.type] ?? entry.type} | ${entry.durationSec.toFixed(2)}s | ${entry.packId}`
+          }))
+          if (value.truncated) lines.push(`共 ${value.total} 条，显示前 ${value.shown} 条；换更具体的词可以缩小范围`)
         }
-        const lines = value.results.map((entry) => {
-          const mark = entry.priority ? '（优先）' : ''
-          return `${entry.name}${mark} | ${LIBRARY_TYPE_LABEL[entry.type] ?? entry.type} | ${entry.durationSec.toFixed(2)}s | ${entry.packId}`
-        })
-        if (value.truncated) lines.push(`共 ${value.total} 条，显示前 ${value.shown} 条；换更具体的词可以缩小范围`)
+        if (value.remote) {
+          lines.push('', `线上 CC0（Freesound，共 ${value.remote.total} 条）—— 取用时把 previewUrl 一起传回：`)
+          lines.push(...value.remote.results.map((entry) => {
+            const seconds = entry.durationSec === null ? '?' : entry.durationSec.toFixed(2)
+            const downloads = entry.downloads === null ? '' : ` · ${entry.downloads} 次下载`
+            return `${entry.name} | ${seconds}s | ${entry.title} · ${entry.author}${downloads}\n  previewUrl: ${entry.previewUrl}`
+          }))
+        }
         for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
         return lines.join('\n')
       }
@@ -609,7 +673,30 @@ export const sfxToolDefinition = finalizeTool({
         limit: args.limit,
         packsConfig: config.sfx?.packs,
       })
-      return { ok: true, action: 'search', ...found, warnings }
+      // The online source is the second of three, so it is only consulted when
+      // the local library has nothing. A search that already found the sound
+      // does not need a network round-trip, and a search that cannot reach the
+      // network still answers with what the local packs hold.
+      let remote = null
+      if (found.total === 0 && args.remote !== false) {
+        const online = await searchFreesound(args.query, { limit: args.limit ?? 10 })
+        if (online.results.length > 0) {
+          remote = {
+            results: online.results.map((entry) => ({
+              ...entry,
+              name: `freesound/${entry.soundId}`,
+              packId: 'freesound',
+              type: null,
+              priority: false,
+            })),
+            total: online.total,
+            error: online.error,
+          }
+        } else if (online.error) {
+          warnings.push(online.error)
+        }
+      }
+      return { ok: true, action: 'search', ...found, remote, warnings }
     }
 
     const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items', { workspaceRoot })

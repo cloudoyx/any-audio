@@ -17,6 +17,7 @@
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { analyzeChannels, writePeaks } from '../audio/peaks.js'
+import { remoteSource } from '../audio/freesound.js'
 import { conformChannels, parseWav } from '../audio/wav.js'
 import { MATERIALS_DIR, newMaterialId, projectDir, resolveInside } from './paths.js'
 import { readMaterialIndex, writeMaterialIndex } from './store.js'
@@ -134,6 +135,70 @@ export async function importLibraryMaterial(workspaceRoot, projectId, { sound, p
       file: sound.file,
       importedAt: nowIso(),
     },
+  })
+  return { material, reused: false, peaks: peaksRel }
+}
+
+/**
+ * Convert one downloaded preview into the project and register it.
+ *
+ * The online source is the second of three, so its provenance has to say where
+ * the file came from: a person reading the index a month later must be able to
+ * find the original page and its licence without guessing.
+ */
+export async function importRemoteMaterial(workspaceRoot, projectId, { sound, previewPath, findFfmpeg, signal }) {
+  const index = await readMaterialIndex(workspaceRoot, projectId)
+  const existing = (index?.materials ?? []).find(
+    (entry) => entry.source?.kind === 'remote' && entry.source.soundId === Number(sound.soundId),
+  )
+  if (existing) return { material: existing, reused: true }
+
+  const ffmpeg = findFfmpeg?.() ?? null
+  if (!ffmpeg) {
+    throw new LibraryImportError(
+      'ffmpeg not found; placing an online sound needs it to convert the preview to 48 kHz stereo WAV '
+      + '(set ANYAUDIO_FFMPEG or add ffmpeg to PATH)',
+    )
+  }
+
+  const dir = projectDir(workspaceRoot, projectId)
+  const id = newMaterialId()
+  const materialCopy = resolveInside(dir, `${MATERIALS_DIR}/${id}.wav`)
+  await mkdir(resolveInside(dir, MATERIALS_DIR), { recursive: true })
+
+  await run(ffmpeg.command, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-i', previewPath,
+    '-vn',
+    '-ac', String(IMPORT_CHANNELS),
+    '-ar', String(IMPORT_SAMPLE_RATE),
+    '-c:a', 'pcm_s16le',
+    materialCopy,
+  ], { signal })
+
+  let decoded
+  try {
+    const wav = parseWav(await readFile(materialCopy))
+    const channels = conformChannels(wav.channels, IMPORT_CHANNELS)
+    decoded = { channels, durationSec: channels[0].length / wav.sampleRate }
+  } catch (error) {
+    throw new LibraryImportError(`the converted copy of the online sound is not a readable WAV: ${error.message}`)
+  }
+
+  const analysis = analyzeChannels(decoded.channels, decoded.durationSec)
+  const peaksRel = `${MATERIALS_DIR}/${id}.peaks.json`
+  await writePeaks(resolveInside(dir, peaksRel), analysis.peaks)
+
+  const material = await registerMaterial(workspaceRoot, projectId, {
+    id,
+    file: `${MATERIALS_DIR}/${id}.wav`,
+    durationSec: decoded.durationSec,
+    sampleRate: IMPORT_SAMPLE_RATE,
+    channels: IMPORT_CHANNELS,
+    kind: 'library',
+    peakDb: analysis.peakDb,
+    rmsDb: analysis.rmsDb,
+    source: remoteSource(sound),
   })
   return { material, reused: false, peaks: peaksRel }
 }
