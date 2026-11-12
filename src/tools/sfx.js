@@ -616,7 +616,7 @@ export const sfxToolDefinition = finalizeTool({
     'Add sound effects to a clip bay project, so the person can open, hear and move them. ' +
     'Three sources, in this order: ' +
     '① the installed sound library — {sound:"门-木门-敲门-三下-中等"}; run action:"catalog" to see the names of the priority packs, and action:"search" to find one in the others; ' +
-    '② online CC0 — when the library has nothing, action:"search" also looks at Freesound and returns {sound:"freesound/<id>"} plus the previewUrl to pass back; ' +
+    '② online CC0 — when the library has nothing, action:"search" also looks at Freesound and returns {sound:"freesound/<id>"} plus the previewUrl to pass back; that site is English, so search it with English words (spaceship landing, not 飞船降落); ' +
     '③ SoundFont presets — {preset:"rain"} or {preset:"gun-shot"} (birds, seashore, wind, door, car, applause, explosion …); ' +
     '④ procedural generators — {type:"wind"} etc. (wind, rain, water, fire, birds, footsteps, stones, whoosh, impact, bell, gong, drum, riser, heartbeat, thunder). ' +
     'One name is one recording, and it may already contain several hits: 门-木门-敲门-三下 is three knocks. To make a sound denser or longer, place several clips offset in time — do not look for a "five knocks" entry, the library has none and should not. ' +
@@ -646,6 +646,7 @@ export const sfxToolDefinition = finalizeTool({
           + 'Run 3–5 words from different dimensions in parallel — what it sounds like, the object, the action, the material. '
           + 'When nothing hits, change the dimension (action → object → material → result sound), and only then try a synonym. '
           + 'Stop after 3 rounds and move on; do not keep rewording. '
+          + 'The online site is English: when the local library has nothing, search it with English words. '
           + 'For action:"catalog": a preset filter.',
       },
       names: { oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }], description: 'For action:"inspect": the sound names to look at (up to 3 get a waveform image).' },
