@@ -448,6 +448,7 @@ function FxLibTab({ state, reload, notify }) {
   const [installPath, setInstallPath] = useState('')
   const [error, setError] = useState('')
   const [showDownloads, setShowDownloads] = useState(false)
+  const [showRecommended, setShowRecommended] = useState(false)
   const [openDetails, setOpenDetails] = useState({})
   const toggleDetails = (key) => setOpenDetails(current => ({ ...current, [key]: !current[key] }))
 
@@ -511,32 +512,37 @@ function FxLibTab({ state, reload, notify }) {
 
   return h(Fragment, null,
     h(Card, { title: t('推荐音效包'), desc: t('作者精选。装一次，所有工程共用。') },
-      h('div', { style: S.list },
-        h('div', { style: S.item },
-          h('div', { style: S.itemHead },
-            h('span', { style: { fontWeight: 600 } }, BASE_PACK.name),
-            h('span', { style: S.chip }, `${BASE_PACK.count} ${t('条')}`),
-            h('span', { style: S.chip }, BASE_PACK.size),
-            h('span', { style: S.chip }, BASE_PACK.license),
-            installed ? h('span', { style: S.chip }, t('已安装')) : null,
-            h('span', { style: { flex: 1 } }),
-            h(Btn, { onClick: () => setShowDownloads(value => !value) }, t('去下载')),
+      installed && !showRecommended
+        ? h('div', { style: S.row },
+          h('span', { style: S.desc }, t('推荐音效包已安装')),
+          h(Btn, { onClick: () => setShowRecommended(true) }, t('查看')),
+        )
+        : h('div', { style: S.list },
+          h('div', { style: S.item },
+            h('div', { style: S.itemHead },
+              h('span', { style: { fontWeight: 600 } }, BASE_PACK.name),
+              h('span', { style: S.chip }, `${BASE_PACK.count} ${t('条')}`),
+              h('span', { style: S.chip }, BASE_PACK.size),
+              h('span', { style: S.chip }, BASE_PACK.license),
+              installed ? h('span', { style: S.chip }, t('已安装')) : null,
+              h('span', { style: { flex: 1 } }),
+              h(Btn, { onClick: () => setShowDownloads(value => !value) }, t('去下载')),
+            ),
+            h('div', { style: S.desc }, t(BASE_PACK.summary)),
+            h('div', { style: S.desc }, t('压缩包，下载后解压，把解压出来的 BaseSFX 目录路径填到下面「安装」。')),
+            showDownloads
+              ? h('div', { style: S.row },
+                BASE_PACK.downloads.map(item => h('a', {
+                  key: item.label,
+                  href: item.url,
+                  target: '_blank',
+                  rel: 'noreferrer',
+                  style: { ...S.btn('plain'), textDecoration: 'none', display: 'inline-block' },
+                }, item.note ? `${item.label}（${item.note}）` : item.label)),
+              )
+              : null,
           ),
-          h('div', { style: S.desc }, t(BASE_PACK.summary)),
-          h('div', { style: S.desc }, t('压缩包，下载后解压，把解压出来的 BaseSFX 目录路径填到下面「安装」。')),
-          showDownloads
-            ? h('div', { style: S.row },
-              BASE_PACK.downloads.map(item => h('a', {
-                key: item.label,
-                href: item.url,
-                target: '_blank',
-                rel: 'noreferrer',
-                style: { ...S.btn('plain'), textDecoration: 'none', display: 'inline-block' },
-              }, item.note ? `${item.label}（${item.note}）` : item.label)),
-            )
-            : null,
         ),
-      ),
     ),
     h(Card, { title: t('已安装'), desc: t('打开「优先」的包，名字会直接列在 catalog 里；其余包用 search 检索。') },
       error ? h(Notice, { tone: 'error' }, error)
@@ -579,62 +585,6 @@ function FxLibTab({ state, reload, notify }) {
   )
 }
 
-function DiagnosticsTab({ state, reload, notify }) {
-  const [busy, setBusy] = useState('')
-  async function reset() {
-    if (!window.confirm(t('把 AnyAudio 的所有设置恢复为默认值？（音源文件不会删除，API Key 也不会删除）'))) return
-    setBusy('reset')
-    try {
-      await api('/config/reset', { method: 'POST', body: {} })
-      notify(t('设置已恢复默认'))
-      await reload()
-    } catch (error) {
-      notify(error.message, 'error')
-    } finally {
-      setBusy('')
-    }
-  }
-  // The guide's "seen" flag is the plugin's own number, not the shell's: the
-  // shell forgets as soon as the person types, so replaying means clearing this.
-  async function replayGuide() {
-    setBusy('guide')
-    try {
-      await api('/config', { method: 'POST', body: { patch: { ui: { onboardedVersion: 0 } } } })
-      notify(t('已重置。打开一个新对话即可看到引导。'))
-      await reload()
-    } catch (error) {
-      notify(error.message, 'error')
-    } finally {
-      setBusy('')
-    }
-  }
-  return h(Fragment, null,
-    h(Card, { title: t('运行状态'), desc: t('排查问题先看这里。') },
-      h('div', { style: S.list },
-        h('div', { style: S.row }, h('span', { style: S.label }, t('插件版本')), h('span', { style: S.mono }, state.version)),
-        h('div', { style: S.row }, h('span', { style: S.label }, t('配置文件')), h('span', { style: S.mono }, state.configPath)),
-        h('div', { style: S.row }, h('span', { style: S.label }, 'ffmpeg'), h('span', { style: S.mono }, state.ffmpeg ? `${state.ffmpeg.path} (${state.ffmpeg.version})` : t('未找到：TTS 转 WAV 与视频封装会失败，纯 WAV 混音不受影响'))),
-        h('div', { style: S.row }, h('span', { style: S.label }, t('默认音源')), h('span', { style: S.mono }, state.fonts.configured || t('未选择（用 {0}）', state.fonts.fallbackPath || t('未安装音源')))),
-        h('div', { style: S.row }, h('span', { style: S.label }, 'Node'), h('span', { style: S.mono }, state.platform.node)),
-      ),
-      h('div', { style: S.row },
-        h(Btn, { onClick: reload }, t('重新检测')),
-        h(Btn, { onClick: async () => { try { await navigator.clipboard.writeText(state.configPath); notify(t('路径已复制')) } catch { notify(t('复制失败，请手动选择'), 'error') } } }, t('复制配置路径')),
-        h(Btn, { disabled: busy === 'reset', onClick: reset }, t('恢复默认设置')),
-      ),
-    ),
-    h(Card, { title: t('首次安装引导'), desc: t('装音源、装音效包、认识剪辑台。已经看过的话，这里可以重放。') },
-      h('div', { style: S.row },
-        h(Btn, { disabled: busy === 'guide', onClick: replayGuide }, t('重新播放引导')),
-        h('span', { style: S.desc }, t('重置后打开一个新对话即可看到。')),
-      ),
-    ),
-    h(Card, { title: t('音源搜索目录') },
-      h('div', { style: S.mono }, state.fonts.directories.join('\n')),
-    ),
-  )
-}
-
 function AdvancedTab({ state, reload, notify }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState('')
@@ -654,11 +604,57 @@ function AdvancedTab({ state, reload, notify }) {
       setBusy('')
     }
   }
-  return h(Card, { title: t('高级：原始配置'), desc: t('整个配置文件就是这一份 JSON，机器上所有 profile 共用。未知字段会在保存时被丢弃。') },
-    h('textarea', { value: text, onChange: event => setText(event.target.value), rows: 18, style: { ...S.input, resize: 'vertical', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12 } }),
-    h('div', { style: S.row },
-      h(Btn, { kind: 'primary', disabled: busy === 'save', onClick: save }, t('保存')),
-      h(Btn, { onClick: () => setText(JSON.stringify(state.config, null, 2)) }, t('重新载入')),
+  async function reset() {
+    if (!window.confirm(t('把 AnyAudio 的所有设置恢复为默认值？（音源文件不会删除，API Key 也不会删除）'))) return
+    setBusy('reset')
+    try {
+      await api('/config/reset', { method: 'POST', body: {} })
+      notify(t('设置已恢复默认'))
+      await reload()
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+  // The guide's "seen" flag is the plugin's own number, not the shell's: the
+  // shell forgets as soon as the person types, so replaying means clearing this.
+  // The event reaches a guide that is already mounted, so replaying does not
+  // need a page reload.
+  async function replayGuide() {
+    setBusy('guide')
+    try {
+      await api('/config', { method: 'POST', body: { patch: { ui: { onboardedVersion: 0 } } } })
+      window.dispatchEvent(new CustomEvent('anyaudio:onboarding-reset'))
+      notify(t('已重置。打开一个新对话即可看到引导。'))
+      await reload()
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+  return h(Fragment, null,
+    h(Card, { title: t('高级：原始配置'), desc: t('整个配置文件就是这一份 JSON，机器上所有 profile 共用。未知字段会在保存时被丢弃。') },
+      h('textarea', { value: text, onChange: event => setText(event.target.value), rows: 18, style: { ...S.input, resize: 'vertical', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12 } }),
+      h('div', { style: S.row },
+        h(Btn, { kind: 'primary', disabled: busy === 'save', onClick: save }, t('保存')),
+        h(Btn, { onClick: () => setText(JSON.stringify(state.config, null, 2)) }, t('重新载入')),
+      ),
+    ),
+    h(Card, { title: t('音源搜索目录') },
+      h('div', { style: S.mono }, state.fonts.directories.join('\n')),
+    ),
+    h(Card, { title: t('首次安装引导'), desc: t('装音源、装音效包、认识剪辑台。已经看过的话，这里可以重放。') },
+      h('div', { style: S.row },
+        h(Btn, { disabled: busy === 'guide', onClick: replayGuide }, t('重新播放引导')),
+        h('span', { style: S.desc }, t('重置后打开一个新对话即可看到。')),
+      ),
+    ),
+    h(Card, { title: t('恢复默认设置'), desc: t('音源文件不会删除，API Key 也不会删除。') },
+      h('div', { style: S.row },
+        h(Btn, { disabled: busy === 'reset', onClick: reset }, t('恢复默认设置')),
+      ),
     ),
   )
 }
@@ -692,7 +688,6 @@ function Page() {
     { id: 'fxlib', label: t('音效包'), render: () => h(FxLibTab, { state, reload, notify }) },
     { id: 'tts', label: t('配音'), render: () => h(TtsTab, { state, reload, notify }) },
     { id: 'mix', label: t('混音与输出'), render: () => h(MixTab, { state, reload, notify }) },
-    { id: 'diagnostics', label: t('诊断'), render: () => h(DiagnosticsTab, { state, reload, notify }) },
     { id: 'advanced', label: t('高级'), render: () => h(AdvancedTab, { state, reload, notify }) },
   ]), [state, reload, notify])
 

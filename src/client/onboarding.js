@@ -118,7 +118,7 @@ function Downloads() {
   )
 }
 
-export function Guide({ complete }) {
+export function Guide() {
   const [config, setConfig] = useState(primed)
   const [step, setStep] = useState(0)
   const [fonts, setFonts] = useState(null)
@@ -130,14 +130,33 @@ export function Guide({ complete }) {
   const [downloadHint, setDownloadHint] = useState(false)
 
   useEffect(() => {
-    if (config) return
-    api('/state').then((data) => setConfig(data.config)).catch(() => setConfig({}))
-  }, [config])
+    // Always re-read, even when the primed value is present: the config can
+    // change while this component is mounted (the replay button in Settings
+    // writes it), and a value captured at plugin load would keep the guide
+    // closed for the rest of the page's life.
+    let cancelled = false
+    api('/state')
+      .then((data) => { if (!cancelled && data?.config) setConfig(data.config) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  // The replay button lives in another component, so it reaches us through an
+  // event rather than a page reload.
+  useEffect(() => {
+    const onReset = () => setConfig(current => ({
+      ...(current ?? {}),
+      ui: { ...(current?.ui ?? {}), onboardedVersion: 0 },
+    }))
+    window.addEventListener('anyaudio:onboarding-reset', onReset)
+    return () => window.removeEventListener('anyaudio:onboarding-reset', onReset)
+  }, [])
 
   useEffect(() => {
+    if (!config || onboardedVersion(config) >= ONBOARDING_VERSION) return
     api('/state').then((data) => setFonts(data.fonts)).catch(() => setFonts({ rows: [] }))
     api('/sfx/packs').then((data) => setPacks(data.packs ?? [])).catch(() => setPacks([]))
-  }, [])
+  }, [config])
 
   // The install runs on the host, so the guide only watches it: closing the
   // dialog must not cancel a download that is already under way.
@@ -159,21 +178,25 @@ export function Guide({ complete }) {
     return () => clearInterval(timer)
   }, [job])
 
+  // `complete()` is deliberately not called. The shell keeps its own "seen" set
+  // in page state and stops mounting a step once it is in there, which would
+  // make the replay button do nothing until the page is reloaded. Leaving the
+  // step mounted costs one request per blank conversation and lets this
+  // component own the decision, so replay works immediately.
   const finish = useCallback(async () => {
     try {
       await api('/config', { method: 'POST', body: { patch: { ui: { onboardedVersion: ONBOARDING_VERSION } } } })
+      setConfig(current => ({
+        ...(current ?? {}),
+        ui: { ...(current?.ui ?? {}), onboardedVersion: ONBOARDING_VERSION },
+      }))
     } catch {
       // A failed write must not trap the person behind the dialog; the next
       // conversation simply offers the guide again.
     }
-    complete()
-  }, [complete])
+  }, [])
 
   const seen = onboardedVersion(config) >= ONBOARDING_VERSION
-  useEffect(() => {
-    if (seen) complete()
-  }, [seen, complete])
-
   if (!config || seen) return null
 
   async function installFont() {

@@ -196,7 +196,7 @@ step('the guide opens on a fresh install', () => {
   assert.ok(findClickable(tree, '跳过'), 'the welcome step must offer a skip')
 })
 
-step('skipping the guide records the version and closes it', async () => {
+step('skipping the guide records the version', async () => {
   primeOnboardingConfig({ ui: { onboardedVersion: 0 } })
   const calls = []
   const previousFetch = globalThis.fetch
@@ -205,12 +205,10 @@ step('skipping the guide records the version and closes it', async () => {
     return { ok: true, status: 200, json: async () => ({ ok: true }) }
   }
   try {
-    let completed = 0
-    const tree = Guide({ complete: () => { completed++ } })
+    const tree = Guide()
     const skip = findClickable(tree, '跳过')
     assert.ok(skip, 'the skip button is missing')
     await skip.props.onClick()
-    assert.equal(completed, 1, 'skipping must tell the shell the step is done')
     assert.equal(calls.length, 1, `expected one config write, got ${calls.length}`)
     assert.ok(calls[0].url.endsWith('/config'), `unexpected url ${calls[0].url}`)
     const body = JSON.parse(calls[0].init.body)
@@ -218,6 +216,12 @@ step('skipping the guide records the version and closes it', async () => {
   } finally {
     globalThis.fetch = previousFetch
   }
+})
+
+step('the diagnostics tab is gone and its actions live under Advanced', () => {
+  assert.ok(!source.includes('诊断'), 'the diagnostics tab must be gone')
+  assert.ok(source.includes('重新播放引导'), 'replay must still be reachable')
+  assert.ok(source.includes('音源搜索目录'), 'the font folders must still be reachable')
 })
 
 step('a missing or malformed version reads as zero', () => {
