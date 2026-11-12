@@ -117,7 +117,7 @@ async function fontState(workspaceRoot) {
       status: state ? (state.mismatch ? 'modified' : 'ok') : 'unmanaged',
     })
   }
-  const available = RECOMMENDED_FONTS.map((preset) => {
+  const available = RECOMMENDED_FONTS.filter((preset) => !preset.hidden).map((preset) => {
     const row = rows.find((entry) => entry.recommendedId === preset.id)
     return {
       id: preset.id,

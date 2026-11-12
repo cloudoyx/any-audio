@@ -50,6 +50,10 @@ export const RECOMMENDED_FONTS = [
     sha256: 'd9f5157720963671906727ca2e12b3293fd822c831bb0de477dd1c5f3ad37108',
     license: 'CC0 1.0 (FreePats, sampled from a Kawai upright piano)',
     note: 'Single-instrument piano bank: it cannot substitute for other GM programs, so use it with "source" on piano tracks only.',
+    // Still recognised and still scored, just not offered: the two general banks
+    // already carry several piano presets, so a fourth card only pushed the
+    // useful ones down the page.
+    hidden: true,
     scores: { piano: 9, chromatic: 3, organ: 2, guitar: 2, bass: 4, strings: 2, ensemble: 2, brass: 2, reed: 2, pipe: 2, synthLead: 2, synthPad: 2, ethnic: 2, percussive: 2, drums: 1, default: 2 },
     presetScores: [{ bank: 0, program: 0, score: 10 }],
   },

@@ -136,7 +136,7 @@ export const sourcesToolDefinition = finalizeTool({
               ]
             : []),
           `Source kinds: ${value.kinds.map((kind) => `${kind.id}:${kind.status}`).join(', ')}`,
-          `Recommended: ${RECOMMENDED_FONTS.map((font) => `${font.id} (${formatBytes(font.bytes)}, ${font.license})${font.suggested ? ' [suggested]' : ''}${font.default ? ' [fallback]' : ''}`).join('; ')}`,
+          `Recommended: ${RECOMMENDED_FONTS.filter((font) => !font.hidden).map((font) => `${font.id} (${formatBytes(font.bytes)}, ${font.license})${font.suggested ? ' [suggested]' : ''}${font.default ? ' [fallback]' : ''}`).join('; ')}`,
         ].join('\n')
       }
       return value.message ?? 'done'
