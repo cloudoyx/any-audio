@@ -236,8 +236,10 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
           absolutePath: projectCopy,
           category,
           durationSec: Number(attached.durationSec.toFixed(3)),
-          peakDb: attached.peakDb,
-          rmsDb: attached.rmsDb,
+          // A silent file measures as null; the schema wants a number, and -120 is
+          // the value the rest of the plugin already uses for "nothing there".
+          peakDb: attached.peakDb === null ? -120 : attached.peakDb,
+          rmsDb: attached.rmsDb === null ? -120 : attached.rmsDb,
           sound: `freesound/${soundId}`,
           remote: true,
           gainDb,
@@ -285,8 +287,8 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
         absolutePath: projectCopy,
         category,
         durationSec: Number(attached.durationSec.toFixed(3)),
-        peakDb: attached.peakDb,
-        rmsDb: attached.rmsDb,
+        peakDb: attached.peakDb === null ? -120 : attached.peakDb,
+        rmsDb: attached.rmsDb === null ? -120 : attached.rmsDb,
         sound: `${sound.packId}/${sound.name}`,
         packId: sound.packId,
         soundName: sound.name,
@@ -781,7 +783,9 @@ export const sfxToolDefinition = finalizeTool({
           warnings.push(online.error)
         }
       }
-      return { ok: true, action: 'search', ...found, remote, warnings }
+      // `remote` is omitted rather than set to null: the output schema declares it
+      // as an object, and a null there fails the whole tool result.
+      return { ok: true, action: 'search', ...found, ...(remote ? { remote } : {}), warnings }
     }
 
     const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items', { workspaceRoot })
