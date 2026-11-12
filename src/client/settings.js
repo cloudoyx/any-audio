@@ -6,9 +6,10 @@
  * one machine-wide config file — DSH's settings service is profile-scoped, so it
  * cannot be the source of truth.
  */
-import { h, Fragment, useState, useEffect, useCallback, useMemo, C, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card } from './ui.js'
+import { h, Fragment, useState, useEffect, useCallback, useMemo, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card } from './ui.js'
 import { t, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
 import { api } from './api.js'
+import { BASE_PACK } from './base-pack.js'
 
 function FontsTab({ state, reload, notify }) {
   const [job, setJob] = useState(null)
@@ -16,7 +17,6 @@ function FontsTab({ state, reload, notify }) {
   const [preview, setPreview] = useState(null)
   const [picker, setPicker] = useState(null)
   const [customPath, setCustomPath] = useState('')
-  const [customUrl, setCustomUrl] = useState('')
 
   // The job lives on the host, not in this component: reopening the settings
   // page must pick up an install that is still running.
@@ -139,8 +139,8 @@ function FontsTab({ state, reload, notify }) {
   const installing = Boolean(job && job.status === 'running')
   return h(Fragment, null,
     h(Card, {
-      title: t('音源（SoundFont）'),
-      desc: t('乐器声音来自这里。装一套 32 MB 的 GeneralUser GS 就能覆盖大部分配乐；想更真实可以再加一套。文件只放在本机，不进 git、不进插件包。'),
+      title: t('推荐音源'),
+      desc: t('作者精选。装一套 32 MB 的 GeneralUser GS 就能覆盖大部分配乐；想更真实可以再加一套。文件只放在本机，不进 git、不进插件包。'),
       right: h(Btn, { onClick: reload }, t('刷新')),
     },
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -150,6 +150,26 @@ function FontsTab({ state, reload, notify }) {
         ),
         h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
       ) : null,
+      h('div', { style: S.list },
+        fonts.available.map(font => {
+          const installed = fonts.rows.find(row => row.recommendedId === font.id)
+          return h('div', { key: font.id, style: S.item },
+            h('div', { style: S.itemHead },
+              h('span', { style: { fontWeight: 600 } }, font.name),
+              font.default ? h('span', { style: S.chip }, t('默认')) : null,
+              font.suggested && !font.default ? h('span', { style: S.chip }, t('建议安装')) : null,
+              h('span', { style: S.mono }, bytes(font.bytes)),
+              h('span', { style: S.chip }, installed ? (installed.status === 'ok' ? t('已安装') : installed.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')) : t('未安装')),
+              installed ? null : h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装')),
+            ),
+            h('div', { style: S.desc }, font.note),
+            h('div', { style: S.mono }, t('许可证：{0}', font.license)),
+            font.manual ? h('div', { style: S.mono }, t('手动下载：{0}', font.manual)) : null,
+          )
+        }),
+      ),
+    ),
+    h(Card, { title: t('已安装'), desc: t('这些音源已经在这台机器上，可以直接用。') },
       preview ? h('div', { style: { ...S.item } },
         h('div', { style: S.itemHead }, h('span', null, t('试听：{0}', preview.label)), h('span', { style: S.mono }, `${preview.durationSec}s · ${preview.peakDb} dBFS`)),
         picker && picker.presets.length > 1
@@ -164,59 +184,29 @@ function FontsTab({ state, reload, notify }) {
           : null,
         h('audio', { controls: true, autoPlay: true, src: preview.url, style: S.audio }),
       ) : null,
-      h('div', { style: S.list },
-        fonts.available.map(font => {
-          const installed = fonts.rows.find(row => row.recommendedId === font.id)
-          return h('div', { key: font.id, style: S.item },
-            h('div', { style: S.itemHead },
-              h('span', { style: { fontWeight: 600 } }, font.name),
-              font.default ? h('span', { style: S.chip }, t('默认')) : null,
-              font.suggested && !font.default ? h('span', { style: S.chip }, t('建议安装')) : null,
-              h('span', { style: S.mono }, bytes(font.bytes)),
-              h('span', { style: S.chip }, installed ? (installed.status === 'ok' ? t('已安装') : installed.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')) : t('未安装')),
-              installed ? null : h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装')),
-              installed ? h(Btn, { onClick: () => openPreview(installed.path) }, t('试听')) : null,
-              installed ? h(Btn, { onClick: () => act('verify', { path: installed.path }) }, t('校验')) : null,
-              installed ? h(Btn, { kind: isDefault(installed) ? 'primary' : 'plain', onClick: () => setDefault(installed) }, isDefault(installed) ? t('当前默认') : t('设为默认')) : null,
-              installed ? h(Btn, { onClick: () => act('remove', { path: installed.path, removeFile: false }) }, t('移除记录')) : null,
-              installed ? h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', installed.name))) act('remove', { path: installed.path, removeFile: true }) } }, t('删除文件')) : null,
-            ),
-            h('div', { style: S.desc }, font.note),
-            h('div', { style: S.mono }, t('许可证：{0}', font.license)),
-            installed?.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', installed.sha256.slice(0, 24), installed.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
-            font.manual ? h('div', { style: S.mono }, t('手动下载：{0}', font.manual)) : null,
-          )
-        }),
-      ),
-      h('div', { style: S.item },
-        h('div', { style: S.label }, t('从本机文件安装（7z/zip 请先解压出 .sf2/.sf3/.dls）')),
-        h('div', { style: S.row },
-          h(TextInput, { value: customPath, onChange: setCustomPath, placeholder: 'C:\\Downloads\\Piano.sf2' }),
-          h(Btn, { disabled: !customPath.trim() || installing || busy.startsWith('install:'), onClick: () => install({ fromPath: customPath.trim() }) }, t('安装文件')),
-        ),
-      ),
-      h('div', { style: S.item },
-        h('div', { style: S.label }, t('从网址安装（直链 .sf2/.sf3/.dls）')),
-        h('div', { style: S.row },
-          h(TextInput, { value: customUrl, onChange: setCustomUrl, placeholder: 'https://example.com/bank.sf2' }),
-          h(Btn, { disabled: !customUrl.trim() || installing || busy.startsWith('install:'), onClick: () => install({ url: customUrl.trim() }) }, t('下载安装')),
-        ),
-      ),
-    ),
-    h(Card, { title: t('已安装的其它音源'), desc: t('不在推荐列表里的音源也会被识别，按文件名或路径引用即可。') },
-      fonts.rows.filter(row => !row.recommendedId).length === 0
-        ? h('p', { style: S.desc }, t('暂无。把 .sf2 放进音源目录，或在上面按文件安装。'))
-        : h('div', { style: S.list }, fonts.rows.filter(row => !row.recommendedId).map(row => h('div', { key: row.path, style: S.item },
+      fonts.rows.length === 0
+        ? h('p', { style: S.desc }, t('还没有安装任何音源。从上面的推荐里挑一套，或在下面按文件安装。'))
+        : h('div', { style: S.list }, fonts.rows.map(row => h('div', { key: row.path, style: S.item },
           h('div', { style: S.itemHead },
             h('span', { style: { fontWeight: 600 } }, row.name),
             h('span', { style: S.mono }, bytes(row.bytes)),
+            h('span', { style: S.chip }, row.status === 'ok' ? t('已安装') : row.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')),
+            isDefault(row) ? h('span', { style: S.chip }, t('默认')) : null,
+            h('span', { style: { flex: 1 } }),
             h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
             h(Btn, { onClick: () => act('verify', { path: row.path }) }, t('校验')),
             h(Btn, { kind: isDefault(row) ? 'primary' : 'plain', onClick: () => setDefault(row) }, isDefault(row) ? t('当前默认') : t('设为默认')),
-            h(Btn, { onClick: () => act('remove', { path: row.path, removeFile: true }) }, t('删除文件')),
+            h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', row.name))) act('remove', { path: row.path, removeFile: true }) } }, t('删除')),
           ),
           h('div', { style: S.mono }, row.path),
+          row.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', row.sha256.slice(0, 24), row.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
         ))),
+    ),
+    h(Card, { title: t('安装音源'), desc: t('填一个 .sf2 / .sf3 / .dls 文件的路径。7z / zip 请先解压。') },
+      h('div', { style: S.row },
+        h(TextInput, { value: customPath, onChange: setCustomPath, placeholder: 'C:\\Downloads\\Piano.sf2' }),
+        h(Btn, { disabled: !customPath.trim() || installing || busy.startsWith('install:'), onClick: () => install({ fromPath: customPath.trim() }) }, t('安装')),
+      ),
     ),
     h(Card, { title: t('音源目录'), desc: t('整台机器共用这一个音源库；环境变量 ANYAUDIO_FONTS 可以追加目录。') },
       h('div', { style: S.mono }, fonts.directories.join('\n')),
@@ -425,14 +415,17 @@ function MixTab({ state, reload, notify }) {
  */
 function FxLibTab({ state, reload, notify }) {
   const [packs, setPacks] = useState(null)
+  const [root, setRoot] = useState('')
   const [busy, setBusy] = useState('')
   const [installPath, setInstallPath] = useState('')
   const [error, setError] = useState('')
+  const [showDownloads, setShowDownloads] = useState(false)
 
   const load = useCallback(async () => {
     try {
       const data = await api('/sfx/packs')
       setPacks(data.packs ?? [])
+      setRoot(data.root ?? '')
       setError('')
     } catch (caught) {
       setError(caught.message)
@@ -484,40 +477,68 @@ function FxLibTab({ state, reload, notify }) {
     }
   }
 
-  if (error) return h(Card, { title: t('音效包') }, h(Notice, { tone: 'error' }, error))
-  if (!packs) return h(Card, { title: t('音效包') }, h('p', { style: S.desc }, t('正在读取音效包…')))
+  const installed = Boolean(packs?.some(pack => pack.id === BASE_PACK.id))
 
   return h(Fragment, null,
-    h(Card, {
-      title: t('音效包'),
-      desc: t('装一次，所有工程共用。打开「优先」的包，名字会直接列在 catalog 里；其余包用 search 检索。'),
-    },
-      packs.length === 0
-        ? h('p', { style: S.desc }, t('还没有安装任何音效包。把包目录的路径填在下面安装。'))
-        : h('div', null, packs.map(pack => h('div', {
-            key: pack.id,
-            style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 0', borderBottom: `1px solid ${C.line}` },
-          },
-            h('div', { style: { flex: 1, minWidth: 0 } },
-              h('div', { style: { fontWeight: 600 } }, `${pack.name} ${pack.id}`),
-              h('div', { style: { ...S.desc, marginTop: '2px' } },
-                `${pack.count} ${t('条')}${pack.tokens ? ` · ${t('约 {0}K tokens', pack.tokens)}` : ''}${pack.license ? ` · ${pack.license}` : ''}`),
+    h(Card, { title: t('推荐音效包'), desc: t('作者精选。装一次，所有工程共用。') },
+      h('div', { style: S.list },
+        h('div', { style: S.item },
+          h('div', { style: S.itemHead },
+            h('span', { style: { fontWeight: 600 } }, BASE_PACK.name),
+            h('span', { style: S.chip }, `${BASE_PACK.count} ${t('条')}`),
+            h('span', { style: S.chip }, BASE_PACK.size),
+            h('span', { style: S.chip }, BASE_PACK.license),
+            installed ? h('span', { style: S.chip }, t('已安装')) : null,
+          ),
+          h('div', { style: S.desc }, BASE_PACK.summary),
+          h('div', { style: S.desc }, t('压缩包，下载后解压，把解压出来的 BaseSFX 目录路径填到下面「安装」。')),
+          h('div', { style: S.row },
+            h(Btn, { onClick: () => setShowDownloads(value => !value) }, t('去下载')),
+            showDownloads
+              ? BASE_PACK.downloads.map(item => h('a', {
+                key: item.label,
+                href: item.url,
+                target: '_blank',
+                rel: 'noreferrer',
+                style: { ...S.btn('plain'), textDecoration: 'none', display: 'inline-block' },
+              }, item.note ? `${item.label}（${item.note}）` : item.label))
+              : null,
+          ),
+        ),
+      ),
+    ),
+    h(Card, { title: t('已安装'), desc: t('打开「优先」的包，名字会直接列在 catalog 里；其余包用 search 检索。') },
+      error ? h(Notice, { tone: 'error' }, error)
+        : !packs ? h('p', { style: S.desc }, t('正在读取音效包…'))
+        : packs.length === 0 ? h('p', { style: S.desc }, t('还没有安装任何音效包。把包目录的路径填在下面安装。'))
+        : h('div', { style: S.list }, packs.map(pack => h('div', { key: pack.id, style: S.item },
+            h('div', { style: S.itemHead },
+              h('span', { style: { fontWeight: 600 } }, pack.name),
+              h('span', { style: S.mono }, pack.id),
+              h('span', { style: S.chip }, `${pack.count} ${t('条')}`),
+              pack.tokens ? h('span', { style: S.chip }, t('约 {0}K tokens', pack.tokens)) : null,
+              pack.license ? h('span', { style: S.chip }, pack.license) : null,
+              h('span', { style: { flex: 1 } }),
+              h(Switch, {
+                checked: pack.priority,
+                disabled: busy === pack.id,
+                onChange: () => toggle(pack),
+                label: pack.priority ? t('优先') : t('普通'),
+              }),
+              h(Btn, { kind: 'ghost', disabled: busy === pack.id, onClick: () => remove(pack) }, t('删除')),
             ),
-            h(Switch, {
-              checked: pack.priority,
-              disabled: busy === pack.id,
-              onChange: () => toggle(pack),
-              label: pack.priority ? t('优先') : t('普通'),
-            }),
-            h(Btn, { kind: 'ghost', disabled: busy === pack.id, onClick: () => remove(pack) }, t('删除')),
+            h('div', { style: S.mono }, pack.dir),
           ))),
-      h('p', { style: { ...S.desc, marginTop: '10px' } }, t('打开「优先」会占用更多上下文，建议只对常用的音效包使用。')),
+      h('p', { style: { ...S.desc, marginTop: 10 } }, t('打开「优先」会占用更多上下文，建议只对常用的音效包使用。')),
     ),
     h(Card, { title: t('安装音效包'), desc: t('填一个包含 manifest.json 的包目录。没有 manifest 的目录先用打包脚本生成。') },
       h('div', { style: S.row },
-        h(TextInput, { value: installPath, placeholder: 'D:\\AnyAudioSFX-build\\BaseSFX', onChange: setInstallPath }),
+        h(TextInput, { value: installPath, placeholder: 'D:\\Downloads\\BaseSFX', onChange: setInstallPath }),
         h(Btn, { kind: 'primary', disabled: busy === 'install' || !installPath.trim(), onClick: install }, t('安装')),
       ),
+    ),
+    h(Card, { title: t('音效包目录'), desc: t('整台机器共用这一个音效库；装一次，所有工程共用。') },
+      h('div', { style: S.mono }, root || t('正在读取…')),
     ),
   )
 }
@@ -530,6 +551,20 @@ function DiagnosticsTab({ state, reload, notify }) {
     try {
       await api('/config/reset', { method: 'POST', body: {} })
       notify(t('设置已恢复默认'))
+      await reload()
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+  // The guide's "seen" flag is the plugin's own number, not the shell's: the
+  // shell forgets as soon as the person types, so replaying means clearing this.
+  async function replayGuide() {
+    setBusy('guide')
+    try {
+      await api('/config', { method: 'POST', body: { patch: { ui: { onboardedVersion: 0 } } } })
+      notify(t('已重置。打开一个新对话即可看到引导。'))
       await reload()
     } catch (error) {
       notify(error.message, 'error')
@@ -550,6 +585,12 @@ function DiagnosticsTab({ state, reload, notify }) {
         h(Btn, { onClick: reload }, t('重新检测')),
         h(Btn, { onClick: async () => { try { await navigator.clipboard.writeText(state.configPath); notify(t('路径已复制')) } catch { notify(t('复制失败，请手动选择'), 'error') } } }, t('复制配置路径')),
         h(Btn, { disabled: busy === 'reset', onClick: reset }, t('恢复默认设置')),
+      ),
+    ),
+    h(Card, { title: t('首次安装引导'), desc: t('装音源、装音效包、认识剪辑台。已经看过的话，这里可以重放。') },
+      h('div', { style: S.row },
+        h(Btn, { disabled: busy === 'guide', onClick: replayGuide }, t('重新播放引导')),
+        h('span', { style: S.desc }, t('重置后打开一个新对话即可看到。')),
       ),
     ),
     h(Card, { title: t('音源搜索目录') },
@@ -673,4 +714,4 @@ function Page() {
   )
 }
 
-export { Page }
+export { Page, FontsTab, FxLibTab }

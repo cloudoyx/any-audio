@@ -546,6 +546,13 @@ function renderText(args, value) {
           }
         }
         if ((value.library ?? []).length > 0) lines.push('')
+        else {
+          // An empty library is not a dead end: the person can install the
+          // recommended pack, and saying so is more useful than silently
+          // dropping to the presets.
+          lines.push('还没有安装任何音效包。让用户到「设置 → AnyAudio → 音效包」装一个（推荐的基础音效包 BaseSFX 在那里有下载地址）。')
+          lines.push('')
+        }
         for (const warning of value.libraryWarnings ?? []) lines.push(`! ${warning}`)
         if ((value.libraryWarnings ?? []).length > 0) lines.push('')
 
@@ -579,6 +586,7 @@ function renderText(args, value) {
         const lines = []
         if (value.total === 0) {
           lines.push(`库里没有匹配的名字："${value.query}"`)
+          if (value.packCount === 0) lines.push('还没有安装任何音效包。让用户到「设置 → AnyAudio → 音效包」装一个（推荐的基础音效包 BaseSFX 在那里有下载地址）。')
         } else {
           lines.push(...value.results.map((entry) => {
             const mark = entry.priority ? '（优先）' : ''
@@ -786,7 +794,7 @@ export const sfxToolDefinition = finalizeTool({
       }
       // `remote` is omitted rather than set to null: the output schema declares it
       // as an object, and a null there fails the whole tool result.
-      return { ok: true, action: 'search', ...found, ...(remote ? { remote } : {}), warnings }
+      return { ok: true, action: 'search', ...found, packCount: packs.length, ...(remote ? { remote } : {}), warnings }
     }
 
     const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items', { workspaceRoot })
