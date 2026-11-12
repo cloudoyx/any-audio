@@ -100,6 +100,7 @@ const fontState = {
       bytes: 32 * 1024 * 1024,
       license: 'CC0-1.0',
       note: 'General MIDI, 32 MB',
+      tagline: '通用音色，配乐够用',
       default: true,
       suggested: false,
     },
@@ -129,6 +130,33 @@ step('the installed sound sources use the same card as the packs', () => {
     if (element.props?.style?.borderRadius === 8 && element.props?.style?.flexDirection === 'column') items.push(element)
   })
   assert.ok(items.length >= 1, 'the installed list must use the shared item card')
+})
+
+step('a fully installed recommendation list collapses to one line', () => {
+  assert.ok(fontsText.includes('推荐音源已全部安装'), 'the collapsed line is missing')
+  assert.ok(findClickable(fontsTree, '查看'), 'the way back into the list is missing')
+  assert.ok(!fontsText.includes('下载安装'), 'nothing should still be offered for download')
+})
+
+step('a missing recommendation is offered with its one-line purpose', () => {
+  const partial = {
+    ...fontState,
+    rows: [],
+  }
+  const tree = FontsTab({ state: { fonts: partial }, reload: () => {}, notify: () => {} })
+  const body = text(tree)
+  assert.ok(body.includes('GeneralUser GS'), 'the recommendation is missing')
+  assert.ok(body.includes('通用音色，配乐够用'), 'the one-line purpose is missing')
+  assert.ok(findClickable(tree, '下载安装'), 'the download button is missing')
+  assert.ok(!body.includes('许可证'), 'the licence must stay behind Details')
+})
+
+step('the licence and the checksum live behind Details', () => {
+  const installed = fontsTree.children.find((card) => card?.props?.title === '已安装')
+  assert.ok(!text(installed).includes('许可证'), 'the licence must not be on the card')
+  assert.ok(!text(installed).includes('SHA-256'), 'the checksum must not be on the card')
+  assert.ok(!text(installed).includes('校验'), 'verify must not be on the card')
+  assert.ok(findClickable(installed, '详情'), 'the Details toggle is missing')
 })
 
 const fxTree = FxLibTab({ state: {}, reload: () => {}, notify: () => {} })

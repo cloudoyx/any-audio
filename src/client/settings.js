@@ -17,6 +17,9 @@ function FontsTab({ state, reload, notify }) {
   const [preview, setPreview] = useState(null)
   const [picker, setPicker] = useState(null)
   const [customPath, setCustomPath] = useState('')
+  const [openDetails, setOpenDetails] = useState({})
+  const [showRecommended, setShowRecommended] = useState(false)
+  const toggleDetails = (key) => setOpenDetails(current => ({ ...current, [key]: !current[key] }))
 
   // The job lives on the host, not in this component: reopening the settings
   // page must pick up an install that is still running.
@@ -137,10 +140,15 @@ function FontsTab({ state, reload, notify }) {
   const fonts = state.fonts
   const percent = job && job.total ? (job.received / job.total) * 100 : 0
   const installing = Boolean(job && job.status === 'running')
+  // Once every recommendation is installed the section is a wall of "已安装"
+  // that says nothing; one line and a way back in is the whole message.
+  const allRecommendedInstalled = fonts.available.length > 0
+    && fonts.available.every(font => fonts.rows.some(row => row.recommendedId === font.id))
+
   return h(Fragment, null,
     h(Card, {
       title: t('推荐音源'),
-      desc: t('作者精选。装一套 32 MB 的 GeneralUser GS 就能覆盖大部分配乐；想更真实可以再加一套。文件只放在本机，不进 git、不进插件包。'),
+      desc: t('作者精选。装一套就能覆盖大部分配乐。'),
       right: h(Btn, { onClick: reload }, t('刷新')),
     },
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -150,24 +158,35 @@ function FontsTab({ state, reload, notify }) {
         ),
         h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
       ) : null,
-      h('div', { style: S.list },
-        fonts.available.map(font => {
-          const installed = fonts.rows.find(row => row.recommendedId === font.id)
-          return h('div', { key: font.id, style: S.item },
-            h('div', { style: S.itemHead },
-              h('span', { style: { fontWeight: 600 } }, font.name),
-              font.default ? h('span', { style: S.chip }, t('默认')) : null,
-              font.suggested && !font.default ? h('span', { style: S.chip }, t('建议安装')) : null,
-              h('span', { style: S.mono }, bytes(font.bytes)),
-              h('span', { style: S.chip }, installed ? (installed.status === 'ok' ? t('已安装') : installed.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')) : t('未安装')),
-              installed ? null : h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装')),
-            ),
-            h('div', { style: S.desc }, font.note),
-            h('div', { style: S.mono }, t('许可证：{0}', font.license)),
-            font.manual ? h('div', { style: S.mono }, t('手动下载：{0}', font.manual)) : null,
-          )
-        }),
-      ),
+      allRecommendedInstalled && !showRecommended
+        ? h('div', { style: S.row },
+          h('span', { style: S.desc }, t('推荐音源已全部安装')),
+          h(Btn, { onClick: () => setShowRecommended(true) }, t('查看')),
+        )
+        : h('div', { style: S.list },
+          fonts.available.map(font => {
+            const installed = fonts.rows.find(row => row.recommendedId === font.id)
+            const key = `rec:${font.id}`
+            const open = Boolean(openDetails[key])
+            return h('div', { key: font.id, style: S.item },
+              h('div', { style: S.itemHead },
+                h('span', { style: { fontWeight: 600 } }, font.name),
+                h('span', { style: S.mono }, bytes(font.bytes)),
+                h('span', { style: S.chip }, installed ? t('已安装') : t('未安装')),
+                font.default ? h('span', { style: S.chip }, t('默认')) : null,
+                h('span', { style: { flex: 1 } }),
+                installed ? null : h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装')),
+                h(Btn, { onClick: () => toggleDetails(key) }, open ? t('收起') : t('详情')),
+              ),
+              font.tagline ? h('div', { style: S.desc }, t(font.tagline)) : null,
+              open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+                h('div', { style: S.mono }, t('许可证：{0}', font.license)),
+                font.manual ? h('div', { style: S.mono }, t('手动下载：{0}', font.manual)) : null,
+                installed?.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', installed.sha256.slice(0, 24), installed.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
+              ) : null,
+            )
+          }),
+        ),
     ),
     h(Card, { title: t('已安装'), desc: t('这些音源已经在这台机器上，可以直接用。') },
       preview ? h('div', { style: { ...S.item } },
@@ -186,21 +205,30 @@ function FontsTab({ state, reload, notify }) {
       ) : null,
       fonts.rows.length === 0
         ? h('p', { style: S.desc }, t('还没有安装任何音源。从上面的推荐里挑一套，或在下面按文件安装。'))
-        : h('div', { style: S.list }, fonts.rows.map(row => h('div', { key: row.path, style: S.item },
-          h('div', { style: S.itemHead },
-            h('span', { style: { fontWeight: 600 } }, row.name),
-            h('span', { style: S.mono }, bytes(row.bytes)),
-            h('span', { style: S.chip }, row.status === 'ok' ? t('已安装') : row.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')),
-            isDefault(row) ? h('span', { style: S.chip }, t('默认')) : null,
-            h('span', { style: { flex: 1 } }),
-            h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
-            h(Btn, { onClick: () => act('verify', { path: row.path }) }, t('校验')),
-            h(Btn, { kind: isDefault(row) ? 'primary' : 'plain', onClick: () => setDefault(row) }, isDefault(row) ? t('当前默认') : t('设为默认')),
-            h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', row.name))) act('remove', { path: row.path, removeFile: true }) } }, t('删除')),
-          ),
-          h('div', { style: S.mono }, row.path),
-          row.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', row.sha256.slice(0, 24), row.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
-        ))),
+        : h('div', { style: S.list }, fonts.rows.map(row => {
+          const recommended = fonts.available.find(font => font.id === row.recommendedId)
+          const label = recommended?.name ?? row.name
+          const open = Boolean(openDetails[row.path])
+          return h('div', { key: row.path, style: S.item },
+            h('div', { style: S.itemHead },
+              h('span', { style: { fontWeight: 600 } }, label),
+              h('span', { style: S.mono }, bytes(row.bytes)),
+              isDefault(row) ? h('span', { style: S.chip }, t('默认')) : null,
+              row.status === 'ok' ? null : h('span', { style: S.chip }, row.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')),
+              h('span', { style: { flex: 1 } }),
+              h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
+              h(Btn, { kind: isDefault(row) ? 'primary' : 'plain', onClick: () => setDefault(row) }, isDefault(row) ? t('当前默认') : t('设为默认')),
+              h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', label))) act('remove', { path: row.path, removeFile: true }) } }, t('删除')),
+              h(Btn, { onClick: () => toggleDetails(row.path) }, open ? t('收起') : t('详情')),
+            ),
+            recommended?.tagline ? h('div', { style: S.desc }, t(recommended.tagline)) : null,
+            open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+              h('div', { style: S.mono }, row.path),
+              row.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', row.sha256.slice(0, 24), row.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
+              h('div', { style: S.row }, h(Btn, { onClick: () => act('verify', { path: row.path }) }, t('校验'))),
+            ) : null,
+          )
+        })),
     ),
     h(Card, { title: t('安装音源'), desc: t('填一个 .sf2 / .sf3 / .dls 文件的路径。7z / zip 请先解压。') },
       h('div', { style: S.row },
@@ -420,6 +448,8 @@ function FxLibTab({ state, reload, notify }) {
   const [installPath, setInstallPath] = useState('')
   const [error, setError] = useState('')
   const [showDownloads, setShowDownloads] = useState(false)
+  const [openDetails, setOpenDetails] = useState({})
+  const toggleDetails = (key) => setOpenDetails(current => ({ ...current, [key]: !current[key] }))
 
   const load = useCallback(async () => {
     try {
@@ -489,21 +519,22 @@ function FxLibTab({ state, reload, notify }) {
             h('span', { style: S.chip }, BASE_PACK.size),
             h('span', { style: S.chip }, BASE_PACK.license),
             installed ? h('span', { style: S.chip }, t('已安装')) : null,
-          ),
-          h('div', { style: S.desc }, BASE_PACK.summary),
-          h('div', { style: S.desc }, t('压缩包，下载后解压，把解压出来的 BaseSFX 目录路径填到下面「安装」。')),
-          h('div', { style: S.row },
+            h('span', { style: { flex: 1 } }),
             h(Btn, { onClick: () => setShowDownloads(value => !value) }, t('去下载')),
-            showDownloads
-              ? BASE_PACK.downloads.map(item => h('a', {
+          ),
+          h('div', { style: S.desc }, t(BASE_PACK.summary)),
+          h('div', { style: S.desc }, t('压缩包，下载后解压，把解压出来的 BaseSFX 目录路径填到下面「安装」。')),
+          showDownloads
+            ? h('div', { style: S.row },
+              BASE_PACK.downloads.map(item => h('a', {
                 key: item.label,
                 href: item.url,
                 target: '_blank',
                 rel: 'noreferrer',
                 style: { ...S.btn('plain'), textDecoration: 'none', display: 'inline-block' },
-              }, item.note ? `${item.label}（${item.note}）` : item.label))
-              : null,
-          ),
+              }, item.note ? `${item.label}（${item.note}）` : item.label)),
+            )
+            : null,
         ),
       ),
     ),
@@ -511,12 +542,12 @@ function FxLibTab({ state, reload, notify }) {
       error ? h(Notice, { tone: 'error' }, error)
         : !packs ? h('p', { style: S.desc }, t('正在读取音效包…'))
         : packs.length === 0 ? h('p', { style: S.desc }, t('还没有安装任何音效包。把包目录的路径填在下面安装。'))
-        : h('div', { style: S.list }, packs.map(pack => h('div', { key: pack.id, style: S.item },
+        : h('div', { style: S.list }, packs.map(pack => {
+          const open = Boolean(openDetails[pack.id])
+          return h('div', { key: pack.id, style: S.item },
             h('div', { style: S.itemHead },
               h('span', { style: { fontWeight: 600 } }, pack.name),
-              h('span', { style: S.mono }, pack.id),
               h('span', { style: S.chip }, `${pack.count} ${t('条')}`),
-              pack.tokens ? h('span', { style: S.chip }, t('约 {0}K tokens', pack.tokens)) : null,
               pack.license ? h('span', { style: S.chip }, pack.license) : null,
               h('span', { style: { flex: 1 } }),
               h(Switch, {
@@ -526,9 +557,14 @@ function FxLibTab({ state, reload, notify }) {
                 label: pack.priority ? t('优先') : t('普通'),
               }),
               h(Btn, { kind: 'ghost', disabled: busy === pack.id, onClick: () => remove(pack) }, t('删除')),
+              h(Btn, { onClick: () => toggleDetails(pack.id) }, open ? t('收起') : t('详情')),
             ),
-            h('div', { style: S.mono }, pack.dir),
-          ))),
+            open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+              h('div', { style: S.mono }, pack.dir),
+              pack.tokens ? h('div', { style: S.desc }, t('优先时约占用 {0}K tokens 上下文', pack.tokens)) : null,
+            ) : null,
+          )
+        })),
       h('p', { style: { ...S.desc, marginTop: 10 } }, t('打开「优先」会占用更多上下文，建议只对常用的音效包使用。')),
     ),
     h(Card, { title: t('安装音效包'), desc: t('填一个包含 manifest.json 的包目录。没有 manifest 的目录先用打包脚本生成。') },

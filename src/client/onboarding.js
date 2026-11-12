@@ -223,7 +223,7 @@ export function Guide({ complete }) {
 
   if (step === 1) {
     return h(Modal, { title: t('装音源'), step: 2, onClose: finish },
-      h('p', { style: S.desc }, t('乐器声音来自这里。装一套 GeneralUser GS（32 MB）就能覆盖大部分配乐。')),
+      h('p', { style: S.desc }, t('乐器声音来自这里。装一套 GeneralUser GS（32 MB）——通用音色，配乐够用。')),
       fontInstalled ? h(Notice, null, t('已安装 {0} 个音源', fonts.rows.length)) : null,
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
         h('div', { style: { ...S.row, justifyContent: 'space-between' } },
@@ -241,7 +241,7 @@ export function Guide({ complete }) {
 
   if (step === 2) {
     return h(Modal, { title: t('装音效包'), step: 3, onClose: finish },
-      h('p', { style: S.desc }, t('真实录音的音效库。基础包 BaseSFX 有 {0} 条，覆盖{1}。', BASE_PACK.count, BASE_PACK.summary)),
+      h('p', { style: S.desc }, t('真实录音的音效库。基础包 BaseSFX 有 {0} 条：{1}。', BASE_PACK.count, t(BASE_PACK.summary))),
       packInstalled ? h(Notice, null, t('已安装')) : null,
       downloadHint ? h(Downloads, null) : null,
       downloadHint

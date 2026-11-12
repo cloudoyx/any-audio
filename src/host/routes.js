@@ -129,6 +129,7 @@ async function fontState(workspaceRoot) {
       url: preset.url ?? null,
       license: preset.license,
       note: preset.note,
+      tagline: preset.tagline ?? '',
       scores: preset.scores,
       default: Boolean(preset.default),
       suggested: Boolean(preset.suggested),
