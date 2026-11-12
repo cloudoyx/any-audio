@@ -564,6 +564,27 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     res.end(item.buffer)
   }
 
+  /**
+   * Static pictures that ship with the plugin.
+   *
+   * An `<img>` cannot send the client header, so this sits outside the gate the
+   * same way the audio route does; the cross-site rejection above still applies.
+   */
+  async function assetRoute(res, name) {
+    try {
+      const buffer = await readFile(new URL(`../client/assets/${name}`, import.meta.url))
+      res.writeHead(200, {
+        'content-type': 'image/webp',
+        'content-length': buffer.length,
+        'cache-control': 'public, max-age=86400',
+      })
+      res.end(buffer)
+    } catch {
+      res.writeHead(404, { 'content-type': 'text/plain' })
+      res.end('asset not found')
+    }
+  }
+
   async function route(req, res) {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const fetchSite = String(req.headers['sec-fetch-site'] ?? '')
@@ -574,6 +595,10 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     const method = (req.method ?? 'GET').toUpperCase()
     if (path === `${PREFIX}/audio`) {
       await audioRoute(res, url.searchParams.get('id'))
+      return
+    }
+    if (method === 'GET' && path === `${PREFIX}/assets/hero.webp`) {
+      await assetRoute(res, 'hero.webp')
       return
     }
     if (path.startsWith(`${PREFIX}/clipbay/`)) {

@@ -189,9 +189,10 @@ step('the guide stays closed once the version is current', () => {
 
 step('the guide opens on a fresh install', () => {
   primeOnboardingConfig({ ui: { onboardedVersion: 0 } })
-  const tree = Guide({ complete: () => {} })
+  const tree = Guide()
   assert.ok(tree, 'the guide must render when it has not been seen')
   assert.equal(tree.props.title, 'AnyAudio')
+  assert.ok(String(tree.props.hero).endsWith('/assets/hero.webp'), `the welcome step needs its banner, got ${tree.props.hero}`)
   assert.ok(findClickable(tree, '开始'), 'the welcome step must offer a start')
   assert.ok(findClickable(tree, '跳过'), 'the welcome step must offer a skip')
 })

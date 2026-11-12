@@ -13,7 +13,7 @@
  */
 import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, TextInput, Notice, useSurface } from './ui.js'
 import { t } from './i18n.js'
-import { api } from './api.js'
+import { api, API } from './api.js'
 import { BASE_PACK } from './base-pack.js'
 import { createPortal } from 'react-dom'
 
@@ -50,6 +50,10 @@ const OVERLAY = {
 // ended up light-on-white in dark mode. The shell's own dialog token is used
 // first, and the surface read from the DOM is the fallback for a theme that does
 // not define it.
+// The banner ships with the plugin and is served by the host, so the bundle
+// stays small and the browser caches it like any other picture.
+const HERO = `${API}/assets/hero.webp`
+
 function dialogStyle(surface) {
   return {
     width: 'min(520px, 100%)',
@@ -58,17 +62,13 @@ function dialogStyle(surface) {
     background: `var(--dsw-alias-bg-layer-2, ${surface})`,
     border: `1px solid var(--dsw-alias-border-l2, ${C.border})`,
     borderRadius: 12,
-    padding: '20px 22px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
     boxShadow: '0 18px 48px rgba(0,0,0,0.35)',
     fontSize: 13,
     lineHeight: 1.6,
   }
 }
 
-function Modal({ title, step, children, onClose }) {
+function Modal({ title, step, hero, children, onClose }) {
   const surface = useSurface()
 
   useEffect(() => {
@@ -91,11 +91,16 @@ function Modal({ title, step, children, onClose }) {
       onMouseDown: (event) => { if (event.target === event.currentTarget) onClose() },
     },
       h('div', { style: dialogStyle(surface), role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-        h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
-          h('span', { style: { fontSize: 16, fontWeight: 600 } }, title),
-          h('span', { style: { ...S.mono, marginLeft: 'auto' } }, `${step} / 4`),
+        hero ? h('img', { src: hero, alt: '', style: { width: '100%', display: 'block' } }) : null,
+        h('div', { style: { padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 12 } },
+          h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
+            // The banner already carries the wordmark, so the title would be the
+            // same word twice in a row.
+            hero ? null : h('span', { style: { fontSize: 16, fontWeight: 600 } }, title),
+            h('span', { style: { ...S.mono, marginLeft: 'auto' } }, `${step} / 4`),
+          ),
+          children,
         ),
-        children,
       ),
     ),
     document.body,
@@ -234,7 +239,7 @@ export function Guide() {
   const percent = job && job.total ? Math.round((job.received / job.total) * 100) : 0
 
   if (step === 0) {
-    return h(Modal, { title: 'AnyAudio', step: 1, onClose: finish },
+    return h(Modal, { title: 'AnyAudio', step: 1, hero: HERO, onClose: finish },
       h('p', { style: S.desc }, t('让 agent 帮你写谱、配音、加音效，最后在剪辑台上试听和微调。')),
       h('p', { style: S.desc }, t('它本身不带音源和音效包，需要装一次，大概 2 分钟。')),
       h(Actions, null,

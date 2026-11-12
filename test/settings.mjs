@@ -210,8 +210,19 @@ server.listen(0, '127.0.0.1', async () => {
     console.log(`  preview: ${preview.durationSec}s peak ${preview.peakDb}dBFS ${bytes.length} bytes`)
   })
 
-  await step('font presets can be listed and previewed per program', async () => {
-    const font = state.fonts.rows.find((row) => row.recommendedId === 'generaluser') ?? state.fonts.rows[0]
+  // The first-run guide's banner is an <img>, which cannot send the client
+  // header: it has to be reachable like the audio route is.
+  await step('the guide banner is served without the client header', async () => {
+    const response = await fetch(`${origin}/api/dsh-any-audio/assets/hero.webp`)
+    assert(response.status === 200, `banner returned ${response.status}`)
+    assert(response.headers.get('content-type') === 'image/webp', `banner is ${response.headers.get('content-type')}`)
+    const bytes = Buffer.from(await response.arrayBuffer())
+    assert(bytes.length > 1000, `banner is only ${bytes.length} bytes`)
+    assert(bytes.toString('ascii', 8, 12) === 'WEBP', 'banner is not a webp')
+    console.log(`  banner: ${bytes.length} bytes`)
+  })
+
+  await step('font presets can be listed and previewed per program', async () => {    const font = state.fonts.rows.find((row) => row.recommendedId === 'generaluser') ?? state.fonts.rows[0]
     const list = await get(`/sources/presets?path=${encodeURIComponent(font.path)}`)
     assert(list.ok && Array.isArray(list.presets), `preset list failed: ${list.error}`)
     assert(list.presets.length > 100, `expected a large GM preset list, got ${list.presets.length}`)
