@@ -174,10 +174,43 @@ export function Slider({ value, min, max, step, onChange, title, disabled }) {
   })
 }
 
+/** Whether a CSS colour is dark enough that native controls must render dark. */
+function isDarkColor(color) {
+  const text = String(color)
+  const rgb = text.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+  if (rgb) {
+    const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
+    return (0.299 * r + 0.587 * g + 0.114 * b) < 128
+  }
+  const hex = text.match(/^#([0-9a-f]{6})$/i)
+  if (hex) {
+    const value = parseInt(hex[1], 16)
+    const [r, g, b] = [(value >> 16) & 255, (value >> 8) & 255, value & 255]
+    return (0.299 * r + 0.587 * g + 0.114 * b) < 128
+  }
+  return false
+}
+
+/**
+ * A dropdown whose list is readable in both themes.
+ *
+ * The popup is drawn by the browser, not by this stylesheet: without
+ * `color-scheme` it stays white while the text stays light, which is how the
+ * voice list became unreadable in dark mode. The option colours are set as well,
+ * because a browser that ignores `color-scheme` on a select still honours them.
+ */
 export function Select({ value, onChange, options }) {
-  return h('select', { value, onChange: event => onChange(event.target.value), style: S.input },
-    options.map(option => h('option', { key: option.value, value: option.value }, option.label)),
-  )
+  const surface = useSurface()
+  const dark = isDarkColor(surface)
+  return h('select', {
+    value,
+    onChange: event => onChange(event.target.value),
+    style: { ...S.input, colorScheme: dark ? 'dark' : 'light' },
+  }, options.map(option => h('option', {
+    key: option.value,
+    value: option.value,
+    style: { background: surface, color: 'inherit' },
+  }, option.label)))
 }
 
 export function Switch({ checked, onChange, label, title }) {

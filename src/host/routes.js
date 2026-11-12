@@ -409,7 +409,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       rate: body.rate ?? config.tts.edge.rate,
       pitch: body.pitch ?? config.tts.edge.pitch,
       volume: body.volume ?? config.tts.edge.volume,
-      style: body.style ?? (provider === 'mimo' ? config.tts.mimo.style : undefined),
+      style: body.style,
       proxy: provider === 'mimo' ? config.tts.mimo.proxy || undefined : config.tts.edge.proxy || undefined,
       baseUrl: config.tts.mimo.baseUrl,
       model: config.tts.mimo.model,

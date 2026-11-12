@@ -269,11 +269,14 @@ export const ttsToolDefinition = finalizeTool({
         ? item.voice.trim()
         : (itemProvider === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice)
       // Rate/pitch/volume are Edge-only fields; MiMo gets its delivery from `style`.
+      // The style is the caller's, never a saved default: how a line should be
+      // read depends on the line, so a value fixed in Settings would be wrong for
+      // every script but the one it was written for.
       const edgeRate = item.rate ?? config.tts.edge.rate
       const edgePitch = item.pitch ?? config.tts.edge.pitch
       const edgeVolume = item.volume ?? config.tts.edge.volume
       const style = itemProvider === 'mimo'
-        ? [config.tts.mimo.style, item.style, styleFromLegacy({ rate: edgeRate, pitch: edgePitch })].filter((part) => typeof part === 'string' && part.trim()).join('。')
+        ? [item.style, styleFromLegacy({ rate: edgeRate, pitch: edgePitch })].filter((part) => typeof part === 'string' && part.trim()).join('。')
         : undefined
       // Scratch, not `out/`: the line the person keeps is the project's copy, and
       // `out/` is where they go looking for what a tool produced. Measured on a

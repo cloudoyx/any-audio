@@ -322,7 +322,7 @@ function TtsTab({ state, reload, notify }) {
   async function test() {
     setBusy('preview')
     try {
-      const data = await api('/tts/preview', { method: 'POST', body: { provider, voice: provider === 'mimo' ? form.mimo.voice : form.edge.voice, style: form.mimo.style, text: previewText } })
+      const data = await api('/tts/preview', { method: 'POST', body: { provider, voice: provider === 'mimo' ? form.mimo.voice : form.edge.voice, text: previewText } })
       setPreview(data)
       notify(t('试听已生成'))
     } catch (error) {
@@ -342,9 +342,6 @@ function TtsTab({ state, reload, notify }) {
         ? h(Select, { value: form.edge.voice, onChange: value => set('edge.voice', value), options: state.tts.edgeVoices.map(voice => ({ value: voice, label: voice })) })
         : h(Select, { value: form.mimo.voice, onChange: value => set('mimo.voice', value), options: state.tts.mimoVoices.map(voice => ({ value: voice, label: voice })) }),
     ),
-    provider === 'mimo'
-      ? h(Field, { label: t('风格（可选）'), hint: t('一句话描述语气，例如「温柔、缓慢、纪录片旁白」') }, h(TextInput, { value: form.mimo.style, onChange: value => set('mimo.style', value) }))
-      : null,
     provider === 'mimo'
       ? h('div', { style: S.row },
         h('span', { style: S.label }, state.tts.mimoConfigured ? t('Key 已配置') : t('Key 未配置')),

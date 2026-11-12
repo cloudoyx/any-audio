@@ -132,8 +132,6 @@ export const EN = {
   '代理（可选）': 'Proxy (optional)',
   '国内网络必要时填 http://127.0.0.1:7890': 'Set http://127.0.0.1:7890 if your network needs a proxy',
   '默认直连；系统代理会改写 MiMo 请求时再填': 'Direct by default; fill this when a system proxy rewrites MiMo requests',
-  '风格（可选）': 'Style (optional)',
-  '用一句话描述语气，例如「温柔、缓慢、纪录片旁白」': 'One sentence of direction, e.g. "gentle, slow, documentary narration"',
   '模型': 'Model',
   '默认 mimo-v2.5-tts': 'Defaults to mimo-v2.5-tts',
   'API 地址': 'API base URL',
