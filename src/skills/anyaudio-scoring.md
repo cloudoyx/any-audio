@@ -140,9 +140,42 @@
 
 ## 音效
 
-`anyaudio_sfx` 有两套引擎，优先用默认音源库里的真实采样，没有合适的再用程序化合成。
+`anyaudio_sfx` 有三级来源，**按顺序用，不要跳级**：
 
-**① 默认库音效（优先）**：`{items:[{preset:"rain", startSec:0, durationSec:20, gainDb:-8}]}`。两套默认音源（GeneralUser GS、MuseScore General）里 GM 120–127 的音色就是音效库：鸟鸣、海岸、雨、雷、风、溪流、狗、马蹄、电话、门、风铃、汽车、警车、火车、飞机、掌声、笑声、尖叫、枪声、爆炸、脚步、心跳等，共 52 条。用 `anyaudio_sfx action:"catalog"` 看完整列表（带形态、起音、峰值）。要点：
+1. **本地音效库**（优先）：`{sound:"门-木门-敲门-三下-中等"}`
+2. **线上 CC0**：本地没有时，`action:"search"` 会去 Freesound 找
+3. **合成兜底**：`{preset:...}` 或 `{type:...}`，**必须在回复里说明「这是合成的」**
+
+### ① 本地音效库（优先）
+
+`anyaudio_sfx action:"catalog"` 列出优先包的全部名字，按动效 / 环境音 / 设计音效分组。普通包不展开，用 `action:"search"` 找。
+
+**一个名字 = 一条录音，里面可能本来就含着几下。** `门-木门-敲门-三下-中等` 就是三下，不要当一下用。要更密更长就多摆几个片段错开，不是去库里找「五下」的素材。
+
+**工具不会自己切分素材**，但你可以自己决定怎么用：
+
+| 想做的事 | 怎么做 |
+|---|---|
+| 只用其中一下 | `inSec` / `outSec` 取那一段 |
+| 让声音更厚 | 同一条素材错开几百毫秒叠两层 |
+| 对齐画面 | 用 `inspect` 的 `peakPosSec`：`startSec = 动作时刻 − peakPosSec` |
+| 调音量 | 片段的 `gainDb`，不是重新生成 |
+
+`action:"inspect"` 会给出时长、主峰位置，动效与设计音效还附一张波形图——看它判断瞬态还是持续、单峰还是多峰、峰值在第几秒。**图只能佐证名字，不能推翻名字**：名字说「三下」而图上只有一个峰，说明这条素材有问题，报出来，不要将就。
+
+### ② 线上 CC0
+
+本地确实没有时，`action:"search"` 会去 Freesound 搜 CC0，返回 `freesound/<id>` 和 `previewUrl`。取用时把两个都传回去：
+
+```json
+{ "sound": "freesound/865364", "previewUrl": "https://cdn.freesound.org/...-hq.mp3", "startSec": 12.4 }
+```
+
+许可按筛选条件记 `CC0-1.0`，provenance 会写进素材档案。
+
+### ③ 合成兜底（最后）
+
+**① 默认库音效**：`{items:[{preset:"rain", startSec:0, durationSec:20, gainDb:-8}]}`。两套默认音源（GeneralUser GS、MuseScore General）里 GM 120–127 的音色就是音效库：鸟鸣、海岸、雨、雷、风、溪流、狗、马蹄、电话、门、风铃、汽车、警车、火车、飞机、掌声、笑声、尖叫、枪声、爆炸、脚步、心跳等，共 52 条。用 `anyaudio_sfx action:"catalog"` 看完整列表（带形态、起音、峰值）。要点：
 
 - 一次性音效（枪声、爆炸、门、脚步、掌声短促版）不写 `durationSec`，会自然放完；持续床（雨、风、海岸、掌声、直升机）写 `durationSec` 决定铺多久，可以 `fadeInSec/fadeOutSec` 做进出。
 - 峰值差很大（脚步 -29、爆炸 -17），不要默认全部 0dB，按画面主次给 `gainDb`；一般关键音效 -6~-10，床 -12~-20。
