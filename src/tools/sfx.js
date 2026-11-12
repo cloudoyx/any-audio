@@ -439,7 +439,15 @@ export const sfxToolDefinition = finalizeTool({
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
       peakDb: { type: 'number', description: 'Ignored, with a warning: normalising each file separately would change the relative balance between effects. Set each item\'s gainDb instead, or adjust the clip gain in the project.' },
       group: { type: 'string', description: 'Catalog filter: noise, weather, animals, home, traffic, crowd or weapons.' },
-      query: { type: 'string', description: 'For action:"search": the text to look for inside sound names. For action:"catalog": a preset filter.' },
+      query: {
+        type: 'string',
+        description: 'For action:"search": the text to look for inside sound names. A name that contains it is a hit, wherever it sits. '
+          + 'Use short words, not sentences: search 敲门, not 用力敲门; search 雨, not 雨声 (a name may say 小雨, which does not contain 雨声). '
+          + 'Run 3–5 words from different dimensions in parallel — what it sounds like, the object, the action, the material. '
+          + 'When nothing hits, change the dimension (action → object → material → result sound), and only then try a synonym. '
+          + 'Stop after 3 rounds and move on; do not keep rewording. '
+          + 'For action:"catalog": a preset filter.',
+      },
       names: { oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }], description: 'For action:"inspect": the sound names to look at (up to 3 get a waveform image).' },
       limit: { type: 'number', description: 'For action:"search": how many names to return, default 30.' },
       type: { type: 'string', description: 'For action:"search": only return sounds of this kind (foley, ambience, dsn).' },
