@@ -198,11 +198,88 @@ export function resolveSound(packs, rawName) {
   )
 }
 
+/**
+ * Find sounds by name across every installed pack.
+ *
+ * The rule is one line: a name that contains the query is a hit, wherever the
+ * query sits. No stemming, no synonyms, no tags — the names were written by a
+ * person and the agent reads them, so the only job here is to not lose a hit.
+ *
+ * Ordering only decides who comes first, never who appears: an exact name, then
+ * a hit at a segment boundary, then a hit earlier in the name, then the closer
+ * duration. Returning 30 names the agent can read beats returning 0 because the
+ * ranking was strict.
+ */
+export function search(packs, { query, type, limit = 30, packsConfig } = {}) {
+  const text = String(query ?? '').trim()
+  if (!text) throw new SfxLibraryError('a search query is required')
+  const wantedType = type ? String(type) : null
+  if (wantedType && !['foley', 'ambience', 'dsn'].includes(wantedType)) {
+    throw new SfxLibraryError(`unknown sound type "${wantedType}"; expected foley, ambience or dsn`)
+  }
+
+  const hits = []
+  for (const pack of packs) {
+    for (const sound of pack.sounds) {
+      if (wantedType && sound.type !== wantedType) continue
+      const at = sound.name.indexOf(text)
+      if (at < 0) continue
+      const segments = sound.name.split('-')
+      const wholeSegment = segments.includes(text)
+      const startsSegment = segments.some((segment) => segment.startsWith(text))
+      hits.push({
+        name: sound.name,
+        packId: pack.id,
+        packName: pack.name,
+        type: sound.type,
+        durationSec: sound.durationSec,
+        priority: isPriorityPack(packsConfig, pack.id),
+        score: (sound.name === text ? 8 : 0)
+          + (wholeSegment ? 4 : 0)
+          + (startsSegment ? 2 : 0)
+          + (at === 0 ? 1 : 0),
+        at,
+      })
+    }
+  }
+
+  hits.sort((a, b) => b.score - a.score || a.at - b.at || a.durationSec - b.durationSec || a.name.localeCompare(b.name))
+  const total = hits.length
+  const shown = hits.slice(0, Math.max(1, Number(limit) || 30))
+  return {
+    query: text,
+    total,
+    shown: shown.length,
+    truncated: total > shown.length,
+    results: shown.map(({ score, at, ...rest }) => rest),
+  }
+}
+
 /** A pack's directory must exist and be a directory before it can be installed. */
 export async function assertPackDir(dir) {
   const info = await stat(dir).catch(() => null)
   if (!info?.isDirectory()) throw new SfxLibraryError(`"${dir}" is not a directory`)
   return dir
+}
+
+/**
+ * Whether a pack is expanded in `catalog` or only summarised there.
+ *
+ * The stored map holds only what the person changed; everything else falls back
+ * to a fixed default. That is why the map is an object and not a list of
+ * priority ids: a list cannot tell "never touched" from "explicitly set to
+ * normal", so switching the base pack to normal would silently switch it back.
+ */
+export const DEFAULT_PRIORITY_PACK = 'BaseSFX'
+
+export function packPriority(packsConfig, packId) {
+  const explicit = packsConfig?.[packId]
+  if (explicit === 'priority' || explicit === 'normal') return explicit
+  return packId === DEFAULT_PRIORITY_PACK ? 'priority' : 'normal'
+}
+
+export function isPriorityPack(packsConfig, packId) {
+  return packPriority(packsConfig, packId) === 'priority'
 }
 
 export { validatePackId }

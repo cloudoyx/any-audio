@@ -3,16 +3,21 @@ import { loadSoundBank, renderCompiled } from '../audio/synth.js'
 import { findRecommendedByFile, listFonts, sha256File } from '../audio/fonts.js'
 import { renderSfxMaterial, SFX_TYPES, categoryOf } from '../audio/sfx.js'
 import { listSfxPresets, resolveSfxPreset, SFX_FONTS, SFX_GROUPS } from '../audio/sfx-presets.js'
+import { isPriorityPack, listPacks, packPriority, resolveSound, search as searchLibrary, userSfxDir } from '../audio/sfx-library.js'
 import { padOrTrim, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { basename, dirname, join, resolve } from 'node:path'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
-import { finalizeTool, deliverCopy, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, resolveOutputPath, scratchPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
+import { finalizeTool, deliverCopy, findFfmpeg, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, resolveOutputPath, scratchPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 import { readConfig } from '../config.js'
 import { attachMaterialFile } from '../project/attach.js'
 import { projectDir } from '../project/paths.js'
 
 /** Effect categories map onto the project's track categories (spec §5.2). */
 const SFX_TRACK_CATEGORY = { 环境音: 'ambience', 动效: 'foley', 其他: 'other' }
+
+/** How a library sound's type reads on a track, and which track category it is. */
+const LIBRARY_TYPE_LABEL = { foley: '动效', ambience: '环境音', dsn: '设计音效' }
+const LIBRARY_TYPE_CATEGORY = { foley: 'foley', ambience: 'ambience', dsn: 'other' }
 
 function installedFontPaths(fonts) {
   const map = new Map()
@@ -119,8 +124,88 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
   const replacedFamilies = new Set()
   const layoutNotes = []
 
+  // Replace-or-append, decided per family before the first clip of that family
+  // lands. Re-running a batch after changing levels is the ordinary case, and
+  // it used to append: the family was busy on the same span, so `freeTrack`
+  // opened `音效 · 动效 2` and the project kept both sets. `replace` clears the
+  // family first; without it the append still happens (a second take beside the
+  // first is a legitimate want) but the reply says what it did.
+  async function prepareFamily(trackName) {
+    if (replacedFamilies.has(trackName)) return
+    replacedFamilies.add(trackName)
+    const { readProject, saveProject } = await import('../project/store.js')
+    const { trackFamily, removeTrackFamily } = await import('../project/attach.js')
+    const project = await readProject(workspaceRoot, projectId)
+    if (trackFamily(project, trackName).length === 0) return
+    if (args.replace === true) {
+      const removed = removeTrackFamily(project, trackName)
+      await saveProject(workspaceRoot, project, { by: 'agent', note: `替换音效：移除旧轨道 ${removed.join('、')}` })
+      layoutNotes.push(`replace: removed the previous ${removed.join('、')} before adding this batch.`)
+    } else {
+      layoutNotes.push(
+        `this project already had ${trackName}; this call APPENDED to it rather than replacing. `
+        + 'If the batch was meant to replace the old one, pass replace:true next time, or remove the old clips with anyaudio_project mode:"update" field:"delete".',
+      )
+    }
+  }
+
   for (const [index, item] of items.entries()) {
     const gainDb = Number.isFinite(Number(item.gainDb)) ? Number(item.gainDb) : 0
+    // A library sound is a different source, not a different kind of item: it
+    // resolves to one file in an installed pack, that file is converted into the
+    // project once, and every placement after that reuses the same material.
+    if (item.sound !== undefined) {
+      const { packs } = await listPacks()
+      const { sound, pack } = resolveSound(packs, item.sound)
+      const category = LIBRARY_TYPE_LABEL[sound.type] ?? '其他'
+      const wantedStart = Number(item.startSec ?? item.start ?? args.startSec)
+      const wantedTrackName = item.trackName || args.trackName || `音效 · ${category}`
+      await prepareFamily(wantedTrackName)
+      // `durationSec` on a library item is the clip's length, not a rewrite of
+      // the file: the material is a copy of a real recording, and re-encoding it
+      // to a different length would both lose the original and turn one sound
+      // into several materials. Trimming is what `outSec` is for, so the two are
+      // the same thing here and the shorter of them wins.
+      const wantedLength = Number(item.outSec ?? item.durationSec ?? item.duration)
+      const attached = await attachMaterialFile(workspaceRoot, projectId, null, {
+        library: { sound, packDir: pack.dir },
+        trackName: wantedTrackName,
+        category: LIBRARY_TYPE_CATEGORY[sound.type] ?? 'other',
+        label: sound.name,
+        startSec: Number.isFinite(wantedStart) ? Number(wantedStart) : undefined,
+        autoStart: !Number.isFinite(wantedStart),
+        // Everything below is a clip property, never a rewrite of the material:
+        // the same sound placed three times at three gains is still one file.
+        inSec: Number.isFinite(Number(item.inSec)) ? Number(item.inSec) : undefined,
+        outSec: Number.isFinite(wantedLength) && wantedLength > 0 ? wantedLength : undefined,
+        gainDb,
+        pan: Number.isFinite(Number(item.pan)) ? Number(item.pan) : 0,
+        fadeInSec: Number.isFinite(Number(item.fadeInSec)) ? Number(item.fadeInSec) : 0,
+        fadeOutSec: Number.isFinite(Number(item.fadeOutSec)) ? Number(item.fadeOutSec) : 0,
+        findFfmpeg,
+      })
+      if (Number.isFinite(wantedLength) && wantedLength > sound.durationSec + 1e-6) {
+        layoutNotes.push(
+          `"${sound.name}" lasts ${sound.durationSec.toFixed(2)}s; the clip uses the whole sound instead of padding it with silence`,
+        )
+      }
+      const projectCopy = join(projectDir(workspaceRoot, projectId), attached.file)
+      materials.push({
+        file: relativeToWorkspace(workspaceRoot, projectCopy),
+        absolutePath: projectCopy,
+        category,
+        durationSec: Number(attached.durationSec.toFixed(3)),
+        peakDb: attached.peakDb,
+        rmsDb: attached.rmsDb,
+        sound: `${sound.packId}/${sound.name}`,
+        packId: sound.packId,
+        soundName: sound.name,
+        type: sound.type,
+        gainDb,
+        attached,
+      })
+      continue
+    }
     let channels
     let entry = null
     let lengthSec
@@ -169,34 +254,7 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
     // an effect overlapping another one is an error, not an arrangement choice.
     const wantedStart = Number(item.startSec ?? item.start ?? args.startSec)
     const wantedTrackName = item.trackName || args.trackName || `音效 · ${category}`
-    // Replace-or-append, decided per family before the first clip of that family
-    // lands. Re-running a batch after changing levels is the ordinary case, and
-    // it used to append: the family was busy on the same span, so `freeTrack`
-    // opened `音效 · 动效 2` and the project kept both sets. `replace` clears the
-    // family first; without it the append still happens (a second take beside the
-    // first is a legitimate want) but the reply says what it did.
-    if (args.replace === true && !replacedFamilies.has(wantedTrackName)) {
-      replacedFamilies.add(wantedTrackName)
-      const { readProject, saveProject } = await import('../project/store.js')
-      const { trackFamily, removeTrackFamily } = await import('../project/attach.js')
-      const project = await readProject(workspaceRoot, projectId)
-      if (trackFamily(project, wantedTrackName).length > 0) {
-        const removed = removeTrackFamily(project, wantedTrackName)
-        await saveProject(workspaceRoot, project, { by: 'agent', note: `替换音效：移除旧轨道 ${removed.join('、')}` })
-        layoutNotes.push(`replace: removed the previous ${removed.join('、')} before adding this batch.`)
-      }
-    } else if (!replacedFamilies.has(wantedTrackName) && args.replace !== true) {
-      replacedFamilies.add(wantedTrackName)
-      const { readProject } = await import('../project/store.js')
-      const { trackFamily } = await import('../project/attach.js')
-      const project = await readProject(workspaceRoot, projectId)
-      if (trackFamily(project, wantedTrackName).length > 0) {
-        layoutNotes.push(
-          `this project already had ${wantedTrackName}; this call APPENDED to it rather than replacing. `
-          + 'If the batch was meant to replace the old one, pass replace:true next time, or remove the old clips with anyaudio_project mode:"update" field:"delete".',
-        )
-      }
-    }
+    await prepareFamily(wantedTrackName)
     // The level is measured here for the reply. It goes into the index too, so a
     // person asking a week later — or the clip bay's own meter — reads the same
     // number instead of re-reading the file (improvement plan 03, I-36).
@@ -303,33 +361,88 @@ async function renderMaterials(args, projectId, items, { workspaceRoot, config, 
   }
 }
 
+/**
+ * The library half of `catalog`.
+ *
+ * A priority pack is expanded to its names, grouped by type, because those are
+ * the names the agent is expected to pick from without another call. A normal
+ * pack is one line: its names are reachable through `search`, and expanding a
+ * 446-entry pack here would cost more context than the whole preset catalog.
+ */
+async function libraryCatalog(config) {
+  const { packs, warnings } = await listPacks()
+  const rows = []
+  for (const pack of packs) {
+    const priority = isPriorityPack(config.sfx?.packs, pack.id)
+    const groups = {}
+    for (const sound of pack.sounds) {
+      if (!groups[sound.type]) groups[sound.type] = []
+      groups[sound.type].push(sound.name)
+    }
+    rows.push({
+      id: pack.id,
+      name: pack.name,
+      priority,
+      count: pack.sounds.length,
+      groups: priority ? groups : {},
+      dir: pack.dir,
+    })
+  }
+  // Priority packs first, then the rest, each in directory order.
+  rows.sort((a, b) => Number(b.priority) - Number(a.priority))
+  return { packs: rows, warnings }
+}
+
+/** The `inspect` action: the fields of a few named sounds, and nothing else. */
+async function inspectSounds(names) {
+  const { packs, warnings } = await listPacks()
+  const sounds = []
+  for (const name of names) {
+    const { sound } = resolveSound(packs, name)
+    sounds.push({
+      name: sound.name,
+      packId: sound.packId,
+      type: sound.type,
+      durationSec: Number(sound.durationSec.toFixed(3)),
+      ...(sound.peakPosSec === undefined ? {} : { peakPosSec: Number(sound.peakPosSec.toFixed(3)) }),
+      file: sound.file,
+    })
+  }
+  return { sounds, warnings }
+}
+
 export const sfxToolDefinition = finalizeTool({
   name: 'anyaudio_sfx',
   description:
-    'Synthesise sound effects and add them to a clip bay project, so the person can open, hear and move them. ' +
-    'Two engines: ' +
-    '① presets from the default SoundFont banks — {preset:"rain"} or {preset:"gun-shot"}; these are real samples of birds, seashore, wind, door, car, applause, explosion and so on (run action:"catalog" to see them with notes on shape and level); ' +
-    '② procedural generators — {type:"wind"} etc. (wind, rain, water, fire, birds, footsteps, stones, whoosh, impact, bell, gong, drum, riser, heartbeat, thunder). ' +
-    'Every effect becomes its own clip: one short WAV per item, each starting at t=0, plus a manifest with file, category (环境音/动效/其他), duration and peak. ' +
-    'The clips are placed on the project timeline as they are created — pass startSec to say where, or leave it out and each effect follows the previous one on its own track. ' +
+    'Add sound effects to a clip bay project, so the person can open, hear and move them. ' +
+    'Three sources, in this order: ' +
+    '① the installed sound library — {sound:"门-木门-敲门-三下-中等"}; run action:"catalog" to see the names of the priority packs, and action:"search" to find one in the others; ' +
+    '② SoundFont presets — {preset:"rain"} or {preset:"gun-shot"} (birds, seashore, wind, door, car, applause, explosion …); ' +
+    '③ procedural generators — {type:"wind"} etc. (wind, rain, water, fire, birds, footsteps, stones, whoosh, impact, bell, gong, drum, riser, heartbeat, thunder). ' +
+    'One name is one recording, and it may already contain several hits: 门-木门-敲门-三下 is three knocks. To make a sound denser or longer, place several clips offset in time — do not look for a "five knocks" entry, the library has none and should not. ' +
+    'You decide how each clip is used: trim it with inSec/outSec, overlap two clips with fades, set gainDb and pan. The tool never splits a recording on its own (detecting hits is unreliable), but it does exactly what you ask. ' +
+    'Every effect becomes its own clip; the clips are placed on the project timeline as they are created — pass startSec to say where, or leave it out and each effect follows the previous one on its own track. ' +
     'It needs projectId; a copy of every file is kept under the project folder. ' +
     'Music itself comes from anyaudio_music; narration from anyaudio_tts. ' +
     'For one flat audio bed instead of editable clips, use anyaudio_mix — this tool no longer bakes effects together.',
   parameters: {
     type: 'object',
     properties: {
-      action: { type: 'string', description: "Set to \"catalog\" to list the sound-effect presets in the default banks (optionally filter with group/query). Otherwise omit and pass items." },
-      projectId: { type: 'string', description: 'The clip bay project these effects belong to. Required whenever you pass items: run anyaudio_project mode:"create" first when the task has no project yet. action:"catalog" does not need it.' },
+      action: { type: 'string', description: "Omit to place items. \"catalog\" lists the priority packs' sound names plus the SoundFont presets; \"search\" finds a name in every installed pack; \"inspect\" returns the fields of a few named sounds." },
+      projectId: { type: 'string', description: 'The clip bay project these effects belong to. Required whenever you pass items: run anyaudio_project mode:"create" first when the task has no project yet. The read-only actions do not need it.' },
       trackName: { type: 'string', description: 'Track name, default 音效 · <类别>. Effects that never overlap in time share one track; overlapping ones move to the next free track automatically. Everything in one call lands on its own category track.' },
       startSec: { type: 'number', description: 'Where an effect sits on the project timeline. Omitted, each effect starts right after the previous one on the same track, so a batch laid down in order plays back to back instead of stacking at 0s. An item may set its own startSec.' },
       mode: { type: 'string', enum: ['materials'], description: 'Kept for compatibility; "materials" is the only mode, and it is the default. Each effect becomes its own clip, which is what makes it adjustable.' },
-      items: { oneOf: [{ type: 'array', items: { type: 'object', additionalProperties: true } }, { type: 'string' }], description: 'SFX events: preset or type, optional startSec/durationSec/gainDb/fades/note/velocity/params/seed. A path to a .json file holding the array is also accepted. Each item becomes its own file, so one can be moved without re-rendering the others.' },
+      items: { oneOf: [{ type: 'array', items: { type: 'object', additionalProperties: true } }, { type: 'string' }], description: 'SFX events. Each item names one source: {sound:"library name"} or {preset:"rain"} or {type:"wind"}. Optional per item: startSec, gainDb, pan, fadeInSec, fadeOutSec, and for a library sound inSec/outSec to use only part of the recording. A library sound needs no durationSec (it has its own length); a procedural type does. A path to a .json file holding the array is also accepted.' },
       output: { type: 'string', description: "Optional extra copy of the delivered files: the folder that receives one file per item plus manifest.json. Relative paths resolve against the user's project. The project's own copies are always written under the project folder." },
-      durationSec: { type: 'number', description: 'Fallback length for an item that names none. A preset with its own natural tail does not need it; a procedural generator does.' },
+      durationSec: { type: 'number', description: 'Fallback length for an item that names none. A preset with its own natural tail does not need it; a procedural generator does. A library sound never needs it.' },
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
       peakDb: { type: 'number', description: 'Ignored, with a warning: normalising each file separately would change the relative balance between effects. Set each item\'s gainDb instead, or adjust the clip gain in the project.' },
       group: { type: 'string', description: 'Catalog filter: noise, weather, animals, home, traffic, crowd or weapons.' },
-      query: { type: 'string', description: 'Catalog search text (name, Chinese name or tag).' },
+      query: { type: 'string', description: 'For action:"search": the text to look for inside sound names. For action:"catalog": a preset filter.' },
+      names: { oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }], description: 'For action:"inspect": the sound names to look at (up to 3 get a waveform image).' },
+      limit: { type: 'number', description: 'For action:"search": how many names to return, default 30.' },
+      type: { type: 'string', description: 'For action:"search": only return sounds of this kind (foley, ambience, dsn).' },
       replace: { type: 'boolean', description: 'Replace instead of append. When this is a second pass over effects the project already holds (you changed levels or swapped presets and are generating again), pass true: the track family these effects land in is cleared first, so the project keeps one set rather than gaining a second. Without it a re-run appends, which is how "音效 · 动效" and "音效 · 动效 2" end up side by side.' },
     },
     required: [],
@@ -360,17 +473,43 @@ export const sfxToolDefinition = finalizeTool({
         materials: { type: 'array', items: { type: 'object', additionalProperties: true } },
         presets: { type: 'array', items: { type: 'object', additionalProperties: true } },
         calibration: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        library: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        libraryWarnings: { type: 'array' },
+        sounds: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        query: { type: 'string' },
+        total: { type: 'number' },
+        shown: { type: 'number' },
+        truncated: { type: 'boolean' },
+        results: { type: 'array', items: { type: 'object', additionalProperties: true } },
         warnings: { type: 'array' },
       },
     },
     render: textRenderer((args, value) => {
       if (value.action === 'catalog') {
-        const lines = [
-          `Sound-effect presets in the default banks: ${value.presets.length} (installed: ${value.installed.join(', ') || 'none'})`,
-          'Groups: ' + value.groups.map((entry) => `${entry.id} (${entry.label})`).join(', '),
-          'Use {items:[{preset:"rain", startSec:0, durationSec:20}]} to place them; durationSec is optional (sustained presets hold, one-shots play their natural tail).',
-          '',
-        ]
+        const lines = []
+        // The library comes first: it is the source the agent is expected to use,
+        // and the presets below it are the fallback.
+        for (const pack of value.library ?? []) {
+          if (pack.priority) {
+            lines.push(`${pack.name} ${pack.id}（优先，${pack.count} 条）`)
+            for (const [type, names] of Object.entries(pack.groups ?? {})) {
+              lines.push(`【${LIBRARY_TYPE_LABEL[type] ?? type} ${names.length}】`)
+              lines.push(...names)
+            }
+            lines.push('')
+          } else {
+            lines.push(`${pack.name} ${pack.id}（普通，${pack.count} 条）—— 需要时用 action:"search" 检索`)
+          }
+        }
+        if ((value.library ?? []).length > 0) lines.push('')
+        for (const warning of value.libraryWarnings ?? []) lines.push(`! ${warning}`)
+        if ((value.libraryWarnings ?? []).length > 0) lines.push('')
+
+        lines.push('--- 以下为 SoundFont 内置采样（兜底）---')
+        lines.push(`Sound-effect presets in the default banks: ${value.presets.length} (installed: ${value.installed.join(', ') || 'none'})`)
+        lines.push('Groups: ' + value.groups.map((entry) => `${entry.id} (${entry.label})`).join(', '))
+        lines.push('Use {items:[{preset:"rain", startSec:0, durationSec:20}]} to place them; durationSec is optional (sustained presets hold, one-shots play their natural tail).')
+        lines.push('')
         let current = null
         for (const preset of value.presets) {
           if (preset.group !== current) {
@@ -382,6 +521,28 @@ export const sfxToolDefinition = finalizeTool({
         for (const item of value.calibration ?? []) {
           if (item.match === false) lines.push('', `! ${item.note}`)
         }
+        return lines.join('\n')
+      }
+      if (value.action === 'inspect') {
+        const lines = value.sounds.map((sound) => {
+          const peak = sound.peakPosSec === undefined ? '' : ` | 主峰 ${sound.peakPosSec.toFixed(3)}s`
+          return `${sound.name} | ${LIBRARY_TYPE_LABEL[sound.type] ?? sound.type} | ${sound.durationSec.toFixed(2)}s${peak}`
+        })
+        for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
+        return lines.join('\n')
+      }
+      if (value.action === 'search') {
+        if (value.total === 0) {
+          const lines = [`库里没有匹配的名字："${value.query}"`]
+          for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
+          return lines.join('\n')
+        }
+        const lines = value.results.map((entry) => {
+          const mark = entry.priority ? '（优先）' : ''
+          return `${entry.name}${mark} | ${LIBRARY_TYPE_LABEL[entry.type] ?? entry.type} | ${entry.durationSec.toFixed(2)}s | ${entry.packId}`
+        })
+        if (value.truncated) lines.push(`共 ${value.total} 条，显示前 ${value.shown} 条；换更具体的词可以缩小范围`)
+        for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
         return lines.join('\n')
       }
       if (value.mode === 'materials') {
@@ -403,16 +564,21 @@ export const sfxToolDefinition = finalizeTool({
     const fonts = await listFonts()
     const paths = installedFontPaths(fonts)
 
-    if (String(args.action ?? '').toLowerCase() === 'catalog') {
+    const action = String(args.action ?? '').toLowerCase()
+
+    if (action === 'catalog') {
       const presets = listSfxPresets({ fonts: [...paths.keys()], group: args.group, query: args.query })
       const calibration = []
       for (const fontId of SFX_FONTS) {
         const fontPath = paths.get(fontId)
         if (fontPath) calibration.push(await fontCalibration(fontId, fontPath))
       }
+      const library = await libraryCatalog(config)
       return {
         ok: true,
         action: 'catalog',
+        library: library.packs,
+        libraryWarnings: library.warnings,
         groups: Object.entries(SFX_GROUPS).map(([id, label]) => ({ id, label })),
         presets: presets.map((entry) => ({ ...entry, note: entry.note, installed: paths.has(entry.font) })),
         installed: [...paths.keys()],
@@ -420,8 +586,26 @@ export const sfxToolDefinition = finalizeTool({
       }
     }
 
+    if (action === 'inspect') {
+      const names = Array.isArray(args.names) ? args.names : await readJsonParam(args.names, 'names', { workspaceRoot })
+      if (!Array.isArray(names) || names.length === 0) throw new Error('action:"inspect" needs names: an array of sound names (or a path to a .json file holding one)')
+      const inspected = await inspectSounds(names)
+      return { ok: true, action: 'inspect', sounds: inspected.sounds, warnings: inspected.warnings }
+    }
+
+    if (action === 'search') {
+      const { packs, warnings } = await listPacks()
+      const found = searchLibrary(packs, {
+        query: args.query,
+        type: args.type,
+        limit: args.limit,
+        packsConfig: config.sfx?.packs,
+      })
+      return { ok: true, action: 'search', ...found, warnings }
+    }
+
     const items = Array.isArray(args.items) ? args.items : await readJsonParam(args.items, 'items', { workspaceRoot })
-    if (!Array.isArray(items) || items.length === 0) throw new Error('items must be a non-empty array (or use action:"catalog")')
+    if (!Array.isArray(items) || items.length === 0) throw new Error('items must be a non-empty array (or use action:"catalog", "search" or "inspect")')
     const projectId = requireProjectId(args, 'anyaudio_sfx')
     // "timeline" mode used to bake every effect into one full-length clip, so
     // nothing on it could be moved, faded or rebalanced — the exact thing a clip

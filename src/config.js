@@ -44,6 +44,7 @@ export const DEFAULTS = {
   sfx: {
     peakDb: -4,
     sampleRate: 48000,
+    packs: {},
   },
   mix: {
     masterPeakDb: -1.5,
@@ -112,6 +113,28 @@ function text(value, fallback, maxLength = 400) {
 
 function bool(value, fallback) {
   return typeof value === 'boolean' ? value : fallback
+}
+
+/**
+ * Pack priorities: `{ "<packId>": "priority" | "normal" }`.
+ *
+ * Only what the person changed is stored. A pack that is absent falls back to
+ * the fixed default (the base pack is priority, everything else is normal), so
+ * an untouched config stays empty and a pack set to normal stays normal.
+ */
+function normalizePackPriorities(value, issues) {
+  if (value === undefined) return {}
+  if (!isPlainObject(value)) {
+    issues.push('sfx.packs must be an object of packId → "priority" | "normal"; it was ignored')
+    return {}
+  }
+  const out = {}
+  for (const [packId, state] of Object.entries(value)) {
+    if (!packId.trim()) continue
+    if (state === 'priority' || state === 'normal') out[packId] = state
+    else issues.push(`sfx.packs["${packId}"] is "${String(state)}"; expected "priority" or "normal"`)
+  }
+  return out
 }
 
 function normalizeDucking(value, base) {
@@ -199,6 +222,7 @@ export function normalizeConfig(input) {
       sfx: {
         peakDb: sfxRaw.peakDb === null ? null : clampNumber(sfxRaw.peakDb, -60, 0, DEFAULTS.sfx.peakDb),
         sampleRate: Math.round(clampNumber(sfxRaw.sampleRate, 8000, 192000, DEFAULTS.sfx.sampleRate)),
+        packs: normalizePackPriorities(sfxRaw.packs, issues),
       },
       mix: {
         masterPeakDb: mixRaw.masterPeakDb === null ? null : clampNumber(mixRaw.masterPeakDb, -60, 0, DEFAULTS.mix.masterPeakDb),

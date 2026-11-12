@@ -234,6 +234,11 @@ export async function attachClip(workspaceRoot, projectId, material, {
  * Import one generated file and place it. This is the single step every
  * generating tool ends with, so the project copy, the track and the clip are
  * created the same way whichever tool produced the audio.
+ *
+ * `library` switches the import half: instead of copying a file the tool just
+ * wrote, the material is converted out of an installed sound pack. The clip
+ * half is identical, which is the point — a library sound is placed exactly
+ * like a generated one, so nothing downstream has to know where it came from.
  */
 export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
   kind,
@@ -255,19 +260,35 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
   peakDb,
   rmsDb,
   note,
+  library,
+  findFfmpeg,
+  signal,
 } = {}) {
-  const { material } = await importGeneratedMaterial(workspaceRoot, projectId, {
-    sourcePath,
-    kind,
-    snapshotKind,
-    snapshot,
-    tool,
-    label: label ?? trackName,
-    // A caller that already measured the samples hands the numbers over instead
-    // of making the import walk them again (improvement plan 03, I-36).
-    peakDb,
-    rmsDb,
-  })
+  let material
+  if (library) {
+    const { importLibraryMaterial } = await import('./library-import.js')
+    const imported = await importLibraryMaterial(workspaceRoot, projectId, {
+      sound: library.sound,
+      packDir: library.packDir,
+      findFfmpeg,
+      signal,
+    })
+    material = imported.material
+  } else {
+    const imported = await importGeneratedMaterial(workspaceRoot, projectId, {
+      sourcePath,
+      kind,
+      snapshotKind,
+      snapshot,
+      tool,
+      label: label ?? trackName,
+      // A caller that already measured the samples hands the numbers over instead
+      // of making the import walk them again (improvement plan 03, I-36).
+      peakDb,
+      rmsDb,
+    })
+    material = imported.material
+  }
   const placed = await attachClip(workspaceRoot, projectId, material, {
     trackName,
     category,
@@ -287,6 +308,8 @@ export async function attachMaterialFile(workspaceRoot, projectId, sourcePath, {
     materialId: material.id,
     file: material.file,
     durationSec: material.durationSec,
+    peakDb: material.peakDb,
+    rmsDb: material.rmsDb,
     trackId: placed.track.id,
     trackName: placed.track.name,
     clipId: placed.clip.id,

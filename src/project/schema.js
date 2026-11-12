@@ -14,7 +14,7 @@ export const LIMITS = { durationSec: 15 * 60, tracks: 20 }
 
 export const TRACK_CATEGORIES = ['music', 'tts', 'ambience', 'foley', 'other', 'video-audio']
 
-export const MATERIAL_KINDS = ['music', 'music-stem', 'tts', 'sfx', 'ambience', 'video-audio', 'imported']
+export const MATERIAL_KINDS = ['music', 'music-stem', 'tts', 'sfx', 'ambience', 'video-audio', 'imported', 'library']
 
 /**
  * Effect chains (improvement plan 02, I-07). The shapes live here; the DSP lives

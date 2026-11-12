@@ -56,6 +56,16 @@ export function validateMaterial(entry, path = 'material') {
   if (entry.source && typeof entry.source === 'object' && entry.source.snapshot !== undefined) {
     assertRelativePath(entry.source.snapshot, `${path}.source.snapshot`)
   }
+  // A library material remembers which pack and which name it came from, so a
+  // person reading the index a month later can tell where the file originated.
+  // The pack may be gone by then; the record still has to be readable.
+  if (entry.source?.kind === 'library') {
+    for (const field of ['packId', 'soundName']) {
+      if (typeof entry.source[field] !== 'string' || !entry.source[field]) {
+        throw new ProjectSchemaError(`${path}.source.${field} must be a non-empty string for a library material`)
+      }
+    }
+  }
   return entry
 }
 
