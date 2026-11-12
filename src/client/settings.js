@@ -6,10 +6,12 @@
  * one machine-wide config file — DSH's settings service is profile-scoped, so it
  * cannot be the source of truth.
  */
-import { h, Fragment, useState, useEffect, useCallback, useMemo, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card } from './ui.js'
+import { h, Fragment, useState, useEffect, useCallback, useMemo, C, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card } from './ui.js'
 import { t, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
 import { api } from './api.js'
 import { BASE_PACK, DownloadLinks } from './base-pack.js'
+
+const GITHUB_URL = 'https://github.com/cloudoyx/any-audio'
 
 function FontsTab({ state, reload, notify }) {
   const [job, setJob] = useState(null)
@@ -195,7 +197,7 @@ function FontsTab({ state, reload, notify }) {
         h('div', { style: S.itemHead }, h('span', null, t('试听：{0}', preview.label)), h('span', { style: S.mono }, `${preview.durationSec}s · ${preview.peakDb} dBFS`)),
         picker && picker.presets.length > 1
           ? h('div', { style: S.row },
-            h('span', { style: S.label }, t('音色')),
+            h('span', { style: S.label }, t('预设')),
             h('select', {
               value: String(picker.program),
               onChange: event => selectProgram(Number(event.target.value)),
@@ -256,6 +258,8 @@ function TtsTab({ state, reload, notify }) {
   const [busy, setBusy] = useState('')
   const [previewText, setPreviewText] = useState('')
   const [preview, setPreview] = useState(null)
+  const [showKey, setShowKey] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
 
   useEffect(() => {
     if (!form && state?.config) {
@@ -328,43 +332,51 @@ function TtsTab({ state, reload, notify }) {
     }
   }
 
-  return h(Fragment, null,
-    h(Card, { title: t('配音（TTS）'), desc: t('给视频配旁白。Edge 默认可用、不需要 Key；MiMo-V2.5 需要普通 Open Platform API Key。只影响没有显式指定 voice/provider 的新任务。') },
-      h('div', { style: S.row },
-        h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' } }, h('input', { type: 'radio', checked: provider === 'edge', onChange: () => set('provider', 'edge') }), t('Edge TTS（默认，免费）')),
-        h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' } }, h('input', { type: 'radio', checked: provider === 'mimo', onChange: () => set('provider', 'mimo') }), t('MiMo-V2.5-TTS（需要 API Key）')),
-      ),
+  return h(Card, { title: t('配音（TTS）'), desc: t('给视频配旁白。Edge 免费，MiMo 需要 API Key。') },
+    h('div', { style: S.row },
+      h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' } }, h('input', { type: 'radio', checked: provider === 'edge', onChange: () => set('provider', 'edge') }), t('Edge（免费）')),
+      h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' } }, h('input', { type: 'radio', checked: provider === 'mimo', onChange: () => set('provider', 'mimo') }), t('MiMo（需要 Key）')),
+    ),
+    h(Field, { label: t('音色') },
       provider === 'edge'
-        ? h(Fragment, null,
-          h('div', { style: S.grid2 },
-            h(Field, { label: t('默认音色'), hint: t('Yunjian 为男声，Xiaoxiao 为女声') }, h(Select, { value: form.edge.voice, onChange: value => set('edge.voice', value), options: state.tts.edgeVoices.map(voice => ({ value: voice, label: voice })) })),
+        ? h(Select, { value: form.edge.voice, onChange: value => set('edge.voice', value), options: state.tts.edgeVoices.map(voice => ({ value: voice, label: voice })) })
+        : h(Select, { value: form.mimo.voice, onChange: value => set('mimo.voice', value), options: state.tts.mimoVoices.map(voice => ({ value: voice, label: voice })) }),
+    ),
+    provider === 'mimo'
+      ? h(Field, { label: t('风格（可选）'), hint: t('一句话描述语气，例如「温柔、缓慢、纪录片旁白」') }, h(TextInput, { value: form.mimo.style, onChange: value => set('mimo.style', value) }))
+      : null,
+    provider === 'mimo'
+      ? h('div', { style: S.row },
+        h('span', { style: S.label }, state.tts.mimoConfigured ? t('Key 已配置') : t('Key 未配置')),
+        state.tts.mimoConfigured && !showKey
+          ? h(Btn, { onClick: () => setShowKey(true) }, t('更换'))
+          : h(Fragment, null,
+            h(TextInput, { value: keyInput, onChange: setKeyInput, type: 'password', placeholder: t('粘贴 Open Platform API Key') }),
+            h(Btn, { kind: 'primary', disabled: !keyInput.trim() || busy === 'key', onClick: saveKey }, t('保存')),
+          ),
+        state.tts.mimoConfigured ? h(Btn, { disabled: busy === 'key', onClick: clearKey }, t('删除')) : null,
+      )
+      : null,
+    h('div', { style: S.row },
+      h(Btn, { onClick: () => setShowDetails(value => !value) }, showDetails ? t('收起') : t('详情')),
+    ),
+    showDetails
+      ? h('div', { style: S.grid2 },
+        provider === 'edge'
+          ? h(Fragment, null,
             h(Field, { label: t('语速'), hint: t('例如 -12%（负数更慢）') }, h(TextInput, { value: form.edge.rate, onChange: value => set('edge.rate', value) })),
             h(Field, { label: t('音高'), hint: t('例如 -3Hz') }, h(TextInput, { value: form.edge.pitch, onChange: value => set('edge.pitch', value) })),
             h(Field, { label: t('音量'), hint: t('通常保持 +0%') }, h(TextInput, { value: form.edge.volume, onChange: value => set('edge.volume', value) })),
-          ),
-          h(Field, { label: t('代理（可选）'), hint: t('国内网络必要时填 http://127.0.0.1:7890') }, h(TextInput, { value: form.edge.proxy, onChange: value => set('edge.proxy', value) })),
-        )
-        : h(Fragment, null,
-          h('div', { style: S.notice('warn') }, t('只支持普通 Open Platform API Key，不支持 Token Plan；Key 保存在 DSH 凭据库（本机 YAML，权限仅当前用户，不是加密存储），不会回传给浏览器。')),
-          h('div', { style: S.grid2 },
-            h(Field, { label: t('默认音色'), hint: t('mimo_default 由服务端集群决定，不同集群音色可能不同') }, h(Select, { value: form.mimo.voice, onChange: value => set('mimo.voice', value), options: state.tts.mimoVoices.map(voice => ({ value: voice, label: voice })) })),
-            h(Field, { label: t('默认风格（可选）'), hint: t('用一句话描述语气，例如「温柔、缓慢、纪录片旁白」') }, h(TextInput, { value: form.mimo.style, onChange: value => set('mimo.style', value) })),
-            h(Field, { label: t('模型'), hint: t('默认 mimo-v2.5-tts；声音克隆/设计模型见文档') }, h(TextInput, { value: form.mimo.model, onChange: value => set('mimo.model', value) })),
+            h(Field, { label: t('代理（可选）'), hint: t('国内网络必要时填 http://127.0.0.1:7890') }, h(TextInput, { value: form.edge.proxy, onChange: value => set('edge.proxy', value) })),
+          )
+          : h(Fragment, null,
+            h(Field, { label: t('模型'), hint: t('默认 mimo-v2.5-tts') }, h(TextInput, { value: form.mimo.model, onChange: value => set('mimo.model', value) })),
             h(Field, { label: t('API 地址'), hint: t('一般不需要修改') }, h(TextInput, { value: form.mimo.baseUrl, onChange: value => set('mimo.baseUrl', value) })),
-            h(Field, { label: t('代理（可选）'), hint: t('默认直连；若系统代理或规则会改写 MiMo 请求，填 http://127.0.0.1:7890 这类地址') }, h(TextInput, { value: form.mimo.proxy, onChange: value => set('mimo.proxy', value) })),
+            h(Field, { label: t('代理（可选）'), hint: t('默认直连；系统代理会改写 MiMo 请求时再填') }, h(TextInput, { value: form.mimo.proxy, onChange: value => set('mimo.proxy', value) })),
           ),
-          h('div', { style: S.row },
-            h('span', { style: { color: S.muted, minWidth: 120 } }, state.tts.mimoConfigured ? t('Key 状态：已配置') : t('Key 状态：未配置')),
-            h(TextInput, { value: keyInput, onChange: setKeyInput, type: 'password', placeholder: state.tts.mimoConfigured ? t('已配置，如需更换请重新填写') : t('粘贴 Open Platform API Key') }),
-            h(Btn, { kind: 'primary', disabled: !keyInput.trim() || busy === 'key', onClick: saveKey }, t('保存 Key')),
-            h(Btn, { disabled: busy === 'key', onClick: clearKey }, t('删除 Key')),
-          ),
-        ),
-      h('div', { style: { ...S.row, justifyContent: 'flex-end' } },
-        h(Btn, { kind: 'primary', disabled: busy === 'save', onClick: save }, t('保存为默认值')),
-      ),
-    ),
-    h(Card, { title: t('试听'), desc: t('用当前设置合成一句，确认音色、语速与情绪。') },
+      )
+      : null,
+    h('div', { style: { borderTop: `1px solid ${C.border}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
       h('textarea', {
         value: previewText,
         onChange: event => setPreviewText(event.target.value),
@@ -379,6 +391,9 @@ function TtsTab({ state, reload, notify }) {
         h('div', { style: S.itemHead }, h('span', null, preview.label), h('span', { style: S.mono }, `${preview.durationSec}s · ${preview.peakDb} dBFS`)),
         h('audio', { controls: true, autoPlay: true, src: preview.url, style: S.audio }),
       ) : null,
+    ),
+    h('div', { style: { ...S.row, justifyContent: 'flex-end' } },
+      h(Btn, { disabled: busy === 'save', onClick: save }, t('保存为默认值')),
     ),
   )
 }
@@ -726,7 +741,10 @@ function Page() {
       ),
       h(Btn, { onClick: reload }, t('刷新')),
     ),
-    h('p', { style: S.desc }, t('给视频自动配乐的插件。设置保存在本机一份文件里，不随 DSH 账户或 profile 变化；API Key 单独存在 DSH 凭据库。')),
+    h('div', { style: { ...S.row, gap: 8 } },
+      h(Btn, { onClick: () => window.open(GITHUB_URL, '_blank', 'noopener,noreferrer') }, 'GitHub'),
+      h('span', { style: S.desc }, t('喜欢的话给个 Star ⭐')),
+    ),
     h('div', { style: S.tabs }, tabs.map(item => h('button', { key: item.id, type: 'button', onClick: () => setTab(item.id), style: S.tab(item.id === tab) }, item.label))),
     active.render(),
     toast ? h('div', { style: { position: 'sticky', bottom: 8, zIndex: 5 } }, h(Notice, { tone: toast.tone === 'error' ? 'error' : 'info' }, toast.message)) : null,
