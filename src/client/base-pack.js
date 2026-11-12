@@ -11,7 +11,7 @@ export const BASE_PACK = {
   id: 'BaseSFX',
   name: '基础音效包 BaseSFX',
   count: 237,
-  size: '89 MB',
+  size: '161 MB',
   license: 'CC0-1.0',
   summary: '环境、天气、门窗、脚步、碰撞、UI、转场',
   downloads: [

@@ -137,7 +137,7 @@ const fxText = text(fxTree)
 step('the sound-pack page recommends BaseSFX with a download button', () => {
   assert.ok(fxText.includes('基础音效包 BaseSFX'), 'the recommended pack is missing')
   assert.ok(fxText.includes('237'), 'the sound count is missing')
-  assert.ok(fxText.includes('89 MB'), 'the download size is missing')
+  assert.ok(fxText.includes('161 MB'), 'the download size is missing')
   assert.ok(fxText.includes('CC0-1.0'), 'the licence is missing')
   assert.ok(findClickable(fxTree, '去下载'), 'the download button is missing')
 })
