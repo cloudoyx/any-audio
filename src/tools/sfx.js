@@ -5,6 +5,7 @@ import { renderSfxMaterial, SFX_TYPES, categoryOf } from '../audio/sfx.js'
 import { listSfxPresets, resolveSfxPreset, SFX_FONTS, SFX_GROUPS } from '../audio/sfx-presets.js'
 import { isPriorityPack, listPacks, packPriority, resolveSound, search as searchLibrary, userSfxDir } from '../audio/sfx-library.js'
 import { downloadPreview, searchFreesound } from '../audio/freesound.js'
+import { decodeMonoSamples, drawWaveform } from '../audio/waveform-png.js'
 import { padOrTrim, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { basename, dirname, join, resolve } from 'node:path'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
@@ -19,6 +20,42 @@ const SFX_TRACK_CATEGORY = { 环境音: 'ambience', 动效: 'foley', 其他: 'ot
 /** How a library sound's type reads on a track, and which track category it is. */
 const LIBRARY_TYPE_LABEL = { foley: '动效', ambience: '环境音', dsn: '设计音效' }
 const LIBRARY_TYPE_CATEGORY = { foley: 'foley', ambience: 'ambience', dsn: 'other' }
+
+/**
+ * The host services the waveform picture needs, injected once at registration.
+ *
+ * They are looked up lazily because a plugin is applied before every service is
+ * mounted, and a missing one must degrade to "no picture" rather than to a
+ * broken tool.
+ */
+let attachmentService = null
+let llmService = null
+
+export function setSfxHostServices({ attachments, llm } = {}) {
+  if (attachments !== undefined) attachmentService = attachments
+  if (llm !== undefined) llmService = llm
+}
+
+/**
+ * Whether the model behind this call can see an image.
+ *
+ * The host projects images to text for a text-only model rather than refusing
+ * the request, so a picture sent to one is silently replaced by a placeholder —
+ * the agent would believe it had looked at a waveform it never saw. Asking first
+ * is the only way to know.
+ */
+async function modelSeesImages(exec) {
+  if (!llmService?.resolveModelInfo) return false
+  const provider = exec?.agent?.options?.provider
+  const model = exec?.agent?.options?.model
+  if (!provider || !model) return false
+  try {
+    const info = await llmService.resolveModelInfo(provider, model, exec?.signal)
+    return Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')
+  } catch {
+    return false
+  }
+}
 
 function installedFontPaths(fonts) {
   const map = new Map()
@@ -446,22 +483,129 @@ async function libraryCatalog(config) {
   return { packs: rows, warnings }
 }
 
-/** The `inspect` action: the fields of a few named sounds, and nothing else. */
-async function inspectSounds(names) {
+/** The `inspect` action: the fields of a few named sounds, and a picture of each. */
+async function inspectSounds(names, { exec, withImages }) {
   const { packs, warnings } = await listPacks()
   const sounds = []
+  const ffmpeg = withImages ? findFfmpeg() : null
+  // Three pictures is the ceiling: each 1024×256 image costs about 191 tokens on
+  // DeepSeek, and a fourth would start pushing the request toward the host's
+  // image budget, where the whole turn loses its pictures instead of one.
+  const pictureBudget = 3
+  let pictures = 0
   for (const name of names) {
-    const { sound } = resolveSound(packs, name)
-    sounds.push({
+    const { sound, pack } = resolveSound(packs, name)
+    const row = {
       name: sound.name,
       packId: sound.packId,
       type: sound.type,
       durationSec: Number(sound.durationSec.toFixed(3)),
       ...(sound.peakPosSec === undefined ? {} : { peakPosSec: Number(sound.peakPosSec.toFixed(3)) }),
       file: sound.file,
-    })
+    }
+    // Ambience is chosen by scene and meaning, not by shape: its envelope is
+    // nearly flat, so a picture of it carries almost no signal (measured: 1.83 dB
+    // of envelope variation against 15.76 dB for foley).
+    if (withImages && ffmpeg && attachmentService && pictures < pictureBudget && sound.type !== 'ambience') {
+      try {
+        const samples = await decodeMonoSamples(ffmpeg.command, join(pack.dir, sound.file), { signal: exec?.signal })
+        const png = drawWaveform({ samples })
+        const ref = await attachmentService.saveImage({
+          data: png,
+          mediaType: 'image/png',
+          name: `${sound.name}.png`,
+        })
+        row.image = ref
+        pictures++
+      } catch (error) {
+        warnings.push(`no waveform for "${sound.name}": ${error.message}`)
+      }
+    }
+    sounds.push(row)
   }
-  return { sounds, warnings }
+  return { sounds, warnings, pictures }
+}
+
+function renderText(args, value) {
+      if (value.action === 'catalog') {
+        const lines = []
+        // The library comes first: it is the source the agent is expected to use,
+        // and the presets below it are the fallback.
+        for (const pack of value.library ?? []) {
+          if (pack.priority) {
+            lines.push(`${pack.name} ${pack.id}（优先，${pack.count} 条）`)
+            for (const [type, names] of Object.entries(pack.groups ?? {})) {
+              lines.push(`【${LIBRARY_TYPE_LABEL[type] ?? type} ${names.length}】`)
+              lines.push(...names)
+            }
+            lines.push('')
+          } else {
+            lines.push(`${pack.name} ${pack.id}（普通，${pack.count} 条）—— 需要时用 action:"search" 检索`)
+          }
+        }
+        if ((value.library ?? []).length > 0) lines.push('')
+        for (const warning of value.libraryWarnings ?? []) lines.push(`! ${warning}`)
+        if ((value.libraryWarnings ?? []).length > 0) lines.push('')
+
+        lines.push('--- 以下为 SoundFont 内置采样（兜底）---')
+        lines.push(`Sound-effect presets in the default banks: ${value.presets.length} (installed: ${value.installed.join(', ') || 'none'})`)
+        lines.push('Groups: ' + value.groups.map((entry) => `${entry.id} (${entry.label})`).join(', '))
+        lines.push('Use {items:[{preset:"rain", startSec:0, durationSec:20}]} to place them; durationSec is optional (sustained presets hold, one-shots play their natural tail).')
+        lines.push('')
+        let current = null
+        for (const preset of value.presets) {
+          if (preset.group !== current) {
+            current = preset.group
+            lines.push(`## ${current} — ${value.groups.find((entry) => entry.id === current)?.label ?? ''}`)
+          }
+          lines.push(`- ${preset.name} (${preset.zh}) · ${preset.shape === 'sustained' ? 'sustained' : `one-shot ${preset.lengthSec.toFixed(2)}s`} · rise ${preset.riseSec.toFixed(2)}s · peak ${preset.peakDb.toFixed(1)}dBFS · ${preset.font} · note ${preset.note}`)
+        }
+        for (const item of value.calibration ?? []) {
+          if (item.match === false) lines.push('', `! ${item.note}`)
+        }
+        return lines.join('\n')
+      }
+      if (value.action === 'inspect') {
+        const lines = value.sounds.map((sound) => {
+          const peak = sound.peakPosSec === undefined ? '' : ` | 主峰 ${sound.peakPosSec.toFixed(3)}s`
+          return `${sound.name} | ${LIBRARY_TYPE_LABEL[sound.type] ?? sound.type} | ${sound.durationSec.toFixed(2)}s${peak}`
+        })
+        for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
+        return lines.join('\n')
+      }
+      if (value.action === 'search') {
+        const lines = []
+        if (value.total === 0) {
+          lines.push(`库里没有匹配的名字："${value.query}"`)
+        } else {
+          lines.push(...value.results.map((entry) => {
+            const mark = entry.priority ? '（优先）' : ''
+            return `${entry.name}${mark} | ${LIBRARY_TYPE_LABEL[entry.type] ?? entry.type} | ${entry.durationSec.toFixed(2)}s | ${entry.packId}`
+          }))
+          if (value.truncated) lines.push(`共 ${value.total} 条，显示前 ${value.shown} 条；换更具体的词可以缩小范围`)
+        }
+        if (value.remote) {
+          lines.push('', `线上 CC0（Freesound，共 ${value.remote.total} 条）—— 取用时把 previewUrl 一起传回：`)
+          lines.push(...value.remote.results.map((entry) => {
+            const seconds = entry.durationSec === null ? '?' : entry.durationSec.toFixed(2)
+            const downloads = entry.downloads === null ? '' : ` · ${entry.downloads} 次下载`
+            return `${entry.name} | ${seconds}s | ${entry.title} · ${entry.author}${downloads}\n  previewUrl: ${entry.previewUrl}`
+          }))
+        }
+        for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
+        return lines.join('\n')
+      }
+      if (value.mode === 'materials') {
+        const lines = [
+          `Wrote ${value.materials.length} sound material(s) into project ${value.projectId}${value.deliveredDirectory ? `; a delivered copy is in ${value.deliveredDirectory}` : ''}`,
+          'Materials (each starts at t=0):',
+          ...value.materials.map((entry) => `- ${entry.file} · ${entry.category} · ${entry.durationSec.toFixed(2)}s · peak ${entry.peakDb.toFixed(1)} dBFS${entry.attached ? ` → track "${entry.attached.trackName}" @ ${Number(entry.attached.startSec).toFixed(2)}s` : ''}`),
+          `In project ${value.projectId}: each effect is its own clip, so one can be moved or dropped without re-rendering the others.`,
+          ...(value.warnings ?? []).map((warning) => `! ${warning}`),
+        ]
+        return lines.join('\n')
+      }
+      return `Wrote ${value.materials?.length ?? 0} sound material(s) in project ${value.projectId}.`
 }
 
 export const sfxToolDefinition = finalizeTool({
@@ -548,87 +692,27 @@ export const sfxToolDefinition = finalizeTool({
         warnings: { type: 'array' },
       },
     },
-    render: textRenderer((args, value) => {
-      if (value.action === 'catalog') {
-        const lines = []
-        // The library comes first: it is the source the agent is expected to use,
-        // and the presets below it are the fallback.
-        for (const pack of value.library ?? []) {
-          if (pack.priority) {
-            lines.push(`${pack.name} ${pack.id}（优先，${pack.count} 条）`)
-            for (const [type, names] of Object.entries(pack.groups ?? {})) {
-              lines.push(`【${LIBRARY_TYPE_LABEL[type] ?? type} ${names.length}】`)
-              lines.push(...names)
-            }
-            lines.push('')
-          } else {
-            lines.push(`${pack.name} ${pack.id}（普通，${pack.count} 条）—— 需要时用 action:"search" 检索`)
-          }
-        }
-        if ((value.library ?? []).length > 0) lines.push('')
-        for (const warning of value.libraryWarnings ?? []) lines.push(`! ${warning}`)
-        if ((value.libraryWarnings ?? []).length > 0) lines.push('')
-
-        lines.push('--- 以下为 SoundFont 内置采样（兜底）---')
-        lines.push(`Sound-effect presets in the default banks: ${value.presets.length} (installed: ${value.installed.join(', ') || 'none'})`)
-        lines.push('Groups: ' + value.groups.map((entry) => `${entry.id} (${entry.label})`).join(', '))
-        lines.push('Use {items:[{preset:"rain", startSec:0, durationSec:20}]} to place them; durationSec is optional (sustained presets hold, one-shots play their natural tail).')
-        lines.push('')
-        let current = null
-        for (const preset of value.presets) {
-          if (preset.group !== current) {
-            current = preset.group
-            lines.push(`## ${current} — ${value.groups.find((entry) => entry.id === current)?.label ?? ''}`)
-          }
-          lines.push(`- ${preset.name} (${preset.zh}) · ${preset.shape === 'sustained' ? 'sustained' : `one-shot ${preset.lengthSec.toFixed(2)}s`} · rise ${preset.riseSec.toFixed(2)}s · peak ${preset.peakDb.toFixed(1)}dBFS · ${preset.font} · note ${preset.note}`)
-        }
-        for (const item of value.calibration ?? []) {
-          if (item.match === false) lines.push('', `! ${item.note}`)
-        }
-        return lines.join('\n')
-      }
+    render: (args, value) => {
+      // `inspect` is the one action that returns pictures, so it builds its own
+      // block array instead of going through `textRenderer`, which can only
+      // produce text.
       if (value.action === 'inspect') {
+        const blocks = []
         const lines = value.sounds.map((sound) => {
           const peak = sound.peakPosSec === undefined ? '' : ` | 主峰 ${sound.peakPosSec.toFixed(3)}s`
           return `${sound.name} | ${LIBRARY_TYPE_LABEL[sound.type] ?? sound.type} | ${sound.durationSec.toFixed(2)}s${peak}`
         })
         for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
-        return lines.join('\n')
-      }
-      if (value.action === 'search') {
-        const lines = []
-        if (value.total === 0) {
-          lines.push(`库里没有匹配的名字："${value.query}"`)
-        } else {
-          lines.push(...value.results.map((entry) => {
-            const mark = entry.priority ? '（优先）' : ''
-            return `${entry.name}${mark} | ${LIBRARY_TYPE_LABEL[entry.type] ?? entry.type} | ${entry.durationSec.toFixed(2)}s | ${entry.packId}`
-          }))
-          if (value.truncated) lines.push(`共 ${value.total} 条，显示前 ${value.shown} 条；换更具体的词可以缩小范围`)
+        blocks.push({ type: 'text', text: lines.join('\n') })
+        for (const sound of value.sounds) {
+          if (!sound.image) continue
+          blocks.push({ type: 'text', text: `${sound.name} 的波形（横轴是时间，纵轴是振幅）` })
+          blocks.push({ type: 'image', attachment: sound.image })
         }
-        if (value.remote) {
-          lines.push('', `线上 CC0（Freesound，共 ${value.remote.total} 条）—— 取用时把 previewUrl 一起传回：`)
-          lines.push(...value.remote.results.map((entry) => {
-            const seconds = entry.durationSec === null ? '?' : entry.durationSec.toFixed(2)
-            const downloads = entry.downloads === null ? '' : ` · ${entry.downloads} 次下载`
-            return `${entry.name} | ${seconds}s | ${entry.title} · ${entry.author}${downloads}\n  previewUrl: ${entry.previewUrl}`
-          }))
-        }
-        for (const warning of value.warnings ?? []) lines.push(`! ${warning}`)
-        return lines.join('\n')
+        return blocks
       }
-      if (value.mode === 'materials') {
-        const lines = [
-          `Wrote ${value.materials.length} sound material(s) into project ${value.projectId}${value.deliveredDirectory ? `; a delivered copy is in ${value.deliveredDirectory}` : ''}`,
-          'Materials (each starts at t=0):',
-          ...value.materials.map((entry) => `- ${entry.file} · ${entry.category} · ${entry.durationSec.toFixed(2)}s · peak ${entry.peakDb.toFixed(1)} dBFS${entry.attached ? ` → track "${entry.attached.trackName}" @ ${Number(entry.attached.startSec).toFixed(2)}s` : ''}`),
-          `In project ${value.projectId}: each effect is its own clip, so one can be moved or dropped without re-rendering the others.`,
-          ...(value.warnings ?? []).map((warning) => `! ${warning}`),
-        ]
-        return lines.join('\n')
-      }
-      return `Wrote ${value.materials?.length ?? 0} sound material(s) in project ${value.projectId}.`
-    }),
+      return textRenderer(renderText)(args, value)
+    },
   },
   async execute(args, exec) {
     const workspaceRoot = await workspaceRootOf(exec)
@@ -661,7 +745,8 @@ export const sfxToolDefinition = finalizeTool({
     if (action === 'inspect') {
       const names = Array.isArray(args.names) ? args.names : await readJsonParam(args.names, 'names', { workspaceRoot })
       if (!Array.isArray(names) || names.length === 0) throw new Error('action:"inspect" needs names: an array of sound names (or a path to a .json file holding one)')
-      const inspected = await inspectSounds(names)
+      const withImages = await modelSeesImages(exec)
+      const inspected = await inspectSounds(names, { exec, withImages })
       return { ok: true, action: 'inspect', sounds: inspected.sounds, warnings: inspected.warnings }
     }
 

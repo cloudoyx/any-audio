@@ -3,10 +3,13 @@ import { registerAnyAudioRoutes } from './host/routes.js'
 import { registerTimelineExpansion } from './host/timeline-ref.js'
 import { registerAllTools } from './tools/index.js'
 import { setCredentialResolver } from './tools/tts.js'
+import { setSfxHostServices } from './tools/sfx.js'
 import { setWorkingDirectoryService } from './tools/shared.js'
 
 export const name = 'any-audio'
-export const inject = ['tools']
+// `attachments` is what turns a drawn waveform into an image block the model can
+// see; `llm` is what says whether the current model can see one at all.
+export const inject = ['tools', 'attachments', 'llm']
 
 const SKILL_NAME = 'anyaudio-scoring'
 const SKILL_SOURCE = 'any-audio'
@@ -116,9 +119,21 @@ export function apply(ctx, config = {}) {
 
   try {
     setWorkingDirectoryService(safeGet(ctx, 'workingDirectory'))
+    setSfxHostServices({
+      attachments: safeGet(ctx, 'attachments'),
+      llm: safeGet(ctx, 'llm'),
+    })
     if (typeof ctx.inject === 'function') {
       try {
         ctx.inject(['workingDirectory'], (sctx) => setWorkingDirectoryService(sctx.workingDirectory))
+      } catch {
+        // the direct lookup above stays as the fallback
+      }
+      try {
+        ctx.inject(['attachments', 'llm'], (sctx) => setSfxHostServices({
+          attachments: sctx.attachments,
+          llm: sctx.llm,
+        }))
       } catch {
         // the direct lookup above stays as the fallback
       }
