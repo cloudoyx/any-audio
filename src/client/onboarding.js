@@ -11,7 +11,7 @@
  * plugin API, and the guide has to be dismissable (Esc, click outside) rather
  * than a wall the person cannot get past.
  */
-import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, TextInput, Notice } from './ui.js'
+import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, TextInput, Notice, useSurface } from './ui.js'
 import { t } from './i18n.js'
 import { api } from './api.js'
 import { BASE_PACK } from './base-pack.js'
@@ -38,30 +38,39 @@ const OVERLAY = {
   position: 'fixed',
   inset: 0,
   zIndex: 1000,
-  background: 'var(--dsw-alias-bg-mask-1, rgba(0,0,0,0.45))',
+  background: 'rgba(0,0,0,0.45)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   padding: 20,
 }
 
-const DIALOG = {
-  width: 'min(520px, 100%)',
-  maxHeight: 'calc(100vh - 40px)',
-  overflow: 'auto',
-  background: 'var(--dsw-alias-bg-l1, #ffffff)',
-  border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.28))',
-  borderRadius: 12,
-  padding: '20px 22px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  boxShadow: '0 18px 48px rgba(0,0,0,0.28)',
-  fontSize: 13,
-  lineHeight: 1.6,
+// The dialog is portalled to `document.body`, so it inherits nothing from the
+// app: a theme token guessed here is how the title and the secondary button
+// ended up light-on-white in dark mode. The shell's own dialog token is used
+// first, and the surface read from the DOM is the fallback for a theme that does
+// not define it.
+function dialogStyle(surface) {
+  return {
+    width: 'min(520px, 100%)',
+    maxHeight: 'calc(100vh - 40px)',
+    overflow: 'auto',
+    background: `var(--dsw-alias-bg-layer-2, ${surface})`,
+    border: `1px solid var(--dsw-alias-border-l2, ${C.border})`,
+    borderRadius: 12,
+    padding: '20px 22px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    boxShadow: '0 18px 48px rgba(0,0,0,0.35)',
+    fontSize: 13,
+    lineHeight: 1.6,
+  }
 }
 
 function Modal({ title, step, children, onClose }) {
+  const surface = useSurface()
+
   useEffect(() => {
     if (typeof document === 'undefined') return undefined
     const root = document.getElementById('root')
@@ -81,7 +90,7 @@ function Modal({ title, step, children, onClose }) {
       style: OVERLAY,
       onMouseDown: (event) => { if (event.target === event.currentTarget) onClose() },
     },
-      h('div', { style: DIALOG, role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+      h('div', { style: dialogStyle(surface), role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
         h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
           h('span', { style: { fontSize: 16, fontWeight: 600 } }, title),
           h('span', { style: { ...S.mono, marginLeft: 'auto' } }, `${step} / 4`),
