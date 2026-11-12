@@ -332,16 +332,6 @@ await test('sfx timeline mode renders', async () => {
   assert.ok(text.trim().length > 0)
 })
 
-await test('mix renders', async () => {
-  const tone = await writeTone('tone-mix.wav', 1)
-  const text = await renderOf('anyaudio_mix', {
-    tracks: [{ role: 'music', path: tone }],
-    durationSec: 1,
-    output: join(scratch, 'mix-out.wav'),
-  })
-  assert.ok(text.trim().length > 0)
-})
-
 console.log(`\n${passed} passed, ${failed} failed`)
 await rm(scratch, { recursive: true, force: true })
 if (failed > 0) process.exitCode = 1

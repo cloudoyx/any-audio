@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { compileScore, parsePitch } from '../src/audio/score.js'
 import { encodeWav, parseWav, peakOf, rmsOf, toDb } from '../src/audio/wav.js'
 import { synthesizeSfx } from '../src/audio/sfx.js'
-import { buildDuckCurve, buildEnvelope } from '../src/audio/mix.js'
+import { muxVideo } from '../src/audio/mux.js'
 import { planOffset, pickProgram } from '../src/audio/banks.js'
 import { categoryOfProgram, fontScore, rankFonts } from '../src/audio/scoring.js'
 import { registerAllTools } from '../src/tools/index.js'
@@ -322,22 +322,6 @@ await test('per-track gainDb is the real relative level of each track', async ()
   near(three[2], -16, 0.8, 'third track of [0,-3,-16]')
 })
 
-await test('a narration-only mix does not crash and skips pointless ducking', async () => {
-  const sampleRate = 48000
-  const narrationPath = await writeWav(join(tmpDir, 'solo-narration.wav'), tone(3, sampleRate, { amplitude: 0.4 }), sampleRate)
-  const result = await tools.get('anyaudio_mix').execute(
-    { tracks: [{ role: 'narration', path: narrationPath }], durationSec: 3, output: '.anyaudio/test-tmp/solo-narration-mix.wav' },
-    exec,
-  )
-  assert(result.ok === true, 'a narration-only mix must succeed')
-  assert(result.ducking.enabled === false, 'ducking must be skipped when there is no bed')
-  assert(result.warnings.some((warning) => /ducking skipped/i.test(warning)), `expected a ducking-skipped warning, got ${JSON.stringify(result.warnings)}`)
-  const wav = parseWav(await readFile(result.absolutePath))
-  near(wav.durationSec, 3, 0.01, 'narration-only length')
-  assert(peakOf(wav.channels) > 0.01, 'the narration must still be audible')
-})
-
-
 await test('the font library is one shared directory, not per project', async () => {
   const { fontSearchDirs, userFontDir, listFonts } = await import('../src/audio/fonts.js')
   const dirs = fontSearchDirs()
@@ -484,79 +468,13 @@ await test('sfx renderer is deterministic', async () => {
   assert(different > 1e-6, 'a different seed must give different audio')
 })
 
-await test('ducking lowers the music bed while narration is present', async () => {
-  const sampleRate = 48000
-  const music = tone(6, sampleRate, { amplitude: 0.18 })
-  const narration = tone(6, sampleRate, { from: 2, to: 3.5, frequency: 300, amplitude: 0.5 })
-  const musicPath = await writeWav(join(tmpDir, 'duck-music.wav'), music, sampleRate)
-  const narrationPath = await writeWav(join(tmpDir, 'duck-narration.wav'), narration, sampleRate)
-  const result = await tools.get('anyaudio_mix').execute(
-    {
-      tracks: [
-        { role: 'music', path: musicPath, gainDb: 0 },
-        { role: 'narration', path: narrationPath, gainDb: 0 },
-      ],
-      durationSec: 6,
-      masterPeakDb: null,
-      output: '.anyaudio/test-tmp/duck-mix.wav',
-    },
-    exec,
-  )
-  assert(result.ducking.enabled, 'ducking should be active')
-  assert(result.ducking.measuredDropDb < -3, `music should drop at least 3 dB under narration, measured ${result.ducking.measuredDropDb} dB`)
-  const wav = parseWav(await readFile(result.absolutePath))
-  near(wav.durationSec, 6, 0.001, 'mixed length')
-  const before = windowRms(wav.channels, sampleRate, 0.2, 1.8)
-  const during = windowRms(wav.channels, sampleRate, 2.2, 3.3)
-  assert(during > before * 1.4, `narration window should be louder overall (before ${before.toFixed(3)}, during ${during.toFixed(3)})`)
-})
-
-await test('duck curve follows the narration envelope with slow attack/release', async () => {
-  const sampleRate = 48000
-  const frames = sampleRate * 2
-  const env = new Float32Array(frames)
-  for (let i = sampleRate * 0.5; i < sampleRate; i++) env[i] = 0.5
-  const curve = buildDuckCurve(env, sampleRate, { targetDb: -12, thresholdDb: -42, attackSec: 0.1, releaseSec: 0.3 })
-  assert(curve[0] > 0.99, 'curve should start at unity')
-  assert(curve[sampleRate] < 0.45, `curve should be ducked by the end of the speech (got ${curve[sampleRate].toFixed(2)})`)
-  assert(curve[curve.length - 1] > 0.9, 'curve should recover after speech ends')
-  const slow = buildEnvelope(tone(1, sampleRate, { amplitude: 0.5 }), sampleRate)
-  assert(slow[slow.length - 1] > 0.1, 'envelope should track a sustained tone')
-})
-
-await test('fades silence the head and tail of the mix', async () => {
-  const sampleRate = 48000
-  const music = tone(3, sampleRate, { amplitude: 0.3 })
-  const path = await writeWav(join(tmpDir, 'fade-source.wav'), music, sampleRate)
-  const result = await tools.get('anyaudio_mix').execute(
-    { tracks: [{ role: 'music', path, gainDb: 0, fadeInSec: 1, fadeOutSec: 1 }], durationSec: 3, masterPeakDb: null, output: '.anyaudio/test-tmp/fade-mix.wav' },
-    exec,
-  )
-  const wav = parseWav(await readFile(result.absolutePath))
-  const head = windowRms(wav.channels, sampleRate, 0, 0.05)
-  const middle = windowRms(wav.channels, sampleRate, 1.4, 1.6)
-  const tail = windowRms(wav.channels, sampleRate, 2.95, 3)
-  assert(head < middle * 0.15, `head should be faded (head ${head.toFixed(4)} vs middle ${middle.toFixed(4)})`)
-  assert(tail < middle * 0.15, `tail should be faded (tail ${tail.toFixed(4)} vs middle ${middle.toFixed(4)})`)
-})
-
-await test('a failed mux fails the whole mix instead of reporting success', async () => {
+await test('a failed mux reports the failure instead of claiming success', async () => {
   const sampleRate = 48000
   const path = await writeWav(join(tmpDir, 'mux-source.wav'), tone(2, sampleRate, { amplitude: 0.2 }), sampleRate)
   await writeFile(join(tmpDir, 'fake.mp4'), Buffer.from('not a real video'))
-  const result = await tools.get('anyaudio_mix').execute(
-    {
-      tracks: [{ role: 'music', path, gainDb: 0 }],
-      durationSec: 2,
-      video: join(tmpDir, 'fake.mp4'),
-      videoOutput: '.anyaudio/test-tmp/mux-out.mp4',
-      output: '.anyaudio/test-tmp/mux.wav',
-    },
-    exec,
-  )
-  assert(result.mux && result.mux.ok === false, 'mux should report failure')
-  assert(result.ok === false, 'the structured result must not claim success when the video could not be written')
-  assert(typeof result.mux.error === 'string' && result.mux.error.length > 0, 'the mux error must be explained')
+  const result = await muxVideo(join(tmpDir, 'fake.mp4'), path, join(tmpDir, 'mux-out.mp4'), { audioDurationSec: 2 })
+  assert(result.ok === false, 'mux should report failure')
+  assert(typeof result.error === 'string' && result.error.length > 0, 'the mux error must be explained')
 })
 
 await test('muxing keeps the video length when the audio is shorter or longer', async () => {
@@ -569,30 +487,21 @@ await test('muxing keeps the video length when the audio is shorter or longer', 
   const nearlyEqual = await writeWav(join(tmpDir, 'near.wav'), tone(4.8, sampleRate, { amplitude: 0.2 }), sampleRate)
   const long = await writeWav(join(tmpDir, 'long.wav'), tone(8, sampleRate, { amplitude: 0.2 }), sampleRate)
 
-  const nearly = await tools.get('anyaudio_mix').execute(
-    { tracks: [{ role: 'music', path: nearlyEqual }], durationSec: 4.8, video: videoPath, videoOutput: '.anyaudio/test-tmp/mux-near.mp4', output: '.anyaudio/test-tmp/mux-near.wav' },
-    exec,
-  )
-  assert(nearly.ok === true, `near-length mux failed: ${nearly.mux?.error ?? ''}`)
-  near(nearly.mux.durationSec, 5, 0.15, 'a 4.8s mix into a 5s video must still be 5s')
+  const nearly = await muxVideo(videoPath, nearlyEqual, join(tmpDir, 'mux-near.mp4'), { audioDurationSec: 4.8 })
+  assert(nearly.ok === true, `near-length mux failed: ${nearly.error ?? ''}`)
+  near(nearly.durationSec, 5, 0.15, 'a 4.8s mix into a 5s video must still be 5s')
 
-  const shorter = await tools.get('anyaudio_mix').execute(
-    { tracks: [{ role: 'music', path: short }], durationSec: 2, video: videoPath, videoOutput: '.anyaudio/test-tmp/mux-short.mp4', output: '.anyaudio/test-tmp/mux-short.wav' },
-    exec,
-  )
-  assert(shorter.ok === true, `short audio mux failed: ${shorter.mux?.error ?? ''}`)
-  near(shorter.mux.durationSec, 5, 0.15, 'a 2s mix into a 5s video must keep 5s of picture')
+  const shorter = await muxVideo(videoPath, short, join(tmpDir, 'mux-short.mp4'), { audioDurationSec: 2 })
+  assert(shorter.ok === true, `short audio mux failed: ${shorter.error ?? ''}`)
+  near(shorter.durationSec, 5, 0.15, 'a 2s mix into a 5s video must keep 5s of picture')
 
-  const longer = await tools.get('anyaudio_mix').execute(
-    { tracks: [{ role: 'music', path: long }], durationSec: 8, video: videoPath, videoOutput: '.anyaudio/test-tmp/mux-long.mp4', output: '.anyaudio/test-tmp/mux-long.wav' },
-    exec,
-  )
-  assert(longer.ok === true, `long audio mux failed: ${longer.mux?.error ?? ''}`)
-  near(longer.mux.durationSec, 5, 0.15, 'an 8s mix into a 5s video must be cut at the picture end')
+  const longer = await muxVideo(videoPath, long, join(tmpDir, 'mux-long.mp4'), { audioDurationSec: 8 })
+  assert(longer.ok === true, `long audio mux failed: ${longer.error ?? ''}`)
+  near(longer.durationSec, 5, 0.15, 'an 8s mix into a 5s video must be cut at the picture end')
 })
 
 await test('tool definitions are complete and discoverable', async () => {
-  assert(tools.size === 6, `expected 6 tools, got ${tools.size}: ${[...tools.keys()].join(', ')}`)
+  assert(tools.size === 5, `expected 5 tools, got ${tools.size}: ${[...tools.keys()].join(', ')}`)
   for (const definition of tools.values()) {
     assert(typeof definition.name === 'string' && definition.name.startsWith('anyaudio_'), `bad tool name ${definition.name}`)
     assert(definition.description.length > 80, `${definition.name} needs a descriptive description`)
@@ -639,22 +548,16 @@ await test('every tool return value matches its declared output schema', async (
     exec,
   )
   assertMatchesOutputSchema(tools.get('anyaudio_sfx'), sfxItems)
-
-  const mixed = await tools.get('anyaudio_mix').execute(
-    { tracks: [{ role: 'music', path: music.absolutePath }], durationSec: 0.6, output: '.anyaudio/test-tmp/schema-mix.wav' },
-    exec,
-  )
-  assertMatchesOutputSchema(tools.get('anyaudio_mix'), mixed)
 })
 
 await test('missing files fail with actionable messages', async () => {
   let message = ''
   try {
-    await tools.get('anyaudio_mix').execute({ tracks: [{ role: 'music', path: join(tmpDir, 'nope.wav') }] }, exec)
+    await tools.get('anyaudio_project').execute({ mode: 'add_material', projectId: await freshAttach(), sourcePath: join(tmpDir, 'nope.wav') }, exec)
   } catch (error) {
     message = error.message
   }
-  assert(message.length > 0, 'mix should fail on a missing track')
+  assert(message.length > 0, 'adding a missing file should fail')
 })
 
 await test('sources tool lists real instruments and presets', async () => {
@@ -1161,7 +1064,6 @@ await test('sfx refuses mode:"timeline" and points at the alternative', async ()
   }
   assert(error, 'the removed mode must fail')
   assert(/Use mode:"materials"/.test(error.message), `it must name the surviving mode, got: ${error.message}`)
-  assert(/anyaudio_mix/.test(error.message), 'and where a flat bed comes from now')
 })
 
 await test('a batch of sfx without startSec chains onto one track instead of stacking at 0', async () => {

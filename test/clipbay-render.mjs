@@ -325,7 +325,7 @@ await step('more than 20 tracks or 15 minutes is a schema error', async () => {
   assert(/at most 15 minutes/.test(durationError), `expected a duration-limit error, got "${durationError}"`)
 })
 
-await step('the renderer agrees with the old anyaudio_mix on a plain mix', async () => {
+await step('a plain mix places, trims and gains exactly as asked', async () => {
   const material = constantTone(1, 0.4)
   const a = { ...defaultTrack('trk_a', 'A'), items: [{ ...defaultItem('itm_a', 'mat_tone'), inSec: 0, outSec: 1, gainDb: -3 }] }
   const b = { ...defaultTrack('trk_b', 'B'), items: [{ ...defaultItem('itm_b', 'mat_tone'), startSec: 0.5, inSec: 0, outSec: 0.5 }] }

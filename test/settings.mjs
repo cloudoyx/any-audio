@@ -155,18 +155,18 @@ server.listen(0, '127.0.0.1', async () => {
     const crossPost = await fetch(base + '/config', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' },
-      body: JSON.stringify({ patch: { mix: { ducking: { targetDb: -20 } } } }),
+      body: JSON.stringify({ patch: { music: { peakDb: -20 } } }),
     })
     assert(crossPost.status === 403, `expected 403 for cross-site POST, got ${crossPost.status}`)
   })
 
   await step('config update then read back (machine-wide file)', async () => {
-    const saved = await post('/config', { patch: { mix: { ducking: { targetDb: -12 } }, output: { dir: '' } } })
+    const saved = await post('/config', { patch: { music: { peakDb: -12 }, output: { dir: '' } } })
     assert(saved.ok, saved.error)
     const again = await get('/state')
-    assert(again.config.mix.ducking.targetDb === -12, 'value not persisted')
+    assert(again.config.music.peakDb === -12, 'value not persisted')
     const onDisk = JSON.parse(await readFile(again.configPath, 'utf8'))
-    assert(onDisk.mix.ducking.targetDb === -12, 'file not written')
+    assert(onDisk.music.peakDb === -12, 'file not written')
     assert(
       again.configPath === testConfigPath || (again.configPath.includes('.dsh') && !again.configPath.includes('profiles')),
       `config path is not machine-wide: ${again.configPath}`,
@@ -174,10 +174,10 @@ server.listen(0, '127.0.0.1', async () => {
   })
 
   await step('invalid config values are clamped, unknown providers rejected', async () => {
-    const saved = await post('/config', { patch: { tts: { provider: 'nope' }, mix: { ducking: { targetDb: -999 } }, music: { sampleRate: 1 } } })
+    const saved = await post('/config', { patch: { tts: { provider: 'nope' }, music: { peakDb: -999, sampleRate: 1 } } })
     assert(saved.ok, saved.error)
     assert(saved.config.tts.provider === 'edge', 'provider must fall back')
-    assert(saved.config.mix.ducking.targetDb === -40, 'targetDb must clamp to -40')
+    assert(saved.config.music.peakDb === -60, 'peakDb must clamp to -60')
     assert(saved.config.music.sampleRate === 8000, 'sampleRate must clamp')
   })
 
@@ -185,7 +185,7 @@ server.listen(0, '127.0.0.1', async () => {
     const reset = await post('/config/reset', {})
     assert(reset.ok, reset.error)
     const again = await get('/state')
-    assert(again.config.mix.ducking.targetDb === -9, 'ducking default not restored')
+    assert(again.config.music.peakDb === -3, 'peak default not restored')
     assert(again.config.music.peakDb === -3, 'peak default not restored')
   })
 

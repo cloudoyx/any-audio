@@ -5,7 +5,7 @@
  * exercises every registered tool once.
  */
 import { readFile, rm } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { apply, inject, name } from '../src/index.js'
 import { parseWav } from '../src/audio/wav.js'
 import { projectDir } from '../src/project/paths.js'
@@ -42,7 +42,7 @@ const step = async (label, run) => {
   }
 }
 
-const EXPECTED_TOOLS = ['anyaudio_sources', 'anyaudio_music', 'anyaudio_tts', 'anyaudio_sfx', 'anyaudio_mix', 'anyaudio_project']
+const EXPECTED_TOOLS = ['anyaudio_sources', 'anyaudio_music', 'anyaudio_tts', 'anyaudio_sfx', 'anyaudio_project']
 
 console.log(`plugin: ${name}, inject: ${JSON.stringify(inject)}`)
 apply(ctx, {})
@@ -117,23 +117,6 @@ if (sfx) {
   check('effects were measured', (sfx.materials ?? []).every((material) => typeof material.peakDb === 'number'), sfx.materials?.map((material) => material.peakDb).join(', '))
 }
 
-const musicPath = rendered?.absolutePath ?? join(projectDir(repoRoot, projectId ?? 'none'), 'missing.wav')
-const sfxPath = sfx?.materials?.[0]?.absolutePath ?? musicPath
-const mixed = await step('anyaudio_mix', () =>
-  tools.get('anyaudio_mix').execute(
-    {
-      tracks: [
-        { role: 'music', path: musicPath, gainDb: -3, fadeInSec: 0.3, fadeOutSec: 0.6 },
-        { role: 'sfx', path: sfxPath, gainDb: -8 },
-      ],
-      durationSec: 3,
-      output: '.anyaudio/out/smoke-mix.wav',
-    },
-    exec,
-  ),
-)
-if (mixed) check('mix length is exact', mixed.durationSec === 3, `${mixed.peakDb} dBFS`)
-
 const exported = projectId
   ? await step('anyaudio_project render', () => tools.get('anyaudio_project').execute({ mode: 'render', projectId, format: 'wav' }, exec))
   : undefined
@@ -145,6 +128,5 @@ console.log(`ffmpeg: ${ffmpeg ? ffmpeg.version : 'not found (video mux reports a
 // every smoke run accumulate projects nobody asked for.
 if (projectId) await rm(projectDir(repoRoot, projectId), { recursive: true, force: true })
 if (exported?.file) await rm(exported.file, { force: true })
-if (mixed?.absolutePath) await rm(mixed.absolutePath, { force: true })
 console.log(failures === 0 ? '\nSmoke test passed.' : `\nSmoke test finished with ${failures} failure(s).`)
 process.exit(failures === 0 ? 0 : 1)

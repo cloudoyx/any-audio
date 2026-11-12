@@ -42,20 +42,8 @@ export const DEFAULTS = {
     tailSec: 2,
   },
   sfx: {
-    peakDb: -4,
     sampleRate: 48000,
     packs: {},
-  },
-  mix: {
-    masterPeakDb: -1.5,
-    sampleRate: 48000,
-    ducking: {
-      enabled: true,
-      targetDb: -9,
-      thresholdDb: -42,
-      attackSec: 0.12,
-      releaseSec: 0.4,
-    },
   },
   output: {
     dir: '',
@@ -111,10 +99,6 @@ function text(value, fallback, maxLength = 400) {
   return trimmed.slice(0, maxLength)
 }
 
-function bool(value, fallback) {
-  return typeof value === 'boolean' ? value : fallback
-}
-
 /**
  * Pack priorities: `{ "<packId>": "priority" | "normal" }`.
  *
@@ -135,17 +119,6 @@ function normalizePackPriorities(value, issues) {
     else issues.push(`sfx.packs["${packId}"] is "${String(state)}"; expected "priority" or "normal"`)
   }
   return out
-}
-
-function normalizeDucking(value, base) {
-  const source = isPlainObject(value) ? value : {}
-  return {
-    enabled: bool(source.enabled, base.enabled),
-    targetDb: clampNumber(source.targetDb, -40, 0, base.targetDb),
-    thresholdDb: clampNumber(source.thresholdDb, -80, -10, base.thresholdDb),
-    attackSec: clampNumber(source.attackSec, 0.01, 5, base.attackSec),
-    releaseSec: clampNumber(source.releaseSec, 0.01, 10, base.releaseSec),
-  }
 }
 
 /** Validate/repair a candidate config and report what was changed. */
@@ -176,7 +149,6 @@ export function normalizeConfig(input) {
   }
 
   const sfxRaw = isPlainObject(raw.sfx) ? raw.sfx : {}
-  const mixRaw = isPlainObject(raw.mix) ? raw.mix : {}
   const outputRaw = isPlainObject(raw.output) ? raw.output : {}
   const sourcesRaw = isPlainObject(raw.sources) ? raw.sources : {}
   const extraDirs = Array.isArray(sourcesRaw.extraDirs)
@@ -223,14 +195,8 @@ export function normalizeConfig(input) {
       },
       music,
       sfx: {
-        peakDb: sfxRaw.peakDb === null ? null : clampNumber(sfxRaw.peakDb, -60, 0, DEFAULTS.sfx.peakDb),
         sampleRate: Math.round(clampNumber(sfxRaw.sampleRate, 8000, 192000, DEFAULTS.sfx.sampleRate)),
         packs: normalizePackPriorities(sfxRaw.packs, issues),
-      },
-      mix: {
-        masterPeakDb: mixRaw.masterPeakDb === null ? null : clampNumber(mixRaw.masterPeakDb, -60, 0, DEFAULTS.mix.masterPeakDb),
-        sampleRate: Math.round(clampNumber(mixRaw.sampleRate, 8000, 192000, DEFAULTS.mix.sampleRate)),
-        ducking: normalizeDucking(mixRaw.ducking, DEFAULTS.mix.ducking),
       },
       output: {
         dir: typeof outputRaw.dir === 'string' ? outputRaw.dir.trim() : '',

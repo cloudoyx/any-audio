@@ -632,7 +632,7 @@ export const sfxToolDefinition = finalizeTool({
     'Every effect becomes its own clip; the clips are placed on the project timeline as they are created — pass startSec to say where, or leave it out and each effect follows the previous one on its own track. ' +
     'It needs projectId; a copy of every file is kept under the project folder. ' +
     'Music itself comes from anyaudio_music; narration from anyaudio_tts. ' +
-    'For one flat audio bed instead of editable clips, use anyaudio_mix — this tool no longer bakes effects together.',
+    'Every effect stays an editable clip: this tool never bakes effects together, and there is no flat-bed mode.',
   parameters: {
     type: 'object',
     properties: {
@@ -807,8 +807,7 @@ export const sfxToolDefinition = finalizeTool({
     if (String(args.mode ?? '').toLowerCase() === 'timeline') {
       throw new Error(
         '"timeline" mode was removed: it baked every effect into one clip, so nothing on it could be adjusted. '
-        + 'Use mode:"materials" — each effect becomes its own clip you can move, fade and rebalance. '
-        + 'If you really need one flat audio bed, use anyaudio_mix.',
+        + 'Use mode:"materials" — each effect becomes its own clip you can move, fade and rebalance.',
       )
     }
     if (args.mode !== undefined && String(args.mode).toLowerCase() !== 'materials') {

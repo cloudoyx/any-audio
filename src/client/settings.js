@@ -413,7 +413,7 @@ function MixTab({ state, reload, notify }) {
   async function save() {
     setBusy('save')
     try {
-      await api('/config', { method: 'POST', body: { patch: { music: form.music, sfx: form.sfx, mix: form.mix, output: form.output } } })
+      await api('/config', { method: 'POST', body: { patch: { music: form.music, output: form.output } } })
       notify(t('已保存。显式参数仍然优先于这些默认值'))
       await reload()
     } catch (error) {
@@ -422,29 +422,13 @@ function MixTab({ state, reload, notify }) {
       setBusy('')
     }
   }
-  return h(Fragment, null,
-    h(Card, { title: t('混音与输出'), desc: t('这些是工具没写参数时采用的默认值；工具调用里显式写的参数永远优先。') },
-      h('div', { style: S.grid2 },
-        h(Field, { label: t('母带峰值上限 (dBFS)'), hint: t('-1.5 留出余量；设成「不归一」会保留原始电平') },
-          h('div', { style: S.row },
-            h(NumberInput, { value: form.mix.masterPeakDb, onChange: value => set('mix.masterPeakDb', value === '' ? null : value) }),
-            h(Btn, { onClick: () => set('mix.masterPeakDb', form.mix.masterPeakDb === null ? -1.5 : null) }, form.mix.masterPeakDb === null ? t('恢复归一') : t('不归一')),
-          ),
-        ),
-        h(Field, { label: t('音乐峰值 (dBFS)'), hint: t('渲染音乐时默认归一到的峰值') }, h(NumberInput, { value: form.music.peakDb, onChange: value => set('music.peakDb', value === '' ? null : value) })),
-        h(Field, { label: t('音乐尾音 (秒)'), hint: t('最后一个音符结束后额外渲染的释放与混响') }, h(NumberInput, { value: form.music.tailSec, onChange: value => set('music.tailSec', Number(value) || 0) })),
-        h(Field, { label: t('音效峰值 (dBFS)') }, h(NumberInput, { value: form.sfx.peakDb, onChange: value => set('sfx.peakDb', value === '' ? null : value) })),
-        h(Field, { label: t('输出目录'), hint: t('留空 = 项目下 .anyaudio/out；也可以填绝对路径') }, h(TextInput, { value: form.output.dir, onChange: value => set('output.dir', value) })),
-      ),
+  return h(Card, { title: t('混音与输出'), desc: t('这些是工具没写参数时采用的默认值；工具调用里显式写的参数永远优先。') },
+    h('div', { style: S.grid2 },
+      h(Field, { label: t('音乐峰值 (dBFS)'), hint: t('渲染音乐时默认归一到的峰值') }, h(NumberInput, { value: form.music.peakDb, onChange: value => set('music.peakDb', value === '' ? null : value) })),
+      h(Field, { label: t('音乐尾音 (秒)'), hint: t('最后一个音符结束后额外渲染的释放与混响') }, h(NumberInput, { value: form.music.tailSec, onChange: value => set('music.tailSec', Number(value) || 0) })),
+      h(Field, { label: t('输出目录'), hint: t('留空 = 项目下 .anyaudio/out；也可以填绝对路径') }, h(TextInput, { value: form.output.dir, onChange: value => set('output.dir', value) })),
     ),
-    h(Card, { title: t('旁白 ducking'), desc: t('旁白出现时把音乐压下去，保证说话清楚。改的是新任务的默认值。') },
-      h(Switch, { checked: form.mix.ducking.enabled, onChange: value => set('mix.ducking.enabled', value), label: t('默认启用 ducking') }),
-      h('div', { style: S.grid2 },
-        h(Field, { label: t('压低幅度 (dB)'), hint: t('-9 表示最多降低 9 dB；越小越不明显') }, h(NumberInput, { value: form.mix.ducking.targetDb, onChange: value => set('mix.ducking.targetDb', value) })),
-        h(Field, { label: t('触发阈值 (dBFS)'), hint: t('-42 表示超过这个电平的旁白才触发') }, h(NumberInput, { value: form.mix.ducking.thresholdDb, onChange: value => set('mix.ducking.thresholdDb', value) })),
-      ),
-      h('div', { style: { ...S.row, justifyContent: 'flex-end' } }, h(Btn, { kind: 'primary', disabled: busy === 'save', onClick: save }, t('保存为默认值'))),
-    ),
+    h('div', { style: { ...S.row, justifyContent: 'flex-end' } }, h(Btn, { kind: 'primary', disabled: busy === 'save', onClick: save }, t('保存为默认值'))),
   )
 }
 
