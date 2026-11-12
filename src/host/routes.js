@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { cp, mkdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import {
@@ -19,6 +19,7 @@ import { resolveConfiguredDefault } from '../audio/banks.js'
 import { categoryOfProgram } from '../audio/scoring.js'
 import { compileScore } from '../audio/score.js'
 import { loadSoundBank, renderCompiled, listPresets } from '../audio/synth.js'
+import { assertPackDir, isPriorityPack, listPacks, readPack, userSfxDir } from '../audio/sfx-library.js'
 import { EDGE_VOICES, MIMO_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
@@ -456,6 +457,82 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     return { ok: true, configured: false }
   }
 
+  /**
+   * The installed sound packs, with the two facts the settings page needs: how
+   * many sounds each holds, and whether it is expanded in `catalog`.
+   *
+   * The context cost is an estimate, not a measurement: a priority pack's names
+   * are what the agent reads, so the number is the character count of those
+   * names at roughly 1.33 tokens per Chinese character. A normal pack costs
+   * nothing until a search hits it, so it reports no number at all.
+   */
+  async function sfxPacks() {
+    const { config } = await readConfig()
+    const { packs, warnings } = await listPacks()
+    const rows = packs.map((pack) => {
+      const priority = isPriorityPack(config.sfx?.packs, pack.id)
+      const characters = pack.sounds.reduce((sum, sound) => sum + sound.name.length, 0)
+      return {
+        id: pack.id,
+        name: pack.name,
+        version: pack.version,
+        license: pack.license,
+        count: pack.sounds.length,
+        priority,
+        tokens: priority ? Math.max(0.1, Math.round((characters * 1.33) / 100) / 10) : null,
+        dir: pack.dir,
+      }
+    })
+    rows.sort((a, b) => Number(b.priority) - Number(a.priority) || a.id.localeCompare(b.id))
+    return { ok: true, packs: rows, root: userSfxDir(), warnings }
+  }
+
+  async function sfxPackToggle(body) {
+    const packId = String(body.id ?? '').trim()
+    if (!packId) throw new Error('id is required')
+    const { config } = await readConfig()
+    const current = isPriorityPack(config.sfx?.packs, packId)
+    const next = body.priority === undefined ? !current : Boolean(body.priority)
+    const { config: updated } = await updateConfig({
+      sfx: { packs: { ...(config.sfx?.packs ?? {}), [packId]: next ? 'priority' : 'normal' } },
+    })
+    return { ok: true, id: packId, priority: next, packs: updated.sfx.packs }
+  }
+
+  async function sfxPackInstall(body) {
+    const fromPath = String(body.fromPath ?? '').trim()
+    if (!fromPath) throw new Error('fromPath is required: the directory of the pack to install')
+    const source = resolve(fromPath)
+    await assertPackDir(source)
+    const pack = await readPack(source, { packId: basename(source) })
+    if (!pack) throw new Error(`"${source}" has no manifest.json; build the pack first (scripts/build-sfx-pack.mjs)`)
+    const target = join(userSfxDir(), pack.id)
+    if (resolve(target) === source) return { ok: true, id: pack.id, installed: true, alreadyThere: true }
+    await mkdir(userSfxDir(), { recursive: true })
+    await rm(target, { recursive: true, force: true })
+    await cp(source, target, { recursive: true })
+    return { ok: true, id: pack.id, installed: true, count: pack.sounds.length, dir: target }
+  }
+
+  async function sfxPackRemove(body) {
+    const packId = String(body.id ?? '').trim()
+    if (!packId) throw new Error('id is required')
+    const target = join(userSfxDir(), packId)
+    // Only a direct child of the library may be removed: a crafted id must not
+    // reach outside it.
+    if (resolve(target) !== join(resolve(userSfxDir()), packId) || packId.includes('/') || packId.includes('\\')) {
+      throw new Error(`"${packId}" is not a pack id`)
+    }
+    await rm(target, { recursive: true, force: true })
+    const { config } = await readConfig()
+    if (config.sfx?.packs?.[packId] !== undefined) {
+      const next = { ...config.sfx.packs }
+      delete next[packId]
+      await updateConfig({ sfx: { packs: next } })
+    }
+    return { ok: true, id: packId, removed: true }
+  }
+
   function diagnostics() {
     const ffmpeg = findFfmpeg()
     return {
@@ -527,6 +604,13 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
         return json(res, 500, { ok: false, error: describeError(error) })
       }
     }
+    if (method === 'GET' && path === `${PREFIX}/sfx/packs`) {
+      try {
+        return json(res, 200, await sfxPacks())
+      } catch (error) {
+        return json(res, 500, { ok: false, error: describeError(error) })
+      }
+    }
     if (method === 'GET' && path === `${PREFIX}/jobs`) {
       const job = jobs.get(url.searchParams.get('id') ?? '')
       return json(res, job ? 200 : 404, job ? { ok: true, job: publicJob(job) } : { ok: false, error: 'job not found' })
@@ -562,6 +646,9 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       }
       if (path === `${PREFIX}/credentials/set`) return json(res, 200, await credentialsSet(body))
       if (path === `${PREFIX}/credentials/unset`) return json(res, 200, await credentialsUnset())
+      if (path === `${PREFIX}/sfx/packs/toggle`) return json(res, 200, await sfxPackToggle(body))
+      if (path === `${PREFIX}/sfx/packs/install`) return json(res, 200, await sfxPackInstall(body))
+      if (path === `${PREFIX}/sfx/packs/remove`) return json(res, 200, await sfxPackRemove(body))
       return json(res, 404, { ok: false, error: `unknown route ${path}` })
     } catch (error) {
       note(`any-audio route ${path} failed: ${describeError(error)}`)

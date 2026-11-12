@@ -416,6 +416,112 @@ function MixTab({ state, reload, notify }) {
   )
 }
 
+/**
+ * Sound packs: what is installed, and which packs `catalog` expands.
+ *
+ * There is no browser and no audition here on purpose. A sound is judged by
+ * putting it on a timeline and listening to it there, which is what the clip
+ * bay is for; a second player in the settings page would be a worse copy of it.
+ */
+function FxLibTab({ state, reload, notify }) {
+  const [packs, setPacks] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [installPath, setInstallPath] = useState('')
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api('/sfx/packs')
+      setPacks(data.packs ?? [])
+      setError('')
+    } catch (caught) {
+      setError(caught.message)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function toggle(pack) {
+    setBusy(pack.id)
+    try {
+      await api('/sfx/packs/toggle', { method: 'POST', body: { id: pack.id, priority: !pack.priority } })
+      await load()
+      await reload()
+    } catch (caught) {
+      notify(caught.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function install() {
+    const fromPath = installPath.trim()
+    if (!fromPath) return
+    setBusy('install')
+    try {
+      const result = await api('/sfx/packs/install', { method: 'POST', body: { fromPath } })
+      notify(t('已安装 {0}（{1} 条）', result.id, result.count ?? ''))
+      setInstallPath('')
+      await load()
+    } catch (caught) {
+      notify(caught.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function remove(pack) {
+    if (!window.confirm(t('删除音效包「{0}」？已经放进工程的素材不受影响。', pack.name))) return
+    setBusy(pack.id)
+    try {
+      await api('/sfx/packs/remove', { method: 'POST', body: { id: pack.id } })
+      await load()
+      await reload()
+    } catch (caught) {
+      notify(caught.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (error) return h(Card, { title: t('音效包') }, h(Notice, { tone: 'error' }, error))
+  if (!packs) return h(Card, { title: t('音效包') }, h('p', { style: S.desc }, t('正在读取音效包…')))
+
+  return h(Fragment, null,
+    h(Card, {
+      title: t('音效包'),
+      desc: t('装一次，所有工程共用。打开「优先」的包，名字会直接列在 catalog 里；其余包用 search 检索。'),
+    },
+      packs.length === 0
+        ? h('p', { style: S.desc }, t('还没有安装任何音效包。把包目录的路径填在下面安装。'))
+        : h('div', null, packs.map(pack => h('div', {
+            key: pack.id,
+            style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 0', borderBottom: `1px solid ${C.line}` },
+          },
+            h('div', { style: { flex: 1, minWidth: 0 } },
+              h('div', { style: { fontWeight: 600 } }, `${pack.name} ${pack.id}`),
+              h('div', { style: { ...S.desc, marginTop: '2px' } },
+                `${pack.count} ${t('条')}${pack.tokens ? ` · ${t('约 {0}K tokens', pack.tokens)}` : ''}${pack.license ? ` · ${pack.license}` : ''}`),
+            ),
+            h(Switch, {
+              checked: pack.priority,
+              disabled: busy === pack.id,
+              onChange: () => toggle(pack),
+              label: pack.priority ? t('优先') : t('普通'),
+            }),
+            h(Btn, { kind: 'ghost', disabled: busy === pack.id, onClick: () => remove(pack) }, t('删除')),
+          ))),
+      h('p', { style: { ...S.desc, marginTop: '10px' } }, t('打开「优先」会占用更多上下文，建议只对常用的音效包使用。')),
+    ),
+    h(Card, { title: t('安装音效包'), desc: t('填一个包含 manifest.json 的包目录。没有 manifest 的目录先用打包脚本生成。') },
+      h('div', { style: S.row },
+        h(TextInput, { value: installPath, placeholder: 'D:\\AnyAudioSFX-build\\BaseSFX', onChange: setInstallPath }),
+        h(Btn, { kind: 'primary', disabled: busy === 'install' || !installPath.trim(), onClick: install }, t('安装')),
+      ),
+    ),
+  )
+}
+
 function DiagnosticsTab({ state, reload, notify }) {
   const [busy, setBusy] = useState('')
   async function reset() {
@@ -506,6 +612,7 @@ function Page() {
 
   const tabs = useMemo(() => ([
     { id: 'sources', label: t('音源'), render: () => h(FontsTab, { state, reload, notify }) },
+    { id: 'fxlib', label: t('音效包'), render: () => h(FxLibTab, { state, reload, notify }) },
     { id: 'tts', label: t('配音'), render: () => h(TtsTab, { state, reload, notify }) },
     { id: 'mix', label: t('混音与输出'), render: () => h(MixTab, { state, reload, notify }) },
     { id: 'diagnostics', label: t('诊断'), render: () => h(DiagnosticsTab, { state, reload, notify }) },
