@@ -29,7 +29,7 @@ Models can already write code that makes sound, but it rarely sounds like an ins
 - **Real instrument timbres** — rendered from local sample banks instead of hand-written oscillators.
 - **Notes land directly on the timeline** — millisecond accuracy; music, narration and effects share one clock.
 - **Automatic mix balance** — tracks are placed in order with per-track gain, pan and fades; declaring a track as `narration` makes the plugin duck the other buses under the voice, and the master is peak-normalised so the whole mix does not clip. Every change can be auditioned section by section, and changed again.
-- **Effects and voices** — sound effects either sampled from the installed banks or generated procedurally, plus speech through Edge TTS and MiMo-V2.5-TTS (currently free).
+- **Effects and voices** — sound effects come from an installed sound library first (a pack of real recordings, searched by name), then from online CC0 when the library has nothing, and only then from the SoundFont banks or the procedural generators; speech goes through Edge TTS and MiMo-V2.5-TTS (currently free).
 
 ## Hear the difference
 
