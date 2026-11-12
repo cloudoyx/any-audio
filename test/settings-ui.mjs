@@ -151,6 +151,29 @@ step('a missing recommendation is offered with its one-line purpose', () => {
   assert.ok(!body.includes('许可证'), 'the licence must stay behind Details')
 })
 
+step('an installed recommendation moves out of the offer list', () => {
+  const second = {
+    id: 'musescore-general',
+    name: 'MuseScore General',
+    bytes: 40 * 1024 * 1024,
+    license: 'MIT',
+    note: '',
+    tagline: '管弦乐更完整',
+    default: false,
+    suggested: true,
+  }
+  const state = {
+    ...fontState,
+    available: [fontState.available[0], second],
+  }
+  const tree = FontsTab({ state: { fonts: state }, reload: () => {}, notify: () => {} })
+  const offer = tree.children.find((card) => card?.props?.title === '推荐音源')
+  const body = text(offer)
+  assert.ok(!body.includes('GeneralUser GS'), 'an installed bank must not be offered again')
+  assert.ok(body.includes('MuseScore General'), 'the bank that is still missing must be offered')
+  assert.ok(!body.includes('全部安装'), 'the card must stay expanded while something is missing')
+})
+
 step('the licence and the checksum live behind Details', () => {
   const installed = fontsTree.children.find((card) => card?.props?.title === '已安装')
   assert.ok(!text(installed).includes('许可证'), 'the licence must not be on the card')

@@ -140,10 +140,12 @@ function FontsTab({ state, reload, notify }) {
   const fonts = state.fonts
   const percent = job && job.total ? (job.received / job.total) * 100 : 0
   const installing = Boolean(job && job.status === 'running')
-  // Once every recommendation is installed the section is a wall of "已安装"
-  // that says nothing; one line and a way back in is the whole message.
-  const allRecommendedInstalled = fonts.available.length > 0
-    && fonts.available.every(font => fonts.rows.some(row => row.recommendedId === font.id))
+  // A recommendation is an offer, not a catalogue: once the bank is installed it
+  // belongs in the list below, and leaving it here only pushes the ones the
+  // person can still add further down the page.
+  const missingRecommended = fonts.available.filter(font => !fonts.rows.some(row => row.recommendedId === font.id))
+  const allRecommendedInstalled = fonts.available.length > 0 && missingRecommended.length === 0
+  const recommendedShown = showRecommended ? fonts.available : missingRecommended
 
   return h(Fragment, null,
     h(Card, {
@@ -164,7 +166,7 @@ function FontsTab({ state, reload, notify }) {
           h(Btn, { onClick: () => setShowRecommended(true) }, t('查看')),
         )
         : h('div', { style: S.list },
-          fonts.available.map(font => {
+          recommendedShown.map(font => {
             const installed = fonts.rows.find(row => row.recommendedId === font.id)
             const key = `rec:${font.id}`
             const open = Boolean(openDetails[key])
