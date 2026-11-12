@@ -184,7 +184,6 @@ export const EN = {
 
   '推荐音效包已安装': 'The recommended pack is installed',
   '音源文件不会删除，API Key 也不会删除。': 'Sound source files and API keys are kept.',
-  '提取码 {0}': 'Code {0}',
   '把解压出来的 BaseSFX 文件夹路径粘贴到这里': 'Paste the path of the unpacked BaseSFX folder',
   '粘贴文件路径': 'Paste a file path',
   '恢复默认设置': 'Reset settings',

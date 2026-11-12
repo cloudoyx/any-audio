@@ -8,7 +8,6 @@
  * whatever happens to be installed on this machine.
  */
 import { h, S, Btn } from './ui.js'
-import { t } from './i18n.js'
 
 export const BASE_PACK = {
   id: 'BaseSFX',
@@ -18,8 +17,10 @@ export const BASE_PACK = {
   license: 'CC0-1.0',
   summary: '环境、天气、门窗、脚步、碰撞、UI、转场',
   downloads: [
-    { label: '百度网盘', url: 'https://pan.baidu.com/s/1GZcPaPQ7rWi62zASE-Cq_A', code: '6666' },
-    { label: 'Google Drive', url: 'https://drive.google.com/file/d/1LCvttMGOrfWFS6da0oNAPhPz7bdcLgXu/view?usp=sharing', code: '' },
+    // The share link carries its own extraction code (`?pwd=`), so the person
+    // never has to copy one out of the page.
+    { label: '百度网盘', url: 'https://pan.baidu.com/s/1GZcPaPQ7rWi62zASE-Cq_A?pwd=6666' },
+    { label: 'Google Drive', url: 'https://drive.google.com/file/d/1LCvttMGOrfWFS6da0oNAPhPz7bdcLgXu/view?usp=sharing' },
   ],
 }
 
@@ -28,14 +29,13 @@ export const BASE_PACK = {
  *
  * `window.open` rather than an `<a target="_blank">`: the desktop shell hands a
  * window-open to the system browser, and a plain anchor inside a portalled
- * dialog did not reach it. The extraction code sits beside the link instead of
- * inside its label, where it read as part of the name.
+ * dialog did not reach it.
  */
 export function DownloadLinks() {
-  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-    BASE_PACK.downloads.map(item => h('div', { key: item.label, style: { ...S.row, gap: 8 } },
-      h(Btn, { onClick: () => window.open(item.url, '_blank', 'noopener,noreferrer') }, item.label),
-      item.code ? h('span', { style: S.desc }, t('提取码 {0}', item.code)) : null,
-    )),
+  return h('div', { style: { ...S.row, gap: 8 } },
+    BASE_PACK.downloads.map(item => h(Btn, {
+      key: item.label,
+      onClick: () => window.open(item.url, '_blank', 'noopener,noreferrer'),
+    }, item.label)),
   )
 }
