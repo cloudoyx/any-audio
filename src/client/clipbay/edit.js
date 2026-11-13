@@ -14,6 +14,7 @@
  * schema would reject: it throws, because a silent clamp hides a bug in the UI.
  */
 import { FX_TYPES } from '../../audio/fx.js'
+import { t } from '../i18n.js'
 
 export class EditError extends Error {
   constructor(message) {
@@ -71,7 +72,7 @@ export function moveClip(project, { trackId, itemId, startSec }) {
   const target = Math.max(0, Number(startSec) || 0)
   if (tidy(target) === tidy(item.startSec)) return { project: next, note: '' }
   item.startSec = tidy(target)
-  return { project: next, note: `移动片段「${item.label || item.id}」到 ${item.startSec.toFixed(2)}s` }
+  return { project: next, note: t('移动片段「{0}」到 {1}s', item.label || item.id, item.startSec.toFixed(2)) }
 }
 
 /**
@@ -101,7 +102,7 @@ export function trimClip(project, { trackId, itemId, edge, deltaSec, minLengthSe
   } else {
     throw new EditError(`unknown trim edge: ${edge}`)
   }
-  return { project: next, note: `裁剪片段「${item.label || item.id}」` }
+  return { project: next, note: t('裁剪片段「{0}」', item.label || item.id) }
 }
 
 /**
@@ -136,7 +137,7 @@ export function splitClip(project, { trackId, itemId, atSec, newItemId = newId('
   item.fadeOutSec = 0
 
   track.items.push(rightHalf)
-  return { project: next, note: `在 ${at.toFixed(2)}s 分割片段「${item.label || item.id}」` }
+  return { project: next, note: t('在 {0}s 分割片段「{1}」', at.toFixed(2), item.label || item.id) }
 }
 
 /** Remove a clip. The material and its file are untouched (spec §6.5). */
@@ -145,7 +146,7 @@ export function deleteClip(project, { trackId, itemId }) {
   const track = findTrack(next, trackId)
   const item = findItem(track, itemId)
   track.items = track.items.filter((entry) => entry.id !== itemId)
-  return { project: next, note: `删除片段「${item.label || item.id}」` }
+  return { project: next, note: t('删除片段「{0}」', item.label || item.id) }
 }
 
 /**
@@ -158,7 +159,7 @@ export function duplicateClip(project, { trackId, itemId, newItemId = newId('itm
   const item = findItem(track, itemId)
   const copy = { ...structuredClone(item), id: newItemId, startSec: tidy(itemEnd(item)) }
   track.items.push(copy)
-  return { project: next, note: `复制片段「${item.label || item.id}」` }
+  return { project: next, note: t('复制片段「{0}」', item.label || item.id) }
 }
 
 /** Per-clip gain. The renderer adds it to the track fader; nothing is rescaled. */
@@ -171,7 +172,7 @@ export function setClipGain(project, { trackId, itemId, gainDb }) {
   if (value < -120 || value > 24) throw new EditError('gain must stay between -120 and +24 dB')
   if (tidy(value) === tidy(item.gainDb)) return { project: next, note: '' }
   item.gainDb = tidy(value)
-  return { project: next, note: `调整片段「${item.label || item.id}」增益 ${item.gainDb} dB` }
+  return { project: next, note: t('调整片段「{0}」增益 {1} dB', item.label || item.id, item.gainDb) }
 }
 
 /** Per-clip pan, summed with the track pan by the renderer. */
@@ -184,7 +185,7 @@ export function setClipPan(project, { trackId, itemId, pan }) {
   if (value < -1 || value > 1) throw new EditError('pan must stay between -1 and 1')
   if (tidy(value) === tidy(item.pan)) return { project: next, note: '' }
   item.pan = tidy(value)
-  return { project: next, note: `调整片段「${item.label || item.id}」声像 ${item.pan}` }
+  return { project: next, note: t('调整片段「{0}」声像 {1}', item.label || item.id, item.pan) }
 }
 
 /**
@@ -205,7 +206,7 @@ export function setClipFades(project, { trackId, itemId, fadeInSec, fadeOutSec }
   }
   item.fadeInSec = inValue
   item.fadeOutSec = outValue
-  return { project: next, note: `调整片段「${item.label || item.id}」淡入淡出` }
+  return { project: next, note: t('调整片段「{0}」淡入淡出', item.label || item.id) }
 }
 
 export function setClipMuted(project, { trackId, itemId, muted }) {
@@ -215,7 +216,7 @@ export function setClipMuted(project, { trackId, itemId, muted }) {
   const value = Boolean(muted)
   if (value === item.muted) return { project: next, note: '' }
   item.muted = value
-  return { project: next, note: `${value ? '静音' : '取消静音'}片段「${item.label || item.id}」` }
+  return { project: next, note: value ? t('静音片段「{0}」', item.label || item.id) : t('取消静音片段「{0}」', item.label || item.id) }
 }
 
 /**
@@ -247,7 +248,7 @@ export function renameTrack(project, { trackId, name }) {
   if (value === track.name) return { project: next, note: '' }
   const before = track.name
   track.name = value.slice(0, 80)
-  return { project: next, note: `重命名轨道「${before}」为「${track.name}」` }
+  return { project: next, note: t('重命名轨道「{0}」为「{1}」', before, track.name) }
 }
 
 export function setTrackMuted(project, { trackId, muted }) {
@@ -266,7 +267,7 @@ export function setTrackMuted(project, { trackId, muted }) {
   if (cleared) track.solo = false
   return {
     project: next,
-    note: `${value ? '静音' : '取消静音'}轨道「${track.name}」${cleared ? '（同时取消独奏）' : ''}`,
+    note: (value ? t('静音轨道「{0}」', track.name) : t('取消静音轨道「{0}」', track.name)) + (cleared ? t('（同时取消独奏）') : ''),
   }
 }
 
@@ -288,7 +289,7 @@ export function setTrackSolo(project, { trackId, solo }) {
   if (cleared) track.muted = false
   return {
     project: next,
-    note: `${value ? '独奏' : '取消独奏'}轨道「${track.name}」${cleared ? '（同时取消静音）' : ''}`,
+    note: (value ? t('独奏轨道「{0}」', track.name) : t('取消独奏轨道「{0}」', track.name)) + (cleared ? t('（同时取消静音）') : ''),
   }
 }
 
@@ -304,8 +305,8 @@ export function deleteTrack(project, { trackId }) {
   return {
     project: next,
     note: count > 0
-      ? `删除轨道「${track.name}」及其 ${count} 个片段`
-      : `删除轨道「${track.name}」`,
+      ? t('删除轨道「{0}」及其 {1} 个片段', track.name, count)
+      : t('删除轨道「{0}」', track.name),
   }
 }
 
@@ -349,7 +350,7 @@ export function setClipFx(project, { trackId, itemId, chain }) {
   const wanted = assertChain(chain)
   if (JSON.stringify(wanted) === JSON.stringify(item.fx ?? [])) return { project: next, note: '' }
   item.fx = wanted.map((fx) => structuredClone(fx))
-  return { project: next, note: `设置片段「${item.label || item.id}」效果链（${describeFxChain(item.fx)}）` }
+  return { project: next, note: t('设置片段「{0}」效果链（{1}）', item.label || item.id, describeFxChain(item.fx)) }
 }
 
 /**
@@ -367,7 +368,7 @@ export function setMasterFader(project, { masterFaderDb }) {
   if (value < -120 || value > 120) throw new EditError('master fader must stay between -120 and +120 dB')
   if (tidy(value) === tidy(next.masterFaderDb ?? 0)) return { project: next, note: '' }
   next.masterFaderDb = tidy(value)
-  return { project: next, note: `调整总线音量 ${next.masterFaderDb} dB` }
+  return { project: next, note: t('调整总线音量 {0} dB', next.masterFaderDb) }
 }
 
 export function setMasterFx(project, { chain }) {
@@ -375,7 +376,7 @@ export function setMasterFx(project, { chain }) {
   const wanted = assertChain(chain)
   if (JSON.stringify(wanted) === JSON.stringify(next.masterFx ?? [])) return { project: next, note: '' }
   next.masterFx = wanted.map((fx) => structuredClone(fx))
-  return { project: next, note: `设置总线效果链（${describeFxChain(next.masterFx)}）` }
+  return { project: next, note: t('设置总线效果链（{0}）', describeFxChain(next.masterFx)) }
 }
 
 export { FX_LABELS, describeFxChain }

@@ -116,7 +116,7 @@ export function Preview({ root, projectId, project, transport }) {
     // Saying so is the difference between "the plugin is broken" and "this file
     // needs a full export first".
     seekError && hasVideo && !videoError
-      ? h('div', { style: { ...S.notice('warn'), position: 'absolute', bottom: 8, left: 8, right: 8 } }, seekError)
+      ? h('div', { style: { ...S.notice('warn'), position: 'absolute', bottom: 8, left: 8, right: 8 } }, t(seekError))
       : null,
   )
 }

@@ -17,7 +17,11 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const fxSource = readFileSync(join(root, 'src', 'audio', 'fx.js'), 'utf8')
 const source = readFileSync(join(root, 'src', 'client', 'clipbay', 'edit.js'), 'utf8')
   .replace(/^import .*$/gm, '')
-const mod = await import(`data:text/javascript;base64,${Buffer.from(`${fxSource}\n${source}`, 'utf8').toString('base64')}`)
+// `edit.js` builds its history sentences through `t()`, and the data: URL loader
+// resolves no imports, so the lookup is stubbed here. The assertions below read
+// the Chinese key, which is what the stub returns.
+const tStub = 'function t(key, ...args) { return String(key).replace(/\\{(\\d+)\\}/g, (_, i) => String(args[Number(i)] ?? "")) }'
+const mod = await import(`data:text/javascript;base64,${Buffer.from(`${fxSource}\n${tStub}\n${source}`, 'utf8').toString('base64')}`)
 const {
   moveClip, trimClip, splitClip, deleteClip, duplicateClip,
   setClipGain, setClipPan, setClipFades, setClipMuted, assertWithinLimits, EditError,
