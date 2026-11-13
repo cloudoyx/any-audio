@@ -251,6 +251,37 @@ step('skipping the guide records the version', async () => {
   }
 })
 
+step('nothing still points at a tab that was renamed or removed', async () => {
+  const files = [
+    join(root, 'src', 'client', 'onboarding.js'),
+    join(root, 'src', 'client', 'i18n.js'),
+    join(root, 'src', 'skills', 'anyaudio-clipbay.md'),
+    join(root, 'src', 'tools', 'sfx.js'),
+    join(root, 'README.md'),
+    join(root, 'README.zh-CN.md'),
+  ]
+  const stale = []
+  for (const file of files) {
+    const body = await readFile(file, 'utf8')
+    for (const [line, text] of body.split('\n').entries()) {
+      // The tab is "音效" (Sound effects); it was "音效包" (Sound packs) before.
+      if (/AnyAudio\s*→\s*音效包|AnyAudio → Diagnostics|AnyAudio → 诊断|on the \*\*Sound packs\*\* tab/.test(text)) {
+        stale.push(`${file.split(/[\\/]/).slice(-2).join('/')}:${line + 1}`)
+      }
+    }
+  }
+  assert.deepEqual(stale, [], `these lines point at a tab that no longer exists: ${stale.join(', ')}`)
+})
+
+step('a failed download still offers the button again', () => {
+  // The retry condition, not the success one: a job left in the error state
+  // must not hide the button the person needs to press.
+  assert.ok(
+    source.includes('job.status !== "error"'),
+    'the guide must keep the download button after a failure',
+  )
+})
+
 step('the diagnostics tab is gone and its actions live under Advanced', () => {
   assert.ok(!source.includes('诊断'), 'the diagnostics tab must be gone')
   assert.ok(source.includes('重新播放引导'), 'replay must still be reachable')

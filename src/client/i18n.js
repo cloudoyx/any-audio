@@ -75,7 +75,7 @@ export const EN = {
   '下一步': 'Next',
   '装音效包': 'Sound packs',
   '真实录音的音效库。基础包 BaseSFX 有 {0} 条：{1}。': 'A library of real recordings. The BaseSFX pack holds {0} sounds: {1}.',
-  '下载后解压，把解压出来的 BaseSFX 目录路径填在下面；也可以稍后在「设置 → AnyAudio → 音效包」里安装。建议先进入下一步。': 'Unpack the download and paste the unpacked BaseSFX folder below — or install it later under Settings → AnyAudio → Sound packs. Going on to the next step is fine.',
+  '下载后解压，把解压出来的 BaseSFX 目录路径填在下面；也可以稍后在「设置 → AnyAudio → 音效」里安装。建议先进入下一步。': 'Unpack the download and paste the unpacked BaseSFX folder below — or install it later under Settings → AnyAudio → Sound packs. Going on to the next step is fine.',
   '去下载': 'Download',
   '完成': 'Done',
   '以后在「设置 → AnyAudio」里改。': 'Change any of this later under Settings → AnyAudio.',

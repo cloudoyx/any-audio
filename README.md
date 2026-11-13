@@ -87,9 +87,9 @@ If DSH boots a different profile, replace `desktop` with that profile name. Rest
 
 Then open the **AnyAudio** page in DSH Settings to install a sound source (GeneralUser GS is the default suggestion), switch the speech engine and adjust mixing defaults. No SoundFont and no sound pack is bundled with the package.
 
-On a fresh install, opening a new conversation shows a four-step guide: install a sound source, install a sound pack, meet the clip bay. Every step can be skipped, and **Settings → AnyAudio → Diagnostics → Replay the guide** brings it back.
+On a fresh install, opening a new conversation shows a four-step guide: install a sound source, install a sound pack, meet the clip bay. Every step can be skipped, and **Settings → AnyAudio → Advanced → Replay the guide** brings it back.
 
-A sound pack is a library of real recordings, installed once and shared by every project. The recommended BaseSFX pack (237 sounds, CC0) has its download links on the **Sound packs** tab: download the archive, unpack it, and paste the unpacked `BaseSFX` folder into **Install**.
+A sound pack is a library of real recordings, installed once and shared by every project. The recommended BaseSFX pack (237 sounds, CC0) has its download links on the **Sound effects** tab: download the archive, unpack it, and paste the unpacked `BaseSFX` folder into **Install**.
 
 ### From source
 

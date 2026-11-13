@@ -257,7 +257,7 @@ export function Guide() {
       ) : null,
       note ? h(Notice, null, note) : null,
       h(Actions, null,
-        fontInstalled || job ? null : h(Btn, { kind: 'primary', disabled: busy === 'font', onClick: installFont }, t('下载安装')),
+        fontInstalled || (job && job.status !== 'error') ? null : h(Btn, { kind: 'primary', disabled: busy === 'font', onClick: installFont }, t('下载安装')),
         h(Btn, { onClick: () => goTo(2) }, fontInstalled || job ? t('下一步') : t('跳过')),
       ),
     )
@@ -269,7 +269,7 @@ export function Guide() {
       packInstalled ? h(Notice, null, t('已安装')) : null,
       downloadHint ? h(DownloadLinks, null) : null,
       downloadHint
-        ? h(Notice, null, t('下载后解压，把解压出来的 BaseSFX 目录路径填在下面；也可以稍后在「设置 → AnyAudio → 音效包」里安装。建议先进入下一步。'))
+        ? h(Notice, null, t('下载后解压，把解压出来的 BaseSFX 目录路径填在下面；也可以稍后在「设置 → AnyAudio → 音效」里安装。建议先进入下一步。'))
         : null,
       h('div', { style: S.row },
         h(TextInput, { value: installPath, placeholder: t('把解压出来的 BaseSFX 文件夹路径粘贴到这里'), onChange: setInstallPath }),

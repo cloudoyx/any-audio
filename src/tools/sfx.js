@@ -550,7 +550,7 @@ function renderText(args, value) {
           // An empty library is not a dead end: the person can install the
           // recommended pack, and saying so is more useful than silently
           // dropping to the presets.
-          lines.push('还没有安装任何音效包。让用户到「设置 → AnyAudio → 音效包」装一个（推荐的基础音效包 BaseSFX 在那里有下载地址）。')
+          lines.push('还没有安装任何音效包。让用户到「设置 → AnyAudio → 音效」装一个（推荐的基础音效包 BaseSFX 在那里有下载地址）。')
           lines.push('')
         }
         for (const warning of value.libraryWarnings ?? []) lines.push(`! ${warning}`)
@@ -586,7 +586,7 @@ function renderText(args, value) {
         const lines = []
         if (value.total === 0) {
           lines.push(`库里没有匹配的名字："${value.query}"`)
-          if (value.packCount === 0) lines.push('还没有安装任何音效包。让用户到「设置 → AnyAudio → 音效包」装一个（推荐的基础音效包 BaseSFX 在那里有下载地址）。')
+          if (value.packCount === 0) lines.push('还没有安装任何音效包。让用户到「设置 → AnyAudio → 音效」装一个（推荐的基础音效包 BaseSFX 在那里有下载地址）。')
         } else {
           lines.push(...value.results.map((entry) => {
             const mark = entry.priority ? '（优先）' : ''
@@ -699,6 +699,7 @@ export const sfxToolDefinition = finalizeTool({
         shown: { type: 'number' },
         truncated: { type: 'boolean' },
         results: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        packCount: { type: 'number' },
         remote: { type: 'object', additionalProperties: true },
         warnings: { type: 'array' },
       },

@@ -186,7 +186,6 @@ server.listen(0, '127.0.0.1', async () => {
     assert(reset.ok, reset.error)
     const again = await get('/state')
     assert(again.config.music.peakDb === -3, 'peak default not restored')
-    assert(again.config.music.peakDb === -3, 'peak default not restored')
   })
 
   // The first-run guide keeps its own version number: the shell's "seen" set is
