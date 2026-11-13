@@ -198,11 +198,14 @@ function FontsTab({ state, reload, notify }) {
         picker && picker.presets.length > 1
           ? h('div', { style: S.row },
             h('span', { style: S.label }, t('预设')),
-            h('select', {
+            h(Select, {
               value: String(picker.program),
-              onChange: event => selectProgram(Number(event.target.value)),
-              style: S.input,
-            }, picker.presets.map(preset => h('option', { key: `${preset.bank}:${preset.program}`, value: String(preset.program) }, `${preset.program} · ${preset.name} (${preset.family})`))),
+              onChange: value => selectProgram(Number(value)),
+              options: picker.presets.map(preset => ({
+                value: String(preset.program),
+                label: `${preset.program} · ${preset.name} (${preset.family})`,
+              })),
+            }),
           )
           : null,
         h('audio', { controls: true, autoPlay: true, src: preview.url, style: S.audio }),
@@ -684,9 +687,9 @@ function Page() {
 
   const tabs = useMemo(() => ([
     { id: 'sources', label: t('音源'), render: () => h(FontsTab, { state, reload, notify }) },
-    { id: 'fxlib', label: t('音效包'), render: () => h(FxLibTab, { state, reload, notify }) },
+    { id: 'fxlib', label: t('音效'), render: () => h(FxLibTab, { state, reload, notify }) },
     { id: 'tts', label: t('配音'), render: () => h(TtsTab, { state, reload, notify }) },
-    { id: 'mix', label: t('混音与输出'), render: () => h(MixTab, { state, reload, notify }) },
+    { id: 'mix', label: t('混音'), render: () => h(MixTab, { state, reload, notify }) },
     { id: 'advanced', label: t('高级'), render: () => h(AdvancedTab, { state, reload, notify }) },
   ]), [state, reload, notify])
 
@@ -721,16 +724,17 @@ function Page() {
     h('div', { style: { ...S.header, alignItems: 'center' } },
       h('h2', { style: S.title }, 'AnyAudio'),
       h('span', { style: { flex: 1 } }),
-      h('select', {
+      h(Select, {
         value: state.config.ui?.language ?? 'auto',
-        onChange: event => void saveLanguage(event.target.value),
+        onChange: value => void saveLanguage(value),
         title: t('界面语言'),
-        style: { ...S.input, width: 'auto', minWidth: 110, fontSize: 12 },
-      },
-        h('option', { value: 'auto' }, t('跟随系统')),
-        h('option', { value: 'zh' }, t('中文')),
-        h('option', { value: 'en' }, t('English')),
-      ),
+        style: { width: 'auto', minWidth: 110, fontSize: 12 },
+        options: [
+          { value: 'auto', label: t('跟随系统') },
+          { value: 'zh', label: t('中文') },
+          { value: 'en', label: 'English' },
+        ],
+      }),
       h(Btn, { onClick: reload }, t('刷新')),
     ),
     h('div', { style: { ...S.row, gap: 8 } },

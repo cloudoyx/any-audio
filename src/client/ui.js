@@ -199,13 +199,14 @@ function isDarkColor(color) {
  * voice list became unreadable in dark mode. The option colours are set as well,
  * because a browser that ignores `color-scheme` on a select still honours them.
  */
-export function Select({ value, onChange, options }) {
+export function Select({ value, onChange, options, title, style }) {
   const surface = useSurface()
   const dark = isDarkColor(surface)
   return h('select', {
     value,
     onChange: event => onChange(event.target.value),
-    style: { ...S.input, colorScheme: dark ? 'dark' : 'light' },
+    title,
+    style: { ...S.input, colorScheme: dark ? 'dark' : 'light', ...style },
   }, options.map(option => h('option', {
     key: option.value,
     value: option.value,

@@ -3,6 +3,7 @@
 // which cards exist, which buttons exist, what the guide does when it is already
 // finished — none of which the bundle-shape test can see.
 import assert from 'node:assert/strict'
+import { readFileSync, readdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -281,6 +282,26 @@ step('the narration page is one engine picker, one voice picker and a default li
   assert.equal(selects.length, 2, `expected two dropdowns, got ${selects.length}`)
   assert.deepEqual(selects[0].props.options.map((option) => option.value), ['edge', 'mimo'])
   assert.deepEqual(selects[1].props.options.map((option) => option.value), ['zh-CN-YunjianNeural', 'zh-CN-XiaoxiaoNeural'])
+})
+
+step('every dropdown goes through the shared Select', () => {
+  // A raw <select> is drawn by the browser, so its list stays white while the
+  // text stays light: the voice list and the preset list both shipped that way.
+  // One component owns the fix; nothing else may build a dropdown.
+  const files = []
+  const walkDir = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walkDir(full)
+      else if (entry.name.endsWith('.js')) files.push(full)
+    }
+  }
+  walkDir(join(root, 'src', 'client'))
+  const offenders = files
+    .filter((file) => !file.endsWith(join('client', 'ui.js')))
+    .filter((file) => /h\('select'/.test(readFileSync(file, 'utf8')))
+    .map((file) => file.slice(root.length + 1))
+  assert.deepEqual(offenders, [], `a raw <select> bypasses the theme fix: ${offenders.join(', ')}`)
 })
 
 step('a missing or malformed version reads as zero', () => {
