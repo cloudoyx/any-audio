@@ -101,7 +101,11 @@ function FontsTab({ state, reload, notify }) {
     }
   }
 
-  const isDefault = (font) => Boolean(fonts.configured) && (fonts.configured === font.recommendedId || fonts.configured === font.path)
+  // The bank a render actually lands on, not the one that was chosen: with
+  // nothing chosen the host picks one, and the page has to say which. Comparing
+  // against `configured` left every row unmarked until someone pressed the
+  // button, which is exactly the question "which one is the default?".
+  const isDefault = (font) => Boolean(fonts.defaultPath) && fonts.defaultPath === font.path
 
   async function runPreview(path, program) {
     setBusy(`preview:${path}:${program}`)
@@ -152,7 +156,7 @@ function FontsTab({ state, reload, notify }) {
   return h(Fragment, null,
     h(Card, {
       title: t('推荐音源'),
-      desc: t('作者精选。装一套就能覆盖大部分配乐。'),
+      desc: t('作者精选。既有通用音源，也有专攻一种乐器的特色音源。'),
       right: h(Btn, { onClick: reload }, t('刷新')),
     },
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -220,11 +224,13 @@ function FontsTab({ state, reload, notify }) {
             h('div', { style: S.itemHead },
               h('span', { style: { fontWeight: 600 } }, label),
               h('span', { style: S.mono }, bytes(row.bytes)),
-              isDefault(row) ? h('span', { style: S.chip }, t('默认')) : null,
+              isDefault(row) ? h('span', { style: S.chip }, t('当前默认')) : null,
               row.status === 'ok' ? null : h('span', { style: S.chip }, row.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')),
               h('span', { style: { flex: 1 } }),
               h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
-              h(Btn, { kind: isDefault(row) ? 'primary' : 'plain', onClick: () => setDefault(row) }, isDefault(row) ? t('当前默认') : t('设为默认')),
+              // No button on the row that already is the default: a control that
+              // does nothing is worse than no control.
+              isDefault(row) ? null : h(Btn, { onClick: () => setDefault(row) }, t('设为默认')),
               h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', label))) act('remove', { path: row.path, removeFile: true }) } }, t('删除')),
               h(Btn, { onClick: () => toggleDetails(row.path) }, open ? t('收起') : t('详情')),
             ),
@@ -250,7 +256,7 @@ function FontsTab({ state, reload, notify }) {
       // answerable from this page (improvement plan 04).
       h('div', { style: S.desc }, fonts.configured
         ? t('你选的默认音源：{0}', fonts.configured)
-        : t('你选的默认音源：未选择（没选时使用 {0}）', fonts.fallbackPath || t('未安装音源'))),
+        : t('默认音源：{0}（自动选择）', fonts.defaultPath || t('未安装音源'))),
     ),
   )
 }

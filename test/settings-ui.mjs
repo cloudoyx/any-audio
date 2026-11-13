@@ -107,6 +107,7 @@ const fontState = {
     },
   ],
   configured: '',
+  defaultPath: 'C:\\Users\\x\\.dsh\\anyaudio\\fonts\\GeneralUser GS.sf2',
   fallbackPath: 'C:\\Users\\x\\.dsh\\anyaudio\\fonts\\GeneralUser GS.sf2',
   directories: ['C:\\Users\\x\\.dsh\\anyaudio\\fonts'],
 }
@@ -137,6 +138,13 @@ step('a fully installed recommendation list collapses to one line', () => {
   assert.ok(fontsText.includes('推荐音源已全部安装'), 'the collapsed line is missing')
   assert.ok(findClickable(fontsTree, '查看'), 'the way back into the list is missing')
   assert.ok(!fontsText.includes('下载安装'), 'nothing should still be offered for download')
+})
+
+step('the bank a render lands on is marked, even when nobody chose one', () => {
+  const installed = fontsTree.children.find((card) => card?.props?.title === '已安装')
+  assert.ok(text(installed).includes('当前默认'), 'the effective default must be marked')
+  assert.ok(!findClickable(installed, '设为默认'), 'a row that already is the default needs no button')
+  assert.ok(text(fontsTree).includes('自动选择'), 'the folder card must say the default was picked automatically')
 })
 
 step('a missing recommendation is offered with its one-line purpose', () => {
