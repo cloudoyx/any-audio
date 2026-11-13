@@ -312,6 +312,34 @@ step('every dropdown goes through the shared Select', () => {
   assert.deepEqual(offenders, [], `a raw <select> bypasses the theme fix: ${offenders.join(', ')}`)
 })
 
+step('every t() key has an English translation', () => {
+  // A key with no EN entry silently stays Chinese in English mode, which is
+  // invisible to anyone testing in Chinese.
+  const files = []
+  const walkDir = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walkDir(full)
+      else if (entry.name.endsWith('.js')) files.push(full)
+    }
+  }
+  walkDir(join(root, 'src', 'client'))
+  const used = new Set()
+  for (const file of files) {
+    const body = readFileSync(file, 'utf8')
+    for (const match of body.matchAll(/\bt\(\s*'((?:[^'\\]|\\.)*)'/g)) used.add(match[1].replace(/\\'/g, "'"))
+  }
+  const i18n = readFileSync(join(root, 'src', 'client', 'i18n.js'), 'utf8')
+  const start = i18n.indexOf('export const EN = {')
+  const end = i18n.indexOf('\n}', start)
+  const en = new Set()
+  for (const match of i18n.slice(start, end).matchAll(/^\s*'((?:[^'\\]|\\.)*)':\s*'(?:[^'\\]|\\.)*',?\s*$/gm)) {
+    en.add(match[1].replace(/\\'/g, "'"))
+  }
+  const missing = [...used].filter((key) => !en.has(key))
+  assert.deepEqual(missing, [], `these keys have no English translation: ${missing.join(' | ')}`)
+})
+
 step('a missing or malformed version reads as zero', () => {
   assert.equal(onboardedVersion({}), 0)
   assert.equal(onboardedVersion(null), 0)
