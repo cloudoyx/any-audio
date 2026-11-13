@@ -253,13 +253,12 @@ function FontsTab({ state, reload, notify }) {
 }
 
 function TtsTab({ state, reload, notify }) {
-  const [form, setForm] = useState(null)
+  const [form, setForm] = useState(() => (state?.config?.tts ? JSON.parse(JSON.stringify(state.config.tts)) : null))
   const [keyInput, setKeyInput] = useState('')
   const [busy, setBusy] = useState('')
-  const [previewText, setPreviewText] = useState('')
+  const [previewText, setPreviewText] = useState(() => state?.config?.tts?.previewText ?? '')
   const [preview, setPreview] = useState(null)
   const [showKey, setShowKey] = useState(false)
-  const [showDetails, setShowDetails] = useState(false)
 
   useEffect(() => {
     if (!form && state?.config) {
@@ -332,15 +331,31 @@ function TtsTab({ state, reload, notify }) {
     }
   }
 
-  return h(Card, { title: t('配音（TTS）'), desc: t('给视频配旁白。Edge 免费，MiMo 需要 API Key。') },
+  const engines = state.tts.providers
+  const engine = engines.find(item => item.id === provider) ?? engines[0]
+  const voices = engine?.voices ?? []
+  const savedProvider = state.config.tts.provider
+  const savedEngine = engines.find(item => item.id === savedProvider)
+  const savedVoice = state.config.tts[savedProvider]?.voice ?? ''
+
+  return h(Card, { title: t('配音（TTS）'), desc: t('给视频配旁白。') },
     h('div', { style: S.row },
-      h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' } }, h('input', { type: 'radio', checked: provider === 'edge', onChange: () => set('provider', 'edge') }), t('Edge（免费）')),
-      h('label', { style: { ...S.row, gap: 6, cursor: 'pointer' } }, h('input', { type: 'radio', checked: provider === 'mimo', onChange: () => set('provider', 'mimo') }), t('MiMo（需要 Key）')),
+      h(Field, { label: t('引擎') },
+        h(Select, {
+          value: provider,
+          onChange: value => set('provider', value),
+          options: engines.map(item => ({ value: item.id, label: item.label })),
+        }),
+      ),
     ),
-    h(Field, { label: t('音色') },
-      provider === 'edge'
-        ? h(Select, { value: form.edge.voice, onChange: value => set('edge.voice', value), options: state.tts.edgeVoices.map(voice => ({ value: voice, label: voice })) })
-        : h(Select, { value: form.mimo.voice, onChange: value => set('mimo.voice', value), options: state.tts.mimoVoices.map(voice => ({ value: voice, label: voice })) }),
+    h('div', { style: S.row },
+      h(Field, { label: t('音色') },
+        h(Select, {
+          value: provider === 'edge' ? form.edge.voice : form.mimo.voice,
+          onChange: value => set(provider === 'edge' ? 'edge.voice' : 'mimo.voice', value),
+          options: voices.map(voice => ({ value: voice, label: voice })),
+        }),
+      ),
     ),
     provider === 'mimo'
       ? h('div', { style: S.row },
@@ -354,25 +369,20 @@ function TtsTab({ state, reload, notify }) {
         state.tts.mimoConfigured ? h(Btn, { disabled: busy === 'key', onClick: clearKey }, t('删除')) : null,
       )
       : null,
-    h('div', { style: S.row },
-      h(Btn, { onClick: () => setShowDetails(value => !value) }, showDetails ? t('收起') : t('详情')),
+    h('div', { style: S.grid2 },
+      provider === 'edge'
+        ? h(Fragment, null,
+          h(Field, { label: t('语速'), hint: t('例如 -12%（负数更慢）') }, h(TextInput, { value: form.edge.rate, onChange: value => set('edge.rate', value) })),
+          h(Field, { label: t('音高'), hint: t('例如 -3Hz') }, h(TextInput, { value: form.edge.pitch, onChange: value => set('edge.pitch', value) })),
+          h(Field, { label: t('音量'), hint: t('通常保持 +0%') }, h(TextInput, { value: form.edge.volume, onChange: value => set('edge.volume', value) })),
+          h(Field, { label: t('代理（可选）'), hint: t('国内网络必要时填 http://127.0.0.1:7890') }, h(TextInput, { value: form.edge.proxy, onChange: value => set('edge.proxy', value) })),
+        )
+        : h(Fragment, null,
+          h(Field, { label: t('模型'), hint: t('默认 mimo-v2.5-tts') }, h(TextInput, { value: form.mimo.model, onChange: value => set('mimo.model', value) })),
+          h(Field, { label: t('API 地址'), hint: t('一般不需要修改') }, h(TextInput, { value: form.mimo.baseUrl, onChange: value => set('mimo.baseUrl', value) })),
+          h(Field, { label: t('代理（可选）'), hint: t('默认直连；系统代理会改写 MiMo 请求时再填') }, h(TextInput, { value: form.mimo.proxy, onChange: value => set('mimo.proxy', value) })),
+        ),
     ),
-    showDetails
-      ? h('div', { style: S.grid2 },
-        provider === 'edge'
-          ? h(Fragment, null,
-            h(Field, { label: t('语速'), hint: t('例如 -12%（负数更慢）') }, h(TextInput, { value: form.edge.rate, onChange: value => set('edge.rate', value) })),
-            h(Field, { label: t('音高'), hint: t('例如 -3Hz') }, h(TextInput, { value: form.edge.pitch, onChange: value => set('edge.pitch', value) })),
-            h(Field, { label: t('音量'), hint: t('通常保持 +0%') }, h(TextInput, { value: form.edge.volume, onChange: value => set('edge.volume', value) })),
-            h(Field, { label: t('代理（可选）'), hint: t('国内网络必要时填 http://127.0.0.1:7890') }, h(TextInput, { value: form.edge.proxy, onChange: value => set('edge.proxy', value) })),
-          )
-          : h(Fragment, null,
-            h(Field, { label: t('模型'), hint: t('默认 mimo-v2.5-tts') }, h(TextInput, { value: form.mimo.model, onChange: value => set('mimo.model', value) })),
-            h(Field, { label: t('API 地址'), hint: t('一般不需要修改') }, h(TextInput, { value: form.mimo.baseUrl, onChange: value => set('mimo.baseUrl', value) })),
-            h(Field, { label: t('代理（可选）'), hint: t('默认直连；系统代理会改写 MiMo 请求时再填') }, h(TextInput, { value: form.mimo.proxy, onChange: value => set('mimo.proxy', value) })),
-          ),
-      )
-      : null,
     h('div', { style: { borderTop: `1px solid ${C.border}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
       h('textarea', {
         value: previewText,
@@ -389,8 +399,9 @@ function TtsTab({ state, reload, notify }) {
         h('audio', { controls: true, autoPlay: true, src: preview.url, style: S.audio }),
       ) : null,
     ),
-    h('div', { style: { ...S.row, justifyContent: 'flex-end' } },
-      h(Btn, { disabled: busy === 'save', onClick: save }, t('保存为默认值')),
+    h('div', { style: { borderTop: `1px solid ${C.border}`, paddingTop: 10, ...S.row, justifyContent: 'space-between' } },
+      h('span', { style: S.desc }, t('当前默认：{0} · {1}', savedEngine?.label ?? savedProvider, savedVoice)),
+      h(Btn, { disabled: busy === 'save', onClick: save }, t('保存为默认配置')),
     ),
   )
 }
@@ -732,4 +743,4 @@ function Page() {
   )
 }
 
-export { Page, FontsTab, FxLibTab }
+export { Page, FontsTab, FxLibTab, TtsTab }

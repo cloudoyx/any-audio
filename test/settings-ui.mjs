@@ -29,7 +29,7 @@ const mod = entry.factory((id) => {
   throw new Error(`unexpected require(${JSON.stringify(id)})`)
 })
 
-const { FontsTab, FxLibTab, Guide, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig } = mod.__test
+const { FontsTab, FxLibTab, TtsTab, Guide, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig } = mod.__test
 
 function strings(node, out = []) {
   if (node === null || node === undefined || node === false) return out
@@ -246,6 +246,41 @@ step('the diagnostics tab is gone and its actions live under Advanced', () => {
   assert.ok(!source.includes('诊断'), 'the diagnostics tab must be gone')
   assert.ok(source.includes('重新播放引导'), 'replay must still be reachable')
   assert.ok(source.includes('音源搜索目录'), 'the font folders must still be reachable')
+})
+
+step('the narration page is one engine picker, one voice picker and a default line', () => {
+  const state = {
+    config: {
+      tts: {
+        provider: 'edge',
+        previewText: '太行、王屋二山。',
+        edge: { voice: 'zh-CN-YunjianNeural', rate: '+0%', pitch: '+0Hz', volume: '+0%', proxy: '' },
+        mimo: { voice: 'mimo_default', model: 'mimo-v2.5-tts', baseUrl: 'https://api.xiaomimimo.com/v1', proxy: '', timeoutSec: 120 },
+      },
+    },
+    tts: {
+      providers: [
+        { id: 'edge', label: 'Edge TTS', requiresKey: false, voices: ['zh-CN-YunjianNeural', 'zh-CN-XiaoxiaoNeural'] },
+        { id: 'mimo', label: 'MiMo-V2.5-TTS', requiresKey: true, voices: ['mimo_default', '冰糖'] },
+      ],
+      mimoConfigured: true,
+    },
+  }
+  const tree = TtsTab({ state, reload: () => {}, notify: () => {} })
+  const body = text(tree)
+  const labels = []
+  walk(tree, (element) => { if (typeof element.props?.label === 'string') labels.push(element.props.label) })
+  assert.ok(labels.includes('引擎'), `the engine picker is missing, labels were ${JSON.stringify(labels)}`)
+  assert.ok(labels.includes('音色'), 'the voice picker is missing')
+  assert.ok(body.includes('当前默认：Edge TTS · zh-CN-YunjianNeural'), `the current default is missing, got "${body}"`)
+  assert.ok(findClickable(tree, '保存为默认配置'), 'the save button is missing')
+  // The engine is a dropdown, not a radio group: a new engine must not need a
+  // new control.
+  const selects = []
+  walk(tree, (element) => { if (Array.isArray(element.props?.options)) selects.push(element) })
+  assert.equal(selects.length, 2, `expected two dropdowns, got ${selects.length}`)
+  assert.deepEqual(selects[0].props.options.map((option) => option.value), ['edge', 'mimo'])
+  assert.deepEqual(selects[1].props.options.map((option) => option.value), ['zh-CN-YunjianNeural', 'zh-CN-XiaoxiaoNeural'])
 })
 
 step('a missing or malformed version reads as zero', () => {

@@ -12,7 +12,7 @@
  * uses only to decide its own display language.
  */
 import { h } from './ui.js'
-import { Page, FontsTab, FxLibTab } from './settings.js'
+import { Page, FontsTab, FxLibTab, TtsTab } from './settings.js'
 import { Guide, primeOnboardingConfig, ONBOARDING_VERSION, onboardedVersion } from './onboarding.js'
 import { ClipBayPanel, CLIP_BAY_ID } from './clipbay/panel.js'
 import { detectLanguage, resolveLanguage, setLanguagePreference, translate } from './i18n.js'
@@ -90,4 +90,4 @@ function apply(ctx) {
 
 export { apply }
 
-export const __test = { bytes, detectLanguage, Page, Guide, FontsTab, FxLibTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig }
+export const __test = { bytes, detectLanguage, Page, Guide, FontsTab, FxLibTab, TtsTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig }

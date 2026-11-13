@@ -119,9 +119,10 @@ export const EN = {
   '正在读取': 'Loading',
 
   '配音（TTS）': 'Narration (TTS)',
-  '给视频配旁白。Edge 免费，MiMo 需要 API Key。': 'Narration for video. Edge is free; MiMo needs an API key.',
-  'Edge（免费）': 'Edge (free)',
-  'MiMo（需要 Key）': 'MiMo (needs a key)',
+  '给视频配旁白。': 'Narration for video.',
+  '引擎': 'Engine',
+  '当前默认：{0} · {1}': 'Current default: {0} · {1}',
+  '保存为默认配置': 'Save as default configuration',
   '音色': 'Voice',
   '语速': 'Rate',
   '例如 -12%（负数更慢）': 'e.g. -12% (negative is slower)',
