@@ -1,6 +1,6 @@
 {
   "name": "dsh-any-audio",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "An agent audio studio for DeepSeek Harness: compose, narrate, add effects, mix, fine-tune every track on a timeline.",
   "type": "module",
   "main": "src/index.js",
