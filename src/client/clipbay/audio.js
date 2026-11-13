@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { API } from '../api.js'
 import { buildDuckCurve, needsTail } from '../../audio/fx.js'
 import { clipMixGain, contentEnd, fadeCurve, itemParams, masterParams, panGains, playbackStart, resolveTrackGain, toStereoChannels } from './mix-params.js'
-import { buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
+import { applyDuckCurve, buildFxChain, chainPlaybackRate, ensureReverbWorklet, updateFxChain } from './fx-nodes.js'
 
 /**
  * Resolution of a ducking curve in the preview: 50 points a second.
@@ -466,19 +466,15 @@ export function usePlayback(root, projectId) {
     setError('')
     setPlaying(true)
 
-    const nodes = []
-    let failed = 0
-    for (const entry of entries) {
-      if (tokenRef.current !== token) return
-      let buffer
-      try {
-        buffer = await cacheRef.current.get(entry.material)
-      } catch {
-        failed++
-        continue
-      }
-      if (tokenRef.current !== token) return
-
+    /**
+     * Build one clip's graph and start it. Returns the node record to stop later,
+     * or null when the clip has nothing to play.
+     *
+     * It throws what the browser throws (a chain it refuses, a fade it rejects),
+     * and the caller decides what that means: one unusable clip must not take the
+     * rest of the schedule with it.
+     */
+    const scheduleOne = (entry, buffer) => {
       const source = context.createBufferSource()
       source.buffer = buffer
 
@@ -493,7 +489,7 @@ export function usePlayback(root, projectId) {
       const clipStart = startedAtRef.current + entry.when
       const offset = Math.max(0, entry.inSec)
       const duration = Math.max(0, Math.min(entry.duration, buffer.duration - offset))
-      if (!(duration > 0)) continue
+      if (!(duration > 0)) return null
 
       // Same cosine curve the renderer applies, scheduled as a value curve.
       scheduleFades(fade.gain, clipStart, duration, entry.fadeInSec, entry.fadeOutSec)
@@ -545,19 +541,47 @@ export function usePlayback(root, projectId) {
         ? Math.max(0, Math.min(PREVIEW_TAIL_SEC, buffer.duration - offset - duration))
         : 0
       source.start(clipStart, offset, duration + tailSec)
-      nodes.push({
+      return {
         source, fade, itemLevel, splitter, merger, panLeft, panRight,
         trackId: entry.trackId, itemId: entry.itemId, clipChain,
-      })
+      }
+    }
+
+    const nodes = []
+    let failed = 0
+    let note = ''
+    for (const entry of entries) {
+      if (tokenRef.current !== token) return
+      let buffer
+      try {
+        buffer = await cacheRef.current.get(entry.material)
+      } catch {
+        failed++
+        continue
+      }
+      if (tokenRef.current !== token) return
+
+      // One clip the browser refuses to schedule must not silence the rest. A
+      // throw here used to escape `play()` entirely: the clips already scheduled
+      // stayed audible but were never registered, so the playhead never moved
+      // and pausing could not stop them.
+      let node = null
+      try {
+        node = scheduleOne(entry, buffer)
+      } catch (caught) {
+        if (!note) note = caught instanceof Error ? caught.message : String(caught)
+      }
+      if (node) nodes.push(node)
     }
 
     sourcesRef.current = nodes
     if (nodes.length === 0) {
       setPlaying(false)
-      setError(failed > 0 ? 'no material could be decoded' : '')
+      setError(failed > 0 ? 'no material could be decoded' : note)
       master.disconnect()
       return
     }
+    if (note) setError(note)
 
     const tick = () => {
       if (tokenRef.current !== token) return
