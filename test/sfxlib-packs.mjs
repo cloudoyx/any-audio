@@ -9,6 +9,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { registerAnyAudioRoutes } from '../src/host/routes.js'
+import { encodeWav } from '../src/audio/wav.js'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const anyaudioDir = join(root, '.anyaudio')
@@ -58,6 +59,16 @@ async function writePack(dir, packId, sounds, extra = {}) {
   return dir
 }
 
+/** A real, decodable WAV: the scan reads its duration, so a stub will not do. */
+async function writeTone(path, seconds = 1) {
+  const sampleRate = 8000
+  const frames = Math.round(sampleRate * seconds)
+  const channel = new Float32Array(frames)
+  for (let i = 0; i < frames; i++) channel[i] = Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 0.3
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, encodeWav({ sampleRate, channels: [channel, channel] }))
+}
+
 function sound(name, type = 'foley') {
   return { name, type, durationSec: 2, peakPosSec: 0.5, file: `FOL/${name}.mp3` }
 }
@@ -68,6 +79,19 @@ server.listen(0, '127.0.0.1', async () => {
   const client = { 'x-any-audio-client': 'any-audio/1' }
   const get = async (path) => (await fetch(base + path, { headers: client })).json()
   const post = async (path, body) => (await fetch(base + path, { method: 'POST', headers: { ...client, 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()
+
+  // Installing is a job: a folder without a manifest has to be measured first.
+  const installPack = async (fromPath) => {
+    const started = await post('/sfx/packs/install', { fromPath })
+    if (!started.ok) return started
+    let job = started.job
+    for (let i = 0; i < 600 && job.status === 'running'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      job = (await get(`/jobs?id=${encodeURIComponent(job.id)}`)).job
+    }
+    if (job.status !== 'done') return { ok: false, error: job.error ?? `job ended as ${job.status}` }
+    return { ok: true, ...job.result }
+  }
 
   let passed = 0
   let failed = 0
@@ -107,7 +131,7 @@ server.listen(0, '127.0.0.1', async () => {
   })
 
   await step('a normal pack reports no token cost', async () => {
-    await post('/sfx/packs/install', { fromPath: outside })
+    await installPack(outside)
     const result = await get('/sfx/packs')
     const user = result.packs.find((pack) => pack.id === 'UserSFX1')
     assert(user, 'UserSFX1 should be installed')
@@ -155,24 +179,51 @@ server.listen(0, '127.0.0.1', async () => {
   await step('a pack with only FOL/ installs', async () => {
     const onlyFoley = join(testRoot, 'incoming', 'OnlyFoley')
     await writePack(onlyFoley, 'OnlyFoley', [sound('打铁'), sound('断骨')])
-    const result = await post('/sfx/packs/install', { fromPath: onlyFoley })
-    assert(result.ok === true, `ok was ${result.ok}`)
+    const result = await installPack(onlyFoley)
+    assert(result.ok === true, `ok was ${result.ok}: ${result.error ?? ''}`)
     assert(result.count === 2, `count was ${result.count}`)
     const listed = await get('/sfx/packs')
     assert(listed.packs.some((pack) => pack.id === 'OnlyFoley'), 'the pack should be listed')
   })
 
-  await step('a directory without a manifest is refused with a clear message', async () => {
+  await step('a folder without a manifest gets one, and its audio is measured', async () => {
     const bare = join(testRoot, 'incoming', 'Bare')
-    await mkdir(bare, { recursive: true })
-    const result = await post('/sfx/packs/install', { fromPath: bare })
-    assert(result.ok === false, 'a manifest-less directory should be refused')
-    assert(/manifest/i.test(result.error), `error was ${result.error}`)
-    assert(/build/i.test(result.error), `the error should point at the build script: ${result.error}`)
+    await writeTone(join(bare, 'FOL', '打铁.wav'), 1)
+    await writeTone(join(bare, 'FOL', '断骨.wav'), 2)
+    const result = await installPack(bare)
+    assert(result.ok === true, `ok was ${result.ok}: ${result.error ?? ''}`)
+    assert(result.generated === true, 'the manifest should have been generated')
+    assert(result.count === 2, `count was ${result.count}`)
+    const manifest = JSON.parse(await readFile(join(libraryRoot, 'Bare', 'manifest.json'), 'utf8'))
+    assert(manifest.id === 'Bare', `id was ${manifest.id}`)
+    assert(manifest.sounds.length === 2, `sounds were ${manifest.sounds.length}`)
+    assert(manifest.sounds.every((entry) => entry.type === 'foley'), 'FOL/ means foley')
+    assert(manifest.sounds.every((entry) => entry.durationSec > 0), 'every sound needs a measured duration')
+    const listed = await get('/sfx/packs')
+    assert(listed.packs.some((pack) => pack.id === 'Bare'), 'the generated pack should be listed')
+  })
+
+  await step('a folder with no subdirectory treats every file as foley', async () => {
+    const flat = join(testRoot, 'incoming', 'Flat')
+    await writeTone(join(flat, '脚步.wav'), 1)
+    const result = await installPack(flat)
+    assert(result.ok === true, `ok was ${result.ok}: ${result.error ?? ''}`)
+    const manifest = JSON.parse(await readFile(join(libraryRoot, 'Flat', 'manifest.json'), 'utf8'))
+    assert(manifest.sounds.length === 1, `sounds were ${manifest.sounds.length}`)
+    assert(manifest.sounds[0].type === 'foley', `type was ${manifest.sounds[0].type}`)
+    assert(manifest.sounds[0].file === '脚步.wav', `file was ${manifest.sounds[0].file}`)
+  })
+
+  await step('a folder with no audio at all is refused with a clear message', async () => {
+    const empty = join(testRoot, 'incoming', 'Empty')
+    await mkdir(empty, { recursive: true })
+    const result = await installPack(empty)
+    assert(result.ok === false, 'an empty folder should be refused')
+    assert(/audio/i.test(result.error), `error was ${result.error}`)
   })
 
   await step('a missing directory is refused', async () => {
-    const result = await post('/sfx/packs/install', { fromPath: join(testRoot, 'nope') })
+    const result = await installPack(join(testRoot, 'nope'))
     assert(result.ok === false, 'a missing directory should be refused')
   })
 

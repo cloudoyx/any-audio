@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { cp, mkdir, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import {
@@ -20,6 +20,7 @@ import { categoryOfProgram } from '../audio/scoring.js'
 import { compileScore } from '../audio/score.js'
 import { loadSoundBank, renderCompiled, listPresets } from '../audio/synth.js'
 import { assertPackDir, isPriorityPack, listPacks, readPack, userSfxDir } from '../audio/sfx-library.js'
+import { scanPackFolder } from '../audio/sfx-pack-scan.js'
 import { EDGE_VOICES, MIMO_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
@@ -500,19 +501,56 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     return { ok: true, id: packId, priority: next, packs: updated.sfx.packs }
   }
 
+  /**
+   * Install a pack folder.
+   *
+   * A folder with a manifest is copied as-is. A folder without one is scanned
+   * first: the person pointed at a folder of audio, and asking them to run a
+   * Node script before the button works is not a settings page.
+   *
+   * It runs as a job because reading the duration of every file takes a moment
+   * on a large pack, and a frozen button is worse than a progress bar.
+   */
   async function sfxPackInstall(body) {
     const fromPath = String(body.fromPath ?? '').trim()
     if (!fromPath) throw new Error('fromPath is required: the directory of the pack to install')
     const source = resolve(fromPath)
     await assertPackDir(source)
-    const pack = await readPack(source, { packId: basename(source) })
-    if (!pack) throw new Error(`"${source}" has no manifest.json; build the pack first (scripts/build-sfx-pack.mjs)`)
-    const target = join(userSfxDir(), pack.id)
-    if (resolve(target) === source) return { ok: true, id: pack.id, installed: true, alreadyThere: true }
-    await mkdir(userSfxDir(), { recursive: true })
-    await rm(target, { recursive: true, force: true })
-    await cp(source, target, { recursive: true })
-    return { ok: true, id: pack.id, installed: true, count: pack.sounds.length, dir: target }
+    const running = runningJob('pack-install')
+    if (running) return { ok: true, job: publicJob(running), reused: true }
+    const job = startJob('pack-install', async (current) => {
+      const existing = await readPack(source, { packId: basename(source) })
+      const warnings = []
+      // `readPack` spreads the manifest into its result, so the pack itself is
+      // the manifest plus `dir` and `warnings`.
+      let manifest = existing ?? null
+      let generated = false
+      if (!manifest) {
+        const scanned = await scanPackFolder(source, {
+          packId: basename(source),
+          signal: current.abort.signal,
+          onProgress: (done, total) => {
+            current.received = done
+            current.total = total
+          },
+        })
+        manifest = scanned.manifest
+        warnings.push(...scanned.warnings)
+        generated = true
+      }
+      const target = join(userSfxDir(), manifest.id)
+      if (resolve(target) === source) {
+        current.message = 'already there'
+        return { ok: true, id: manifest.id, installed: true, alreadyThere: true, count: manifest.sounds.length, generated, warnings }
+      }
+      await mkdir(userSfxDir(), { recursive: true })
+      await rm(target, { recursive: true, force: true })
+      await cp(source, target, { recursive: true })
+      if (generated) await writeFile(join(target, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+      current.message = generated ? 'installed (manifest generated)' : 'installed'
+      return { ok: true, id: manifest.id, installed: true, count: manifest.sounds.length, dir: target, generated, warnings }
+    }, basename(source))
+    return { ok: true, job: publicJob(job) }
   }
 
   async function sfxPackRemove(body) {

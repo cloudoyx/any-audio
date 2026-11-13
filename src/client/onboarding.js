@@ -152,7 +152,8 @@ export function Guide() {
   }, [config])
 
   // The install runs on the host, so the guide only watches it: closing the
-  // dialog must not cancel a download that is already under way.
+  // dialog must not cancel a download that is already under way. Both installs
+  // report through the same job channel, so one poller serves both.
   useEffect(() => {
     if (!job || job.status !== 'running') return undefined
     const timer = setInterval(async () => {
@@ -160,8 +161,15 @@ export function Guide() {
         const data = await api(`/jobs?id=${encodeURIComponent(job.id)}`)
         setJob(data.job)
         if (data.job.status === 'done') {
-          setNote(t('音源已安装'))
-          api('/state').then((state) => setFonts(state.fonts)).catch(() => {})
+          const result = data.job.result ?? {}
+          if (data.job.kind === 'pack-install') {
+            setNote(t('已安装 {0}（{1} 条）', result.id ?? '', result.count ?? ''))
+            setInstallPath('')
+            api('/sfx/packs').then((packs) => setPacks(packs.packs ?? [])).catch(() => {})
+          } else {
+            setNote(t('音源已安装'))
+            api('/state').then((state) => setFonts(state.fonts)).catch(() => {})
+          }
         }
         if (data.job.status === 'error') setNote(data.job.error)
       } catch {
@@ -210,11 +218,8 @@ export function Guide() {
     if (!fromPath) return
     setBusy('pack')
     try {
-      const result = await api('/sfx/packs/install', { method: 'POST', body: { fromPath } })
-      setNote(t('已安装 {0}（{1} 条）', result.id, result.count ?? ''))
-      setInstallPath('')
-      const data = await api('/sfx/packs')
-      setPacks(data.packs ?? [])
+      const data = await api('/sfx/packs/install', { method: 'POST', body: { fromPath } })
+      setJob(data.job)
     } catch (error) {
       setNote(error.message)
     } finally {

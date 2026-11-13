@@ -6,7 +6,7 @@
  * one machine-wide config file — DSH's settings service is profile-scoped, so it
  * cannot be the source of truth.
  */
-import { h, Fragment, useState, useEffect, useCallback, useMemo, C, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card } from './ui.js'
+import { h, Fragment, useState, useEffect, useCallback, useMemo, C, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card, HelpTip } from './ui.js'
 import { t, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
 import { api } from './api.js'
 import { BASE_PACK, DownloadLinks } from './base-pack.js'
@@ -468,6 +468,7 @@ function FxLibTab({ state, reload, notify }) {
   const [showDownloads, setShowDownloads] = useState(false)
   const [showRecommended, setShowRecommended] = useState(false)
   const [openDetails, setOpenDetails] = useState({})
+  const [job, setJob] = useState(null)
   const toggleDetails = (key) => setOpenDetails(current => ({ ...current, [key]: !current[key] }))
 
   const load = useCallback(async () => {
@@ -482,6 +483,29 @@ function FxLibTab({ state, reload, notify }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // The install runs on the host: a folder without a manifest has to be measured
+  // first, which takes a moment on a large pack. The page only watches it.
+  useEffect(() => {
+    if (!job || job.status !== 'running') return undefined
+    const timer = setInterval(async () => {
+      try {
+        const data = await api(`/jobs?id=${encodeURIComponent(job.id)}`)
+        setJob(data.job)
+        if (data.job.status === 'done') {
+          const result = data.job.result ?? {}
+          notify(t('已安装 {0}（{1} 条）', result.id ?? '', result.count ?? ''))
+          setInstallPath('')
+          await load()
+        }
+        if (data.job.status === 'error') notify(data.job.error, 'error')
+      } catch (caught) {
+        notify(caught.message, 'error')
+        setJob(null)
+      }
+    }, 500)
+    return () => clearInterval(timer)
+  }, [job, load, notify])
 
   async function toggle(pack) {
     setBusy(pack.id)
@@ -501,10 +525,8 @@ function FxLibTab({ state, reload, notify }) {
     if (!fromPath) return
     setBusy('install')
     try {
-      const result = await api('/sfx/packs/install', { method: 'POST', body: { fromPath } })
-      notify(t('已安装 {0}（{1} 条）', result.id, result.count ?? ''))
-      setInstallPath('')
-      await load()
+      const data = await api('/sfx/packs/install', { method: 'POST', body: { fromPath } })
+      setJob(data.job)
     } catch (caught) {
       notify(caught.message, 'error')
     } finally {
@@ -581,11 +603,24 @@ function FxLibTab({ state, reload, notify }) {
         })),
       h('p', { style: { ...S.desc, marginTop: 10 } }, t('打开「优先」会占用更多上下文，建议只对常用的音效包使用。')),
     ),
-    h(Card, { title: t('安装音效包'), desc: t('填一个包含 manifest.json 的包目录。没有 manifest 的目录先用打包脚本生成。') },
+    h(Card, {
+      title: t('安装音效包'),
+      desc: t('填一个音效包文件夹的路径。'),
+      right: h(HelpTip, { text: t('文件夹里按 FOL（动效）/ AMB（环境音）/ DSN（设计音效）分三个子目录，音频文件直接放进去就行。\n\n三个子目录可以只有一部分。如果一个都没有，文件夹里的音频会全部当作动效。\n\n不需要准备任何清单文件，安装时会自动识别。') }),
+    },
       h('div', { style: S.row },
-        h(TextInput, { value: installPath, placeholder: t('把解压出来的 BaseSFX 文件夹路径粘贴到这里'), onChange: setInstallPath }),
-        h(Btn, { kind: 'primary', disabled: busy === 'install' || !installPath.trim(), onClick: install }, t('安装')),
+        h(TextInput, { value: installPath, placeholder: t('把音效包文件夹的路径粘贴到这里'), onChange: setInstallPath }),
+        h(Btn, { kind: 'primary', disabled: busy === 'install' || !installPath.trim() || job?.status === 'running', onClick: install }, t('安装')),
       ),
+      job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+        h('div', { style: { ...S.row, justifyContent: 'space-between' } },
+          h('span', { style: S.label }, job.status === 'running'
+            ? (job.total ? t('正在识别 {0} / {1}', job.received, job.total) : t('正在识别…'))
+            : job.status === 'done' ? t('完成：{0}', job.message || t('已安装')) : t('失败：{0}', job.error || '')),
+          job.total ? h('span', { style: S.mono }, `${job.received} / ${job.total}`) : null,
+        ),
+        h('div', { style: S.bar }, h('div', { style: S.barFill(job.total ? (job.received / job.total) * 100 : 0) })),
+      ) : null,
     ),
     h(Card, { title: t('音效包目录'), desc: t('整台机器共用这一个音效库；装一次，所有工程共用。') },
       h('div', { style: S.mono }, root || t('正在读取…')),

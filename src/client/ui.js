@@ -226,6 +226,62 @@ export function Notice({ children, tone }) {
   return h('div', { style: S.notice(tone) }, children)
 }
 
+/**
+ * A "?" that explains something on hover.
+ *
+ * The text is long enough that putting it on the page would bury the control it
+ * describes, and a native `title` tooltip cannot be read at a glance. The panel
+ * is painted with the surface read from the DOM for the same reason the guide's
+ * dialog is: it floats over the page and inherits nothing.
+ */
+export function HelpTip({ text }) {
+  const [open, setOpen] = useState(false)
+  const surface = useSurface()
+  return h('span', {
+    style: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
+    onMouseEnter: () => setOpen(true),
+    onMouseLeave: () => setOpen(false),
+  },
+    h('span', {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 16,
+        height: 16,
+        borderRadius: '50%',
+        border: `1px solid ${C.border}`,
+        color: C.muted,
+        fontSize: 11,
+        lineHeight: 1,
+        cursor: 'help',
+        userSelect: 'none',
+      },
+    }, '?'),
+    open
+      ? h('span', {
+        style: {
+          position: 'absolute',
+          top: '100%',
+          right: 0,
+          marginTop: 6,
+          zIndex: 20,
+          width: 320,
+          padding: '8px 10px',
+          borderRadius: 8,
+          border: `1px solid ${C.border}`,
+          background: `var(--dsw-alias-bg-layer-2, ${surface})`,
+          color: 'inherit',
+          fontSize: 12,
+          lineHeight: 1.6,
+          whiteSpace: 'pre-wrap',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+        },
+      }, text)
+      : null,
+  )
+}
+
 export function Card({ title, desc, right, children }) {
   return h('section', { style: S.card },
     h('div', { style: S.cardHead },
