@@ -21,6 +21,20 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const read = (rel) => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n')
 
+/**
+ * One named function's source, from its declaration to the next top-level one.
+ *
+ * Slicing a fixed window off `indexOf('function X(')` broke the moment a comment
+ * above the assertion grew: the window ended mid-function and a test about
+ * something else failed. The boundary is what the function actually is.
+ */
+function functionSource(source, name) {
+  const start = source.indexOf(`function ${name}(`)
+  if (start < 0) throw new Error(`no function ${name}()`)
+  const next = source.indexOf('\nfunction ', start + 1)
+  return source.slice(start, next < 0 ? undefined : next)
+}
+
 const ui = read('src/client/ui.js')
 const panel = read('src/client/clipbay/panel.js')
 const timeline = read('src/client/clipbay/timeline.js')
@@ -140,14 +154,14 @@ test('every track row is the same height, selected or not', () => {
   // selection too, so selecting a 20–35s stretch silently made that one track
   // taller than its neighbours — it read as a rendering bug, not as emphasis.
   assert.equal(/TRACK_HEIGHT_ACTIVE/.test(timeline), false, 'there is no separate active height')
-  const row = timeline.slice(timeline.indexOf('function TrackRow('), timeline.indexOf('function TrackRow(') + 400)
+  const row = functionSource(timeline, 'TrackRow')
   assert.match(row, /const height = TRACK_HEIGHT\b/, 'the row uses the one track height')
 })
 
 test('the track head is never taller than the track it labels', () => {
   // The head stacked four rows of controls (name / M·S·段·✕ / volume / pan) and
   // grew to 81px, stretching every 52px row to 82px — 30px wasted per track.
-  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 900)
+  const head = functionSource(timeline, 'TrackHead')
   assert.match(head, /width: headWidth, height,/, 'the head takes its height from the row instead of its content')
   assert.equal(/flexDirection: 'column', gap: 4/.test(head), false, 'the controls are no longer four stacked rows')
 })
@@ -162,7 +176,7 @@ test('the head width is adjustable, and the divider is the only place it drags',
   assert.match(timeline, /const HEAD_MAX = \d+/, 'a ceiling, so a drag cannot hide the timeline')
   assert.match(timeline, /cursor: 'col-resize'/, 'the divider says it can be dragged')
   assert.match(timeline, /onPointerDown: startHeadDrag/, 'and it is wired to the drag')
-  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 900)
+  const head = functionSource(timeline, 'TrackHead')
   assert.equal(/cursor: 'ew-resize'/.test(head), false, 'the head itself must not offer a resize cursor: that is what misled the person')
 })
 
@@ -175,10 +189,16 @@ test('the track heads are frozen against horizontal scrolling', () => {
   // The heads name the track and carry its faders. Scrolled sideways they used
   // to travel with the audio (measured: left edge 289 → -511 at scrollLeft 800),
   // which leaves a wall of anonymous waveforms.
-  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 2000)
+  const head = functionSource(timeline, 'TrackHead')
   assert.match(head, /position: 'sticky'/, 'the head is sticky')
   assert.match(head, /left: 0/, 'pinned to the left edge of the scroller')
   assert.equal(/background: active \? C\.soft : 'transparent'/.test(head), false, 'a transparent head would let the clips show through it')
+  // The selected track's tint must sit on an opaque surface. `C.soft` is a 10%
+  // wash: used as the background itself it let the first track's clips show
+  // through the head, and scrolling made them look like they slid under the name
+  // (measured in Chrome, scrollLeft 150: clip at x 376 under a head at 289-437).
+  assert.equal(/background: active \? C\.soft :/.test(head), false, 'the tint alone is not opaque')
+  assert.match(head, /linear-gradient\(\$\{C\.soft\}, \$\{C\.soft\}\), \$\{surface\}/, 'the tint is laid over the shell surface')
   // The ruler's leading corner must stay put on both axes at once.
   assert.match(timeline, /position: 'sticky', left: 0, zIndex: 3/, 'the ruler corner is frozen sideways too')
 })
@@ -193,9 +213,9 @@ test('a track silenced by someone else\u2019s solo is drawn as unhearable', () =
   assert.match(timeline, /audibleByTrack/, 'and maps each track to whether it can be heard')
   assert.match(timeline, /anySolo && track\.solo !== true/, 'the same rule the mixer uses: solo silences the other tracks')
   assert.match(timeline, /audible: audibleByTrack\.get\(track\.id\) !== false/, 'the row is told')
-  const head = timeline.slice(timeline.indexOf('function TrackHead('), timeline.indexOf('function TrackHead(') + 2000)
+  const head = functionSource(timeline, 'TrackHead')
   assert.match(head, /opacity: audible \? 1 : 0\.5/, 'the head dims rather than vanishing: it must stay clickable')
-  const clip = timeline.slice(timeline.indexOf('function Clip('), timeline.indexOf('function Clip(') + 1600)
+  const clip = functionSource(timeline, 'Clip')
   assert.match(clip, /track\.muted \|\| item\.muted \|\| !audible/, 'the clip greys out too')
 })
 
