@@ -29,7 +29,7 @@ Models can already write code that makes sound, but it rarely sounds like an ins
 - **Real instrument timbres** — rendered from local sample banks instead of hand-written oscillators.
 - **Notes land directly on the timeline** — millisecond accuracy; music, narration and effects share one clock.
 - **Automatic mix balance** — tracks are placed in order with per-track gain, pan and fades; declaring a track as `narration` makes the plugin duck the other buses under the voice, and the master is peak-normalised so the whole mix does not clip. Every change can be auditioned section by section, and changed again.
-- **Effects and voices** — sound effects come from an installed sound library first (a pack of real recordings, searched by name), then from online CC0 when the library has nothing, and only then from the SoundFont banks or the procedural generators; speech goes through Edge TTS and MiMo-V2.5-TTS (currently free).
+- **Effects and voices** — sound effects come from an installed sound library first (a pack of real recordings, searched by name), then from online CC0 when the library has nothing, and only then from the SoundFont banks or the procedural generators; speech goes through Edge TTS, MiMo-V2.5-TTS (currently free) or DeepSeek TTS (using the account DSH is signed in with).
 
 ## Hear the difference
 
@@ -149,14 +149,15 @@ Installing both suggested banks gives the widest coverage: GeneralUser GS stays 
 
 ## Speech TTS
 
-Two engines, one interface:
+Three engines, one interface:
 
 | Engine | Key | Notes |
 | --- | --- | --- |
-| **Edge TTS** (default) | Not required | Free, through Microsoft's public endpoint; needs ffmpeg to convert MP3 to WAV; may be rate-limited, in which case the plugin retries and reports a clear error. |
-| **MiMo-V2.5-TTS** (optional) | Normal Open Platform API key | More voices and styles; the key is stored in DSH credentials and only read on the host side. Currently free; register your own API key. |
+| **Edge TTS** (default) | Not required | Free, through Microsoft's public endpoint; needs ffmpeg to convert MP3 to WAV; may be rate-limited, in which case the plugin retries and reports a clear error. Supports rate, pitch and volume. |
+| **MiMo-V2.5-TTS** (optional) | Normal Open Platform API key | More voices and styles; the key is stored in DSH credentials and only read on the host side. Currently free; register your own API key. Delivery is steered with `style`. |
+| **DeepSeek TTS** (optional) | Nothing extra | Uses the DeepSeek account DSH is signed in with. Two voices only (`stella` female, `tide` male), and **no rate, pitch or volume control**; billed per character, so the account needs credit. |
 
-MiMo is opt-in: saving a key does not switch the default engine, you choose it explicitly. The default voice `mimo_default` is resolved by the service cluster and may differ between regions. This version supports normal Open Platform keys only.
+MiMo and DeepSeek are both opt-in: saving a key or signing in does not switch the default engine, you choose it explicitly. MiMo's default voice `mimo_default` is resolved by the service cluster and may differ between regions; this version supports normal Open Platform keys only. DeepSeek's key is the one DSH itself signs in with — the plugin never writes or clears it, because removing it would break model access, not just narration.
 
 ## Known limitations
 

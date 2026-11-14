@@ -896,15 +896,35 @@ await test('creating a project points at the clip bay skill', async () => {
   await rm(join(repoRoot, '.anyaudio', 'projects', result.projectId), { recursive: true, force: true })
 })
 
-await test('tts tool exposes edge and mimo providers', async () => {
+await test('tts tool exposes edge, mimo and deepseek providers', async () => {
   const definition = tools.get('anyaudio_tts')
   assert(definition, 'anyaudio_tts should be registered')
   assert(definition.description.includes('MiMo'), 'description should name the second engine')
+  assert(definition.description.includes('DeepSeek'), 'description should name the third engine')
   assert(/edge/i.test(definition.description), 'description should name the default engine')
   assert(definition.parameters.properties.text, 'text should be a single-shot input')
   assert(definition.parameters.properties.voice, 'voice should be selectable')
   assert(definition.parameters.properties.provider, 'provider should be selectable')
+  assert(definition.parameters.properties.provider.enum.includes('deepseek'), 'deepseek should be selectable')
+  // The service has no speed, pitch or volume control, so the caller has to be
+  // told before it sends one and reads the reply as if it had been honoured.
+  assert(/DeepSeek has none of them|no speed, pitch or volume/.test(definition.description), 'description should say DeepSeek has no delivery controls')
   assert(typeof definition.output?.render === 'function', 'tts needs a render summary')
+})
+
+await test('deepseek voices belong to deepseek and carry no delivery controls', async () => {
+  const { DEEPSEEK_VOICES, providerForVoice, resolveVoice, deepSeekIgnoredControls, buildDeepSeekRequest } = await import('../src/audio/tts-providers.js')
+  assert(DEEPSEEK_VOICES.length === 2, `expected two voices, got ${DEEPSEEK_VOICES.length}`)
+  for (const voice of DEEPSEEK_VOICES) {
+    assert(providerForVoice(voice) === 'deepseek', `${voice} should belong to deepseek`)
+  }
+  const switched = resolveVoice({ provider: 'edge', voice: 'stella', explicitProvider: false, fallbackVoice: 'zh-CN-YunjianNeural' })
+  assert(switched.provider === 'deepseek' && switched.switched, 'a deepseek voice should settle the engine')
+  assert(deepSeekIgnoredControls({ rate: '+0%', pitch: '+0Hz', volume: '+0%' }).length === 0, 'the zero defaults are not a request to change anything')
+  assert(deepSeekIgnoredControls({ rate: '-12%' }).join() === 'rate', 'a non-zero rate should be reported as ignored')
+  const body = buildDeepSeekRequest({ text: '你好', voice: 'tide' })
+  assert(body.voice_id === 'tide' && body.format === 'wav', 'the request should carry the voice and ask for wav')
+  assert(!('rate' in body) && !('speed' in body), 'the request must not pretend to send a rate')
 })
 
 await test('mimo requests go over node:https and honour a per-engine proxy', async () => {

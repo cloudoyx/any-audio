@@ -71,10 +71,11 @@
 
 - 视频需要配音、但项目里没有现成录音时，**必须用 `anyaudio_tts`**：单条 `{text}`，或多条 `{items:[{text, voice}]}`。它要求 `projectId`，产出直接登记进工程并落轨——和音乐、音效走同一条路。
 - 不要自己调 `edge-tts`、`ttsmaker` 或任何 Python/node 的 TTS 库：那样会绕过用户在 Settings → AnyAudio 里选的引擎和音色（例如 MiMo），用户改了默认引擎也不会生效。
-- **两个引擎各有自己的音色，名字不能混用**（传了不属于该引擎的名字，服务端会报错或干脆不理你）：
-  - `edge`：`zh-CN-XiaoxiaoNeural`、`zh-CN-YunxiNeural`、`zh-CN-YunjianNeural`、`zh-CN-XiaoyiNeural`、`zh-CN-YunyangNeural`、`zh-CN-liaoning-XiaobeiNeural`、`zh-CN-shaanxi-XiaoniNeural`、`en-US-AriaNeural`、`en-US-JennyNeural`、`en-US-GuyNeural`、`ja-JP-NanamiNeural`。**网络服务、不需要 key**，中文旁白常用的默认音色是 `zh-CN-YunjianNeural`。
-  - `mimo`：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。`mimo_default` 由服务端集群决定，不同集群可能不同。**需要在 Settings → AnyAudio 里配好 MiMo API Key**；没配 key 就不要选它。
-- 不传 `provider` 就用用户配置的默认引擎（两个都可能），不传 `voice` 就用该引擎的默认音色——两者都不是固定值。**默认就是用户的设置：只有用户在这一轮明确要求某个引擎或音色时才传，其它情况一律不传。**「我觉得这个音色更好听」不是覆盖的理由——那会把用户自己在设置里选的引擎悄悄换掉（真实事故：用户设了 MiMo，Agent 为了"音色可控"传了 edge，用户听到的是完全不同的声音）。`anyaudio_project` 的 create 回包会写明当前默认引擎与音色，照着它判断。`voice`/`rate`/`pitch`/`provider` 写在顶层会应用到这一批的每一句，单个 item 写了就以 item 为准。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
+- **三个引擎各有自己的音色，名字不能混用**（传了不属于该引擎的名字，服务端会报错或干脆不理你）：
+  - `edge`：`zh-CN-XiaoxiaoNeural`、`zh-CN-YunxiNeural`、`zh-CN-YunjianNeural`、`zh-CN-XiaoyiNeural`、`zh-CN-YunyangNeural`、`zh-CN-liaoning-XiaobeiNeural`、`zh-CN-shaanxi-XiaoniNeural`、`en-US-AriaNeural`、`en-US-JennyNeural`、`en-US-GuyNeural`、`ja-JP-NanamiNeural`。**网络服务、不需要 key**，中文旁白常用的默认音色是 `zh-CN-YunjianNeural`。支持 `rate`/`pitch`/`volume`。
+  - `mimo`：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`。`mimo_default` 由服务端集群决定，不同集群可能不同。**需要在 Settings → AnyAudio 里配好 MiMo API Key**；没配 key 就不要选它。情绪用 `style` 描述，不支持 `rate`/`pitch`/`volume`（传了会被折进 style）。
+  - `deepseek`：只有两个音色，`stella`（女声）、`tide`（男声）。**不需要配 key**：它用的是本机 DSH 登录的 DeepSeek 账号，登录了就能用。**不支持调速、调音高、调音量**——这三项传过去会被忽略，并在 `warnings` 里告诉你；需要控制语气/快慢时改用 `edge` 或 `mimo`。按字数计费（汉字算 2 个字符），比另两个贵，但音质稳定。
+- 不传 `provider` 就用用户配置的默认引擎（三个都可能），不传 `voice` 就用该引擎的默认音色——两者都不是固定值。**默认就是用户的设置：只有用户在这一轮明确要求某个引擎或音色时才传，其它情况一律不传。**「我觉得这个音色更好听」不是覆盖的理由——那会把用户自己在设置里选的引擎悄悄换掉（真实事故：用户设了 MiMo，Agent 为了"音色可控"传了 edge，用户听到的是完全不同的声音）。`anyaudio_project` 的 create 回包会写明当前默认引擎与音色，照着它判断。`voice`/`rate`/`pitch`/`provider` 写在顶层会应用到这一批的每一句，单个 item 写了就以 item 为准。`rate` 写 `-12%`，`pitch` 写 `-3Hz` 这类 Edge 语法，也接受数字；MiMo 用 `style` 描述情绪。
 - Edge TTS 是网络服务（非官方接口），失败先查网络/代理再重试，必要时给 `proxy`；需要 ffmpeg 把 MP3 转成 WAV。连续试听过多会触发限流（429）：等一分钟重试，或传 `provider:"mimo"` 换引擎（前提是用户配了 key）。**批量中途失败时这一批已经落下的片段会被回滚**，工程保持原样，改好再整批重来即可——不要因为一次失败就另建工程。
 - 长旁白按分句拆成多条**是为了对齐时间轴，不是为了分轨**：它们仍然落在同一条旁白轨上，只是各自有不同的 `startSec`。已有旁白音频时不要重复生成。
 
@@ -241,7 +242,8 @@ MuseScore General 另有一组更响的版本（`sea-shore`、`bird-tweet`、`te
 - 旁白段音乐不避让 → 听不清台词。
 - 时长没对齐视频 → 结尾音画不同步。
 - 用 numpy 手搓合成器代替真实音源 → 电子感。
-- 自己写 Python/Node 调 edge-tts 生成旁白 → 绕过用户的 TTS 引擎与音色设置，MiMo 永远用不上。
+- 自己写 Python/Node 调 edge-tts 生成旁白 → 绕过用户的 TTS 引擎与音色设置，MiMo 和 DeepSeek 永远用不上。
+- 给 `deepseek` 传 `rate`/`pitch`/`volume` 想调语气 → 它没有这三个参数，传了只会换来一条 warning 和一段没变速的声音；要控节奏就换引擎。
 - 只调 `anyaudio_music` 不看每轨电平 → 旋律把伴奏压没。电平每次调用都会返回，不用另测；看到不平衡就改片段增益。
 - **为了调音量把整首曲子重新生成** → 最贵也最常见的一个：音符一个没动、只改了一个数字，却把全部轨道重渲了一遍。改片段增益不重渲，改乐器音色才需要重新生成。
 - 为了"专业"堆十几个轨道 → 浑浊，先做减法。

@@ -34,6 +34,12 @@ export const DEFAULTS = {
       proxy: '',
       timeoutSec: 120,
     },
+    deepseek: {
+      baseUrl: 'https://api.deepseek.com',
+      voice: 'stella',
+      proxy: '',
+      timeoutSec: 120,
+    },
   },
   music: {
     font: '',
@@ -54,7 +60,7 @@ export const DEFAULTS = {
   },
 }
 
-const PROVIDERS = ['edge', 'mimo']
+const PROVIDERS = ['edge', 'mimo', 'deepseek']
 const UI_LANGUAGES = ['auto', 'zh', 'en']
 const EDGE_VOICES = [
   'zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunyangNeural',
@@ -139,6 +145,7 @@ export function normalizeConfig(input) {
   if (ttsRaw.provider !== undefined && provider !== ttsRaw.provider) issues.push(`tts.provider "${String(ttsRaw.provider)}" is unknown; using "${provider}"`)
   const edgeRaw = isPlainObject(ttsRaw.edge) ? ttsRaw.edge : {}
   const mimoRaw = isPlainObject(ttsRaw.mimo) ? ttsRaw.mimo : {}
+  const deepseekRaw = isPlainObject(ttsRaw.deepseek) ? ttsRaw.deepseek : {}
 
   const musicRaw = isPlainObject(raw.music) ? raw.music : {}
   const music = {
@@ -191,6 +198,12 @@ export function normalizeConfig(input) {
           voice: text(mimoRaw.voice, DEFAULTS.tts.mimo.voice, 120),
           proxy: typeof mimoRaw.proxy === 'string' ? mimoRaw.proxy.trim() : '',
           timeoutSec: Math.round(clampNumber(mimoRaw.timeoutSec, 10, 600, DEFAULTS.tts.mimo.timeoutSec)),
+        },
+        deepseek: {
+          baseUrl: text(deepseekRaw.baseUrl, DEFAULTS.tts.deepseek.baseUrl, 300).replace(/\/+$/, ''),
+          voice: text(deepseekRaw.voice, DEFAULTS.tts.deepseek.voice, 120),
+          proxy: typeof deepseekRaw.proxy === 'string' ? deepseekRaw.proxy.trim() : '',
+          timeoutSec: Math.round(clampNumber(deepseekRaw.timeoutSec, 10, 600, DEFAULTS.tts.deepseek.timeoutSec)),
         },
       },
       music,

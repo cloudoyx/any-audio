@@ -303,7 +303,7 @@ function TtsTab({ state, reload, notify }) {
   async function saveKey() {
     setBusy('key')
     try {
-      await api('/credentials/set', { method: 'POST', body: { value: keyInput } })
+      await api('/credentials/set', { method: 'POST', body: { provider, value: keyInput } })
       setKeyInput('')
       notify(t('Key 已保存到 DSH 凭据库'))
       await reload()
@@ -317,7 +317,7 @@ function TtsTab({ state, reload, notify }) {
   async function clearKey() {
     setBusy('key')
     try {
-      await api('/credentials/unset', { method: 'POST', body: {} })
+      await api('/credentials/unset', { method: 'POST', body: { provider } })
       notify(t('Key 已删除'))
       await reload()
     } catch (error) {
@@ -330,7 +330,7 @@ function TtsTab({ state, reload, notify }) {
   async function test() {
     setBusy('preview')
     try {
-      const data = await api('/tts/preview', { method: 'POST', body: { provider, voice: provider === 'mimo' ? form.mimo.voice : form.edge.voice, text: previewText } })
+      const data = await api('/tts/preview', { method: 'POST', body: { provider, voice: form[provider]?.voice ?? '', text: previewText } })
       setPreview(data)
       notify(t('试听已生成'))
     } catch (error) {
@@ -346,6 +346,13 @@ function TtsTab({ state, reload, notify }) {
   const savedProvider = state.config.tts.provider
   const savedEngine = engines.find(item => item.id === savedProvider)
   const savedVoice = state.config.tts[savedProvider]?.voice ?? ''
+  // Which engines the person can actually reach right now. MiMo needs a saved
+  // key; DeepSeek needs the DSH sign-in. Edge needs neither, so it never shows
+  // a readiness line.
+  const keyReady = {
+    mimo: Boolean(state.tts.mimoConfigured),
+    deepseek: Boolean(state.tts.deepseekConfigured),
+  }
 
   return h(Card, { title: t('配音（TTS）'), desc: t('给视频配旁白。') },
     h('div', { style: S.row },
@@ -360,24 +367,28 @@ function TtsTab({ state, reload, notify }) {
     h('div', { style: S.row },
       h(Field, { label: t('音色') },
         h(Select, {
-          value: provider === 'edge' ? form.edge.voice : form.mimo.voice,
-          onChange: value => set(provider === 'edge' ? 'edge.voice' : 'mimo.voice', value),
+          value: form[provider]?.voice ?? voices[0] ?? '',
+          onChange: value => set(`${provider}.voice`, value),
           options: voices.map(voice => ({ value: voice, label: voice })),
         }),
       ),
     ),
-    provider === 'mimo'
+    provider === 'deepseek'
       ? h('div', { style: S.row },
-        h('span', { style: S.label }, state.tts.mimoConfigured ? t('Key 已配置') : t('Key 未配置')),
-        state.tts.mimoConfigured && !showKey
-          ? h(Btn, { onClick: () => setShowKey(true) }, t('更换'))
-          : h(Fragment, null,
-            h(TextInput, { value: keyInput, onChange: setKeyInput, type: 'password', placeholder: t('粘贴 Open Platform API Key') }),
-            h(Btn, { kind: 'primary', disabled: !keyInput.trim() || busy === 'key', onClick: saveKey }, t('保存')),
-          ),
-        state.tts.mimoConfigured ? h(Btn, { disabled: busy === 'key', onClick: clearKey }, t('删除')) : null,
+        h('span', { style: S.label }, state.tts.deepseekConfigured ? t('使用本机 DeepSeek 账号，无需配置') : t('未检测到 DeepSeek 账号，请先在 DSH 里登录')),
       )
-      : null,
+      : provider === 'mimo'
+        ? h('div', { style: S.row },
+          h('span', { style: S.label }, state.tts.mimoConfigured ? t('Key 已配置') : t('Key 未配置')),
+          state.tts.mimoConfigured && !showKey
+            ? h(Btn, { onClick: () => setShowKey(true) }, t('更换'))
+            : h(Fragment, null,
+              h(TextInput, { value: keyInput, onChange: setKeyInput, type: 'password', placeholder: t('粘贴 Open Platform API Key') }),
+              h(Btn, { kind: 'primary', disabled: !keyInput.trim() || busy === 'key', onClick: saveKey }, t('保存')),
+            ),
+          state.tts.mimoConfigured ? h(Btn, { disabled: busy === 'key', onClick: clearKey }, t('删除')) : null,
+        )
+        : null,
     h('div', { style: S.grid2 },
       provider === 'edge'
         ? h(Fragment, null,
@@ -386,11 +397,16 @@ function TtsTab({ state, reload, notify }) {
           h(Field, { label: t('音量'), hint: t('通常保持 +0%') }, h(TextInput, { value: form.edge.volume, onChange: value => set('edge.volume', value) })),
           h(Field, { label: t('代理（可选）'), hint: t('国内网络必要时填 http://127.0.0.1:7890') }, h(TextInput, { value: form.edge.proxy, onChange: value => set('edge.proxy', value) })),
         )
-        : h(Fragment, null,
-          h(Field, { label: t('模型'), hint: t('默认 mimo-v2.5-tts') }, h(TextInput, { value: form.mimo.model, onChange: value => set('mimo.model', value) })),
-          h(Field, { label: t('API 地址'), hint: t('一般不需要修改') }, h(TextInput, { value: form.mimo.baseUrl, onChange: value => set('mimo.baseUrl', value) })),
-          h(Field, { label: t('代理（可选）'), hint: t('默认直连；系统代理会改写 MiMo 请求时再填') }, h(TextInput, { value: form.mimo.proxy, onChange: value => set('mimo.proxy', value) })),
-        ),
+        : provider === 'deepseek'
+          ? h(Fragment, null,
+            h(Field, { label: t('API 地址'), hint: t('一般不需要修改') }, h(TextInput, { value: form.deepseek.baseUrl, onChange: value => set('deepseek.baseUrl', value) })),
+            h(Field, { label: t('代理（可选）'), hint: t('默认直连') }, h(TextInput, { value: form.deepseek.proxy, onChange: value => set('deepseek.proxy', value) })),
+          )
+          : h(Fragment, null,
+            h(Field, { label: t('模型'), hint: t('默认 mimo-v2.5-tts') }, h(TextInput, { value: form.mimo.model, onChange: value => set('mimo.model', value) })),
+            h(Field, { label: t('API 地址'), hint: t('一般不需要修改') }, h(TextInput, { value: form.mimo.baseUrl, onChange: value => set('mimo.baseUrl', value) })),
+            h(Field, { label: t('代理（可选）'), hint: t('默认直连；系统代理会改写 MiMo 请求时再填') }, h(TextInput, { value: form.mimo.proxy, onChange: value => set('mimo.proxy', value) })),
+          ),
     ),
     h('div', { style: { borderTop: `1px solid ${C.border}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
       h('textarea', {
@@ -401,7 +417,8 @@ function TtsTab({ state, reload, notify }) {
       }),
       h('div', { style: S.row },
         h(Btn, { kind: 'primary', disabled: busy === 'preview' || !previewText.trim(), onClick: test }, busy === 'preview' ? t('生成中…') : t('生成试听')),
-        provider === 'mimo' && !state.tts.mimoConfigured ? h('span', { style: S.desc }, t('先保存 Key 才能试听 MiMo')) : null,
+        provider === 'deepseek' && !keyReady.deepseek ? h('span', { style: S.desc }, t('先登录 DSH 才能试听 DeepSeek')) : null,
+        provider === 'mimo' && !keyReady.mimo ? h('span', { style: S.desc }, t('先保存 Key 才能试听 MiMo')) : null,
       ),
       preview ? h('div', { style: S.item },
         h('div', { style: S.itemHead }, h('span', null, preview.label), h('span', { style: S.mono }, `${preview.durationSec}s · ${preview.peakDb} dBFS`)),

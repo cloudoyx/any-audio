@@ -1,7 +1,7 @@
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { readConfig } from '../config.js'
-import { EDGE_VOICES, MIMO_VOICES, TTS_PROVIDERS, providerInfo, resolveVoice, synthesizeSpeech, voiceDisplayName } from '../audio/tts-providers.js'
+import { EDGE_VOICES, MIMO_VOICES, DEEPSEEK_VOICES, TTS_PROVIDERS, deepSeekIgnoredControls, providerInfo, resolveVoice, synthesizeSpeech, voiceDisplayName } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { attachMaterialFile } from '../project/attach.js'
 import { projectDir } from '../project/paths.js'
@@ -14,16 +14,36 @@ export function setCredentialResolver(resolver) {
   credentialResolver = resolver
 }
 
-async function resolveMimoKey() {
-  const env = process.env.MIMO_API_KEY
+async function resolveProviderKey(ref, envName) {
+  const env = process.env[envName]
   if (env && env.trim()) return env.trim()
   if (!credentialResolver) return null
   try {
-    const resolved = await credentialResolver('MIMO_API_KEY')
+    const resolved = await credentialResolver(ref)
     return resolved?.value ?? null
   } catch {
     return null
   }
+}
+
+async function resolveMimoKey() {
+  return resolveProviderKey('MIMO_API_KEY', 'MIMO_API_KEY')
+}
+
+/**
+ * The DeepSeek key is the account DSH itself signs in with, so it is usually
+ * already in the credential store. There is no settings field for it: a person
+ * who is logged in has it, and one who is not has nothing to paste that would
+ * also give them model access.
+ */
+async function resolveDeepSeekKey() {
+  return resolveProviderKey('DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY')
+}
+
+/** The voice saved for an engine, via that engine's own config block. */
+function configuredVoice(config, providerId) {
+  const block = config?.tts?.[providerId]
+  return typeof block?.voice === 'string' ? block.voice : ''
 }
 
 function describeError(error) {
@@ -170,10 +190,10 @@ export const ttsToolDefinition = finalizeTool({
     'Synthesize narration and add it to a clip bay project as material on a track, so the person can open, hear and adjust it. ' +
     'This is the only supported way to make narration for a video: it honours the engine and voice the user picked in Settings → AnyAudio, so do not shell out to edge-tts or any other TTS library. ' +
     'Pass projectId: the lines are placed on its narration track one after another, and a copy of each WAV is kept under the project folder — that copy is what the project plays, the "output" path is only an extra deliverable. ' +
-    'Two providers: "edge" (no key, unofficial Microsoft Edge service, MP3 → WAV via ffmpeg) and "mimo" (MiMo-V2.5-TTS, needs a normal Open Platform API key saved in Settings → AnyAudio). ' +
+    'Three providers: "edge" (no key, unofficial Microsoft Edge service, MP3 → WAV via ffmpeg), "mimo" (MiMo-V2.5-TTS, needs a normal Open Platform API key saved in Settings → AnyAudio) and "deepseek" (DeepSeek TTS, uses the DeepSeek account DSH is signed in with — no key to save). ' +
     `When "provider" is omitted the configured default is used. A voice name belongs to one engine and never works on another; the tool is told which engine owns a name, and settles it for you when the engine came from configuration alone — pass "provider" explicitly to override that. ` +
-    `Edge voices: ${EDGE_VOICES.join(', ')}. MiMo voices: ${MIMO_VOICES.join(', ')} ("${MIMO_VOICES[0]}" is resolved by the server cluster and may differ between clusters). ` +
-    'rate/pitch/volume apply to Edge ("-12%", "-3Hz"); for MiMo they are folded into a style instruction. ' +
+    `Edge voices: ${EDGE_VOICES.join(', ')}. MiMo voices: ${MIMO_VOICES.join(', ')} ("${MIMO_VOICES[0]}" is resolved by the server cluster and may differ between clusters). DeepSeek voices: ${DEEPSEEK_VOICES.join(', ')} (${DEEPSEEK_VOICES[0]} female, ${DEEPSEEK_VOICES[1]} male). ` +
+    'rate/pitch/volume apply to Edge ("-12%", "-3Hz"); for MiMo they are folded into a style instruction. **DeepSeek has none of them**: the service exposes no speed, pitch or volume control, so a rate/pitch/volume sent to it is ignored and reported in "warnings" — do not send them for deepseek, and if the delivery has to be shaped, use Edge or MiMo. ' +
     'Pass "style" to steer MiMo delivery, "text" for one clip, or "items" for several. ' +
     'Failures are explicit: missing key, network errors and service errors all throw instead of producing silence.',
   parameters: {
@@ -188,11 +208,11 @@ export const ttsToolDefinition = finalizeTool({
       projectId: { type: 'string', description: 'The clip bay project this narration belongs to. Required: run anyaudio_project mode:"create" first when the task has no project yet. Each line is added as material and placed on a track.' },
       trackName: { type: 'string', description: 'Optional role/character name. Lines are grouped by voice, so every line of one voice lands on one track even when two overlap; naming a speaker adds it to the label ("旁白 · 晓晓") and starts a separate family, which is what you want for a real role split. An item may override it with its own trackName.' },
       startSec: { type: 'number', description: 'Where the first line starts on the project timeline. Later lines follow the previous one; an item may set its own startSec.' },
-      provider: { type: 'string', enum: ['edge', 'mimo'], description: 'TTS engine. Defaults to the provider the user configured in Settings → AnyAudio. Pass "provider" to override it. Applies to every item; an item may also override it.' },
+      provider: { type: 'string', enum: ['edge', 'mimo', 'deepseek'], description: 'TTS engine. Defaults to the provider the user configured in Settings → AnyAudio. Pass "provider" to override it. Applies to every item; an item may also override it.' },
       voice: { type: 'string', description: 'Voice name, applied to every item (an item may override it). Each name belongs to one engine — pick one from the list for the engine you are using. Defaults to Settings → AnyAudio.' },
-      rate: { type: 'string', description: 'Edge speaking rate, e.g. "-12%". Applies to every item.' },
-      pitch: { type: 'string', description: 'Edge pitch shift, e.g. "-3Hz". Applies to every item.' },
-      volume: { type: 'string', description: 'Edge volume, e.g. "+0%". Applies to every item.' },
+      rate: { type: 'string', description: 'Edge speaking rate, e.g. "-12%". Edge only: MiMo folds it into a style instruction, and DeepSeek ignores it (reported in warnings). Applies to every item.' },
+      pitch: { type: 'string', description: 'Edge pitch shift, e.g. "-3Hz". Edge only, same rules as rate. Applies to every item.' },
+      volume: { type: 'string', description: 'Edge volume, e.g. "+0%". Edge only, same rules as rate. Applies to every item.' },
       style: { type: 'string', description: 'MiMo style/emotion instruction (not spoken). Applies to every item.' },
       proxy: { type: 'string', description: 'Optional proxy override, e.g. "http://127.0.0.1:7890". Defaults to the per-engine proxy configured in Settings → AnyAudio. Applies to every item.' },
       output: { type: 'string', description: "Optional extra copy of the WAV at this path. Relative paths resolve against the user's project. The project's own copy is always written under the project folder." },
@@ -239,6 +259,8 @@ export const ttsToolDefinition = finalizeTool({
     const { switches } = resolveProviders(items, provider, { explicitFallback: args.provider !== undefined && args.provider !== null })
     const needsMimoKey = items.some((item) => item.provider === 'mimo' && item.text)
     const mimoKey = needsMimoKey ? await resolveMimoKey() : null
+    const needsDeepSeekKey = items.some((item) => item.provider === 'deepseek' && item.text)
+    const deepseekKey = needsDeepSeekKey ? await resolveDeepSeekKey() : null
     for (const change of switches) {
       warnings.push(
         `${change.label}: voice "${change.voice}" belongs to ${providerInfo(change.to).label}, so it is synthesised with ${providerInfo(change.to).label} instead of the configured ${providerInfo(change.from).label}. Pass "provider": "${change.from}" to force the other engine.`,
@@ -262,12 +284,16 @@ export const ttsToolDefinition = finalizeTool({
         warnings.push(`${label} (mimo) was skipped: MiMo TTS needs an API key. Save one in Settings → AnyAudio (stored in the DSH credential store) or set MIMO_API_KEY. This plugin supports normal Open Platform API keys, not Token Plan keys.`)
         continue
       }
+      if (itemProvider === 'deepseek' && !deepseekKey) {
+        warnings.push(`${label} (deepseek) was skipped: DeepSeek TTS uses the account DSH signs in with, and none was found on this machine. Sign in to DSH with a DeepSeek account, or set DEEPSEEK_API_KEY.`)
+        continue
+      }
       if (item.text.length > 4000) warnings.push(`${label}: ${item.text.length} characters — the service may truncate long input`)
       // `resolveProviders` already settled the engine from the voice, so this
       // only has to fill in the configured voice when none was named.
       const voice = typeof item.voice === 'string' && item.voice.trim()
         ? item.voice.trim()
-        : (itemProvider === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice)
+        : (configuredVoice(config, itemProvider) || providerInfo(itemProvider)?.voices?.[0] || '')
       // Rate/pitch/volume are Edge-only fields; MiMo gets its delivery from `style`.
       // The style is the caller's, never a saved default: how a line should be
       // read depends on the line, so a value fixed in Settings would be wrong for
@@ -278,6 +304,15 @@ export const ttsToolDefinition = finalizeTool({
       const style = itemProvider === 'mimo'
         ? [item.style, styleFromLegacy({ rate: edgeRate, pitch: edgePitch })].filter((part) => typeof part === 'string' && part.trim()).join('。')
         : undefined
+      // DeepSeek has no speed, pitch or volume control. Dropping the value is
+      // kinder than failing the line, but the caller has to be told, or it will
+      // believe its delivery instruction was honoured.
+      if (itemProvider === 'deepseek') {
+        const dropped = deepSeekIgnoredControls({ rate: edgeRate, pitch: edgePitch, volume: edgeVolume })
+        if (dropped.length) {
+          warnings.push(`${label}: DeepSeek TTS has no ${dropped.join(', ')} control, so that part of the request was ignored. Use "style" (MiMo) or switch to Edge when the delivery has to be shaped.`)
+        }
+      }
       // Scratch, not `out/`: the line the person keeps is the project's copy, and
       // `out/` is where they go looking for what a tool produced. Measured on a
       // real 49.6s project: eight narration WAVs in `out/` were byte-identical to
@@ -296,11 +331,11 @@ export const ttsToolDefinition = finalizeTool({
           style: itemProvider === 'mimo' ? style : item.style,
           proxy: typeof item.proxy === 'string' && item.proxy.trim()
             ? item.proxy.trim()
-            : (itemProvider === 'mimo' ? config.tts.mimo.proxy : config.tts.edge.proxy) || undefined,
-          baseUrl: config.tts.mimo.baseUrl,
+            : (itemProvider === 'mimo' ? config.tts.mimo.proxy : itemProvider === 'deepseek' ? config.tts.deepseek.proxy : config.tts.edge.proxy) || undefined,
+          baseUrl: itemProvider === 'deepseek' ? config.tts.deepseek.baseUrl : config.tts.mimo.baseUrl,
           model: config.tts.mimo.model,
-          timeoutSec: config.tts.mimo.timeoutSec,
-          apiKey: mimoKey,
+          timeoutSec: itemProvider === 'deepseek' ? config.tts.deepseek.timeoutSec : config.tts.mimo.timeoutSec,
+          apiKey: itemProvider === 'deepseek' ? deepseekKey : mimoKey,
           sampleRate,
           signal: exec?.signal,
         })

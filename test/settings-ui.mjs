@@ -296,14 +296,17 @@ step('the narration page is one engine picker, one voice picker and a default li
         previewText: '太行、王屋二山。',
         edge: { voice: 'zh-CN-YunjianNeural', rate: '+0%', pitch: '+0Hz', volume: '+0%', proxy: '' },
         mimo: { voice: 'mimo_default', model: 'mimo-v2.5-tts', baseUrl: 'https://api.xiaomimimo.com/v1', proxy: '', timeoutSec: 120 },
+        deepseek: { voice: 'stella', baseUrl: 'https://api.deepseek.com', proxy: '', timeoutSec: 120 },
       },
     },
     tts: {
       providers: [
         { id: 'edge', label: 'Edge TTS', requiresKey: false, voices: ['zh-CN-YunjianNeural', 'zh-CN-XiaoxiaoNeural'] },
         { id: 'mimo', label: 'MiMo-V2.5-TTS', requiresKey: true, voices: ['mimo_default', '冰糖'] },
+        { id: 'deepseek', label: 'DeepSeek TTS', requiresKey: true, voices: ['stella', 'tide'] },
       ],
       mimoConfigured: true,
+      deepseekConfigured: true,
     },
   }
   const tree = TtsTab({ state, reload: () => {}, notify: () => {} })
@@ -319,8 +322,40 @@ step('the narration page is one engine picker, one voice picker and a default li
   const selects = []
   walk(tree, (element) => { if (Array.isArray(element.props?.options)) selects.push(element) })
   assert.equal(selects.length, 2, `expected two dropdowns, got ${selects.length}`)
-  assert.deepEqual(selects[0].props.options.map((option) => option.value), ['edge', 'mimo'])
+  assert.deepEqual(selects[0].props.options.map((option) => option.value), ['edge', 'mimo', 'deepseek'])
   assert.deepEqual(selects[1].props.options.map((option) => option.value), ['zh-CN-YunjianNeural', 'zh-CN-XiaoxiaoNeural'])
+})
+
+step('the deepseek engine shows a readiness line and no key field', () => {
+  // Its key is the DSH sign-in, so an input here would be a lie: a person who is
+  // logged in already has it, and clearing it would break model access too.
+  const base = (deepseekConfigured) => ({
+    config: {
+      tts: {
+        provider: 'deepseek',
+        previewText: '太行、王屋二山。',
+        edge: { voice: 'zh-CN-YunjianNeural', rate: '+0%', pitch: '+0Hz', volume: '+0%', proxy: '' },
+        mimo: { voice: 'mimo_default', model: 'mimo-v2.5-tts', baseUrl: 'https://api.xiaomimimo.com/v1', proxy: '', timeoutSec: 120 },
+        deepseek: { voice: 'stella', baseUrl: 'https://api.deepseek.com', proxy: '', timeoutSec: 120 },
+      },
+    },
+    tts: {
+      providers: [
+        { id: 'edge', label: 'Edge TTS', requiresKey: false, voices: ['zh-CN-YunjianNeural'] },
+        { id: 'mimo', label: 'MiMo-V2.5-TTS', requiresKey: true, voices: ['mimo_default'] },
+        { id: 'deepseek', label: 'DeepSeek TTS', requiresKey: true, voices: ['stella', 'tide'] },
+      ],
+      mimoConfigured: true,
+      deepseekConfigured,
+    },
+  })
+  const ready = text(TtsTab({ state: base(true), reload: () => {}, notify: () => {} }))
+  assert.ok(ready.includes('使用本机 DeepSeek 账号，无需配置'), `the readiness line is missing, got "${ready}"`)
+  assert.ok(!ready.includes('粘贴 Open Platform API Key'), 'the deepseek page must not offer a key field')
+  assert.ok(!ready.includes('Key 未配置'), 'the deepseek page must not show the mimo key state')
+  const missing = text(TtsTab({ state: base(false), reload: () => {}, notify: () => {} }))
+  assert.ok(missing.includes('未检测到 DeepSeek 账号'), `a missing account is not reported, got "${missing}"`)
+  assert.ok(missing.includes('先登录 DSH 才能试听 DeepSeek'), 'the preview hint is missing when there is no account')
 })
 
 step('every dropdown goes through the shared Select', () => {

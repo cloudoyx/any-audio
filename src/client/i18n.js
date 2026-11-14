@@ -132,6 +132,7 @@ export const EN = {
   '通常保持 +0%': 'Usually +0%',
   '代理（可选）': 'Proxy (optional)',
   '国内网络必要时填 http://127.0.0.1:7890': 'Set http://127.0.0.1:7890 if your network needs a proxy',
+  '默认直连': 'Direct by default',
   '默认直连；系统代理会改写 MiMo 请求时再填': 'Direct by default; fill this when a system proxy rewrites MiMo requests',
   '模型': 'Model',
   '默认 mimo-v2.5-tts': 'Defaults to mimo-v2.5-tts',
@@ -148,6 +149,9 @@ export const EN = {
   '生成中…': 'Generating…',
   '生成试听': 'Generate preview',
   '先保存 Key 才能试听 MiMo': 'Save a key before previewing MiMo',
+  '使用本机 DeepSeek 账号，无需配置': 'Uses this machine’s DeepSeek account — nothing to configure',
+  '未检测到 DeepSeek 账号，请先在 DSH 里登录': 'No DeepSeek account found — sign in to DSH first',
+  '先登录 DSH 才能试听 DeepSeek': 'Sign in to DSH before previewing DeepSeek',
   '试听已生成': 'Preview ready',
   '喜欢的话给个 Star ⭐': 'A star is appreciated ⭐',
 

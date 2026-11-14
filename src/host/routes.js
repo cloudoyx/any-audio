@@ -21,7 +21,7 @@ import { compileScore } from '../audio/score.js'
 import { loadSoundBank, renderCompiled, listPresets } from '../audio/synth.js'
 import { assertPackDir, isPriorityPack, listPacks, readPack, userSfxDir } from '../audio/sfx-library.js'
 import { scanPackFolder } from '../audio/sfx-pack-scan.js'
-import { EDGE_VOICES, MIMO_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
+import { EDGE_VOICES, MIMO_VOICES, DEEPSEEK_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
@@ -189,6 +189,16 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       }
     }
     if (!mimoConfigured && process.env.MIMO_API_KEY) mimoConfigured = true
+    let deepseekConfigured = false
+    if (credentials) {
+      try {
+        const info = await credentials.describe('DEEPSEEK_API_KEY')
+        deepseekConfigured = Boolean(info?.configured ?? info?.present ?? info?.value)
+      } catch {
+        deepseekConfigured = false
+      }
+    }
+    if (!deepseekConfigured && process.env.DEEPSEEK_API_KEY) deepseekConfigured = true
     return {
       ok: true,
       version: VERSION,
@@ -200,10 +210,13 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
         providers: [
           providerInfo('edge'),
           providerInfo('mimo'),
+          providerInfo('deepseek'),
         ],
         edgeVoices: EDGE_VOICES,
         mimoVoices: MIMO_VOICES,
+        deepseekVoices: DEEPSEEK_VOICES,
         mimoConfigured,
+        deepseekConfigured,
       },
       platform: { node: process.version, home: homedir(), fontLibrary: userFontDir() },
     }
@@ -385,7 +398,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       provider: chosenEngine,
       voice: body.voice,
       explicitProvider: explicit,
-      fallbackVoice: chosenEngine === 'mimo' ? config.tts.mimo.voice : config.tts.edge.voice,
+      fallbackVoice: configuredVoiceFor(config, chosenEngine),
     })
     const provider = picked.provider
     let apiKey = null
@@ -401,6 +414,18 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       }
       if (!apiKey) throw new Error('MiMo needs a key: save one above (normal Open Platform key) or set MIMO_API_KEY')
     }
+    if (provider === 'deepseek') {
+      apiKey = process.env.DEEPSEEK_API_KEY ?? null
+      const credentials = getCredentials()
+      if (!apiKey && credentials) {
+        try {
+          apiKey = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value ?? null
+        } catch {
+          apiKey = null
+        }
+      }
+      if (!apiKey) throw new Error('DeepSeek TTS uses the account DSH signs in with, and none was found. Sign in with a DeepSeek account, or set DEEPSEEK_API_KEY')
+    }
     const text = String(body.text ?? '').trim() || '太行、王屋二山，方七百里，高万仞。'
     const voice = picked.voice
     const audio = await synthesizeSpeech({
@@ -411,10 +436,10 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       pitch: body.pitch ?? config.tts.edge.pitch,
       volume: body.volume ?? config.tts.edge.volume,
       style: body.style,
-      proxy: provider === 'mimo' ? config.tts.mimo.proxy || undefined : config.tts.edge.proxy || undefined,
-      baseUrl: config.tts.mimo.baseUrl,
+      proxy: provider === 'mimo' ? config.tts.mimo.proxy || undefined : provider === 'deepseek' ? config.tts.deepseek.proxy || undefined : config.tts.edge.proxy || undefined,
+      baseUrl: provider === 'deepseek' ? config.tts.deepseek.baseUrl : config.tts.mimo.baseUrl,
       model: config.tts.mimo.model,
-      timeoutSec: config.tts.mimo.timeoutSec,
+      timeoutSec: provider === 'deepseek' ? config.tts.deepseek.timeoutSec : config.tts.mimo.timeoutSec,
       apiKey,
       sampleRate: 48000,
     })
@@ -427,12 +452,40 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     })
   }
 
-  async function credentialsStatus() {
+  /**
+   * Which engine a credential request is about.
+   *
+   * The DeepSeek key belongs to DSH's own sign-in, so this service never writes
+   * or clears it: deleting it would break the person's model access, not just
+   * narration. Only engines whose key the plugin owns are writable here.
+   */
+  /**
+   * The voice saved for an engine, read from that engine's own config block, so
+   * a new engine needs no branch here.
+   */
+  function configuredVoiceFor(config, providerId) {
+    const saved = config?.tts?.[providerId]?.voice
+    if (typeof saved === 'string' && saved.trim()) return saved
+    return providerInfo(providerId)?.voices?.[0] ?? ''
+  }
+
+  function credentialRefFor(body) {
+    const requested = String(body?.provider ?? 'mimo').trim() || 'mimo'
+    const info = providerInfo(requested)
+    if (!info) throw new Error(`unknown provider "${requested}"`)
+    if (!info.credentialRef) throw new Error(`${info.label} does not use an API key`)
+    if (info.keyIsAmbient) throw new Error(`${info.label} uses the account DSH signs in with; there is nothing to save here`)
+    return { requested, ref: info.credentialRef, label: info.label }
+  }
+
+  async function credentialsStatus(body = {}) {
     const credentials = getCredentials()
-    const result = { ok: true, service: Boolean(credentials), ref: 'MIMO_API_KEY', configured: Boolean(process.env.MIMO_API_KEY) }
+    const { requested, ref } = credentialRefFor(body)
+    const envName = ref
+    const result = { ok: true, service: Boolean(credentials), provider: requested, ref, configured: Boolean(process.env[envName]) }
     if (credentials) {
       try {
-        const info = await credentials.describe('MIMO_API_KEY')
+        const info = await credentials.describe(ref)
         result.configured = Boolean(result.configured || info?.configured || info?.present)
         result.info = info ?? null
       } catch (error) {
@@ -445,17 +498,20 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
   async function credentialsSet(body) {
     const credentials = getCredentials()
     if (!credentials) throw new Error('the DSH credentials service is not available in this runtime')
+    const { ref, label } = credentialRefFor(body)
     const value = String(body.value ?? '').trim()
     if (!value) throw new Error('value is required')
     if (!/^[A-Za-z0-9_\-.]{8,}$/.test(value)) throw new Error('this does not look like an API key')
-    await credentials.set('MIMO_API_KEY', value)
+    await credentials.set(ref, value)
+    void label
     return { ok: true, configured: true }
   }
 
-  async function credentialsUnset() {
+  async function credentialsUnset(body) {
     const credentials = getCredentials()
     if (!credentials) throw new Error('the DSH credentials service is not available in this runtime')
-    await credentials.unset('MIMO_API_KEY')
+    const { ref } = credentialRefFor(body)
+    await credentials.unset(ref)
     return { ok: true, configured: false }
   }
 
@@ -587,6 +643,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
         ANYAUDIO_FONTS: process.env.ANYAUDIO_FONTS ?? null,
         ANYAUDIO_CONFIG: process.env.ANYAUDIO_CONFIG ?? null,
         MIMO_API_KEY: process.env.MIMO_API_KEY ? '(set)' : null,
+        DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ? '(set)' : null,
       },
     }
   }
@@ -660,7 +717,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       }
     }
     if (method === 'GET' && path === `${PREFIX}/diagnostics`) return json(res, 200, diagnostics())
-    if (method === 'GET' && path === `${PREFIX}/credentials`) return json(res, 200, await credentialsStatus())
+    if (method === 'GET' && path === `${PREFIX}/credentials`) return json(res, 200, await credentialsStatus({ provider: url.searchParams.get('provider') ?? undefined }))
     if (method === 'GET' && path === `${PREFIX}/sources/presets`) {
       try {
         return json(res, 200, await presetsFor(url.searchParams.get('path')))
@@ -709,7 +766,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
         return json(res, 200, { ok: true })
       }
       if (path === `${PREFIX}/credentials/set`) return json(res, 200, await credentialsSet(body))
-      if (path === `${PREFIX}/credentials/unset`) return json(res, 200, await credentialsUnset())
+      if (path === `${PREFIX}/credentials/unset`) return json(res, 200, await credentialsUnset(body))
       if (path === `${PREFIX}/sfx/packs/toggle`) return json(res, 200, await sfxPackToggle(body))
       if (path === `${PREFIX}/sfx/packs/install`) return json(res, 200, await sfxPackInstall(body))
       if (path === `${PREFIX}/sfx/packs/remove`) return json(res, 200, await sfxPackRemove(body))

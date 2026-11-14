@@ -141,7 +141,9 @@ server.listen(0, '127.0.0.1', async () => {
   await step('state exposes config, fonts and tts providers', () => {
     assert(state.ok, 'state not ok')
     assert(state.config?.tts?.provider === 'edge', `default provider should be edge, got ${JSON.stringify(state.config?.tts?.provider)}`)
-    assert(state.tts.providers.length === 2, 'two providers expected')
+    assert(state.tts.providers.length === 3, 'three providers expected')
+    assert(state.tts.providers.some((item) => item.id === 'deepseek'), 'deepseek should be offered')
+    assert(typeof state.tts.deepseekConfigured === 'boolean', 'deepseek readiness should be reported')
     if (seeded) assert(state.fonts.rows.length >= 1, 'installed fonts missing')
   })
   console.log('  fonts:', state.fonts.rows.map((row) => `${row.name}:${row.status}`).join(', '))
@@ -281,14 +283,24 @@ server.listen(0, '127.0.0.1', async () => {
   })
 
   await step('credential set/describe/unset round-trip', async () => {
-    const set = await post('/credentials/set', { value: 'sk-test-1234567890' })
+    const set = await post('/credentials/set', { provider: 'mimo', value: 'sk-test-1234567890' })
     assert(set.ok, set.error)
-    const described = await get('/credentials')
+    const described = await get('/credentials?provider=mimo')
     assert(described.configured === true, 'credential not configured')
-    const unset = await post('/credentials/unset', {})
+    const unset = await post('/credentials/unset', { provider: 'mimo' })
     assert(unset.ok, unset.error)
-    const after = await get('/credentials')
+    const after = await get('/credentials?provider=mimo')
     assert(after.configured === false, 'credential not removed')
+  })
+
+  await step('the deepseek key belongs to the DSH sign-in and is not writable here', async () => {
+    // Clearing it would break the person's model access, not just narration, so
+    // the page never offers a field and the route refuses the write.
+    const attempt = await post('/credentials/set', { provider: 'deepseek', value: 'sk-should-not-be-accepted' })
+    assert(attempt.ok === false, 'writing the deepseek key should be refused')
+    assert(/signs in with|nothing to save/i.test(attempt.error), `unclear refusal: ${attempt.error}`)
+    const described = await get('/credentials?provider=deepseek')
+    assert(described.ok === true && described.ref === 'DEEPSEEK_API_KEY', 'the deepseek status should still be readable')
   })
 
   await step('install from a local file into the shared library, then delete it', async () => {
