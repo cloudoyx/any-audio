@@ -18,6 +18,7 @@
     "scripts/smoke.mjs",
     "scripts/anyaudio-cli.mjs",
     "scripts/build-client.mjs",
+    "scripts/build-sfx-pack.mjs",
     "test/verify.mjs",
     "test/client-bundle.mjs",
     "test/settings.mjs",
