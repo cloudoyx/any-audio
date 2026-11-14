@@ -13,7 +13,7 @@
  */
 import { h } from './ui.js'
 import { Page, FontsTab, FxLibTab, TtsTab } from './settings.js'
-import { Guide, primeOnboardingConfig, ONBOARDING_VERSION, onboardedVersion } from './onboarding.js'
+import { Guide, NarrationStep, primeOnboardingConfig, primeOnboardingTts, ONBOARDING_VERSION, onboardedVersion } from './onboarding.js'
 import { ClipBayPanel, CLIP_BAY_ID } from './clipbay/panel.js'
 import { detectLanguage, resolveLanguage, setLanguagePreference, translate } from './i18n.js'
 import { api } from './api.js'
@@ -43,6 +43,9 @@ function apply(ctx) {
       // config is handed over as soon as it arrives: without it the guide would
       // flash for someone who finished it months ago.
       primeOnboardingConfig(data.config)
+      // The narration step needs the engine list and which keys are ready; it
+      // comes from the same read, so it is handed over with it.
+      primeOnboardingTts(data.tts)
     })
     .catch(() => {})
 
@@ -90,4 +93,4 @@ function apply(ctx) {
 
 export { apply }
 
-export const __test = { bytes, detectLanguage, Page, Guide, FontsTab, FxLibTab, TtsTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig }
+export const __test = { bytes, detectLanguage, Page, Guide, NarrationStep, FontsTab, FxLibTab, TtsTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts }

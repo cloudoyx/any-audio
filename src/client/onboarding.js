@@ -11,14 +11,14 @@
  * plugin API, and the guide has to be dismissable (Esc, click outside) rather
  * than a wall the person cannot get past.
  */
-import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, TextInput, Notice, useSurface } from './ui.js'
+import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, Select, TextInput, Notice, useSurface } from './ui.js'
 import { t } from './i18n.js'
 import { api, API } from './api.js'
 import { BASE_PACK, DownloadLinks } from './base-pack.js'
 import { createPortal } from 'react-dom'
 
 /** Bump this to show the guide again after a release that adds steps. */
-export const ONBOARDING_VERSION = 1
+export const ONBOARDING_VERSION = 2
 
 // The slot mounts before any request has finished, so the config read at plugin
 // load is primed here: without it the first render would flash the guide for
@@ -27,6 +27,15 @@ let primed = null
 
 export function primeOnboardingConfig(config) {
   primed = config ?? null
+}
+
+// The engine list arrives with the same `/state` read as the config. Priming it
+// is what lets a test render the narration step without a request; in the app it
+// stays null until the read lands.
+let primedTts = null
+
+export function primeOnboardingTts(tts) {
+  primedTts = tts ?? null
 }
 
 export function onboardedVersion(config) {
@@ -97,7 +106,7 @@ function Modal({ title, step, hero, children, onClose }) {
             // The banner already carries the wordmark, so the title would be the
             // same word twice in a row.
             hero ? null : h('span', { style: { fontSize: 16, fontWeight: 600 } }, title),
-            h('span', { style: { ...S.mono, marginLeft: 'auto' } }, `${step} / 4`),
+            h('span', { style: { ...S.mono, marginLeft: 'auto' } }, `${step} / 5`),
           ),
           children,
         ),
@@ -111,16 +120,69 @@ function Actions({ children }) {
   return h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4, flexWrap: 'wrap' } }, children)
 }
 
+/**
+ * Step 4: pick the narration engine.
+ *
+ * Separate from `Guide` so the choice can be exercised on its own. The engine is
+ * saved the moment it is picked — that is the point of the page, and a person
+ * who closes the dialog after choosing must not find Edge still selected.
+ */
+export function NarrationStep({ tts, engine, note, busy, keyInput, onPick, onKeyInput, onSaveKey, onClose, onNext }) {
+  const engines = tts?.providers ?? []
+  const mimoReady = Boolean(tts?.mimoConfigured)
+  const deepseekReady = Boolean(tts?.deepseekConfigured)
+  return h(Modal, { title: t('配音引擎'), step: 4, onClose },
+    h('p', { style: S.desc }, t('给视频或有声书配旁白的引擎。现在就选好，之后不用再找我。')),
+    engines.length
+      ? h(Select, {
+        value: engine,
+        onChange: onPick,
+        options: engines.map(item => ({ value: item.id, label: item.label })),
+      })
+      : null,
+    engine === 'edge'
+      ? h('p', { style: S.desc }, t('免费，不需要账号，中文旁白够用。'))
+      : null,
+    engine === 'deepseek'
+      ? h('p', { style: S.desc }, deepseekReady
+        ? t('使用本机 DeepSeek 账号，无需配置。只有两个音色，不能调语速。')
+        : t('未检测到 DeepSeek 账号，登录 DSH 之后才能用；也可以先用别的引擎。'))
+      : null,
+    engine === 'mimo'
+      ? h(Fragment, null,
+        h('p', { style: S.desc }, mimoReady
+          ? t('Key 已配置，可以直接用。')
+          : t('MiMo 需要一个 API Key。不填也能继续，但 agent 到时候会改用别的引擎。')),
+        mimoReady
+          ? null
+          : h('div', { style: S.row },
+            h(TextInput, { value: keyInput, placeholder: t('粘贴 Open Platform API Key'), onChange: onKeyInput, type: 'password' }),
+            h(Btn, { kind: 'primary', disabled: !String(keyInput ?? '').trim() || busy === 'key', onClick: onSaveKey }, t('保存')),
+          ),
+      )
+      : null,
+    note ? h(Notice, null, note) : null,
+    h(Actions, null,
+      h(Btn, { onClick: onNext }, t('下一步')),
+    ),
+  )
+}
+
 export function Guide() {
   const [config, setConfig] = useState(primed)
   const [step, setStep] = useState(0)
   const [fonts, setFonts] = useState(null)
   const [packs, setPacks] = useState(null)
+  const [tts, setTts] = useState(primedTts)
   const [job, setJob] = useState(null)
   const [installPath, setInstallPath] = useState('')
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
   const [downloadHint, setDownloadHint] = useState(false)
+  // The engine is written to the config the moment it is picked, so the guide
+  // never has to ask again; `engine` mirrors it locally to re-render.
+  const [engine, setEngine] = useState(() => String(primed?.tts?.provider ?? 'edge'))
+  const [keyInput, setKeyInput] = useState('')
 
   useEffect(() => {
     // Always re-read, even when the primed value is present: the config can
@@ -129,7 +191,14 @@ export function Guide() {
     // closed for the rest of the page's life.
     let cancelled = false
     api('/state')
-      .then((data) => { if (!cancelled && data?.config) setConfig(data.config) })
+      .then((data) => {
+        if (cancelled) return
+        if (data?.config) {
+          setConfig(data.config)
+          setEngine(String(data.config?.tts?.provider ?? 'edge'))
+        }
+        if (data?.tts) setTts(data.tts)
+      })
       .catch(() => {})
     return () => { cancelled = true }
   }, [])
@@ -227,6 +296,39 @@ export function Guide() {
     }
   }
 
+  /**
+   * Picking an engine is the whole point of the narration step, so it is saved
+   * at once rather than on the way out: a person who closes the dialog after
+   * choosing must not find Edge still selected in Settings. A failed write is
+   * reported but does not block, because the choice can be repeated there.
+   */
+  async function pickEngine(next) {
+    setEngine(next)
+    setNote('')
+    try {
+      await api('/config', { method: 'POST', body: { patch: { tts: { provider: next } } } })
+    } catch (error) {
+      setNote(error.message)
+    }
+  }
+
+  async function saveKey() {
+    const value = keyInput.trim()
+    if (!value) return
+    setBusy('key')
+    try {
+      await api('/credentials/set', { method: 'POST', body: { provider: 'mimo', value } })
+      setKeyInput('')
+      const data = await api('/state')
+      if (data?.tts) setTts(data.tts)
+      setNote(t('Key 已保存'))
+    } catch (error) {
+      setNote(error.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
   const fontInstalled = Boolean(fonts?.rows?.length)
   const packInstalled = Boolean(packs?.some((pack) => pack.id === BASE_PACK.id))
   const percent = job && job.total ? Math.round((job.received / job.total) * 100) : 0
@@ -283,7 +385,18 @@ export function Guide() {
     )
   }
 
-  return h(Modal, { title: t('完成'), step: 4, onClose: finish },
+  if (step === 3) {
+    return h(NarrationStep, {
+      tts, engine, note, busy, keyInput,
+      onPick: pickEngine,
+      onKeyInput: setKeyInput,
+      onSaveKey: saveKey,
+      onClose: finish,
+      onNext: () => goTo(4),
+    })
+  }
+
+  return h(Modal, { title: t('完成'), step: 5, onClose: finish },
     h('p', { style: S.desc }, t('以后在「设置 → AnyAudio」里改。')),
     h('p', { style: S.desc }, t('剪辑台在对话上方的标签栏里。')),
     h('p', { style: S.desc }, t('也可以直接对 agent 说「帮我配一段音乐」，它会自己找。')),

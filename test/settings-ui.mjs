@@ -30,7 +30,7 @@ const mod = entry.factory((id) => {
   throw new Error(`unexpected require(${JSON.stringify(id)})`)
 })
 
-const { FontsTab, FxLibTab, TtsTab, Guide, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig } = mod.__test
+const { FontsTab, FxLibTab, TtsTab, Guide, NarrationStep, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
 
 function strings(node, out = []) {
   if (node === null || node === undefined || node === false) return out
@@ -248,6 +248,87 @@ step('skipping the guide records the version', async () => {
     assert.equal(body.patch.ui.onboardedVersion, ONBOARDING_VERSION, 'the version must be written')
   } finally {
     globalThis.fetch = previousFetch
+  }
+})
+
+step('the version was raised so an upgrade replays the guide once', () => {
+  // 0.2 shipped no guide at all; anyone upgrading from it still has version 0 or
+  // 1 on disk. Version 2 makes every one of them see the new narration step.
+  assert.ok(ONBOARDING_VERSION >= 2, `an upgrade must be picked up, got version ${ONBOARDING_VERSION}`)
+  assert.equal(onboardedVersion({ ui: { onboardedVersion: 1 } }) >= ONBOARDING_VERSION, false, 'a v1 record must not count as done')
+})
+
+step('the narration step saves the engine as soon as it is picked', async () => {
+  // The page exists to settle the engine; choosing it and then closing must not
+  // leave Edge in the config.
+  const written = []
+  const state = {
+    providers: [
+      { id: 'edge', label: 'Edge TTS', voices: ['zh-CN-YunjianNeural'] },
+      { id: 'mimo', label: 'MiMo-V2.5-TTS', voices: ['mimo_default'] },
+      { id: 'deepseek', label: 'DeepSeek TTS', voices: ['stella'] },
+    ],
+    mimoConfigured: false,
+    deepseekConfigured: true,
+  }
+  const tree = NarrationStep({
+    tts: state, engine: 'edge', note: '', busy: '', keyInput: '',
+    onPick: (value) => { written.push(value) },
+    onKeyInput: () => {}, onSaveKey: () => {}, onClose: () => {}, onNext: () => {},
+  })
+  const selects = []
+  walk(tree, (element) => { if (Array.isArray(element.props?.options)) selects.push(element) })
+  assert.equal(selects.length, 1, 'the engine list should be one dropdown')
+  selects[0].props.onChange('deepseek')
+  assert.deepEqual(written, ['deepseek'], `picking an engine must call back at once, got ${JSON.stringify(written)}`)
+})
+
+step('the narration step tells the truth about each engine', () => {
+  const base = (overrides = {}) => ({
+    providers: [
+      { id: 'edge', label: 'Edge TTS', voices: ['zh-CN-YunjianNeural'] },
+      { id: 'mimo', label: 'MiMo-V2.5-TTS', voices: ['mimo_default'] },
+      { id: 'deepseek', label: 'DeepSeek TTS', voices: ['stella'] },
+    ],
+    mimoConfigured: false,
+    deepseekConfigured: true,
+    ...overrides,
+  })
+  const render = (engine, tts) => text(NarrationStep({
+    tts, engine, note: '', busy: '', keyInput: '',
+    onPick: () => {}, onKeyInput: () => {}, onSaveKey: () => {}, onClose: () => {}, onNext: () => {},
+  }))
+
+  // The consequence, not the requirement: a missing key is allowed to continue,
+  // and the copy has to say what happens instead.
+  const mimoMissing = render('mimo', base())
+  assert.ok(mimoMissing.includes('不填也能继续'), `a missing key must not read as a blocker, got "${mimoMissing}"`)
+  assert.ok(mimoMissing.includes('改用别的引擎'), 'the fallback must be spelled out')
+  assert.ok(!mimoMissing.includes('必须'), 'no copy may turn the key into a hard requirement')
+
+  const mimoSaved = render('mimo', base({ mimoConfigured: true }))
+  assert.ok(mimoSaved.includes('Key 已配置'), `a saved key must be confirmed, got "${mimoSaved}"`)
+  assert.ok(!mimoSaved.includes('粘贴'), 'a saved key must not show the field again')
+
+  const deepseekMissing = render('deepseek', base({ deepseekConfigured: false }))
+  assert.ok(deepseekMissing.includes('未检测到 DeepSeek 账号'), 'a missing account must be reported')
+  assert.ok(deepseekMissing.includes('也可以先用别的引擎'), 'and it must not block')
+
+  assert.ok(render('edge', base()).includes('免费'), 'Edge should say it is free')
+})
+
+step('the guide runs five steps', () => {
+  primeOnboardingConfig({ ui: { onboardedVersion: 0 } })
+  const welcome = Guide()
+  assert.equal(welcome.props.step, 1, 'the welcome step should be step 1')
+  // The counter lives inside the dialog component, so it is read from the built
+  // bundle rather than from the element tree.
+  assert.ok(source.includes('${step} / 5'), 'the counter should say five steps')
+  // Every step must be reachable: the narration step sits between the pack and
+  // the finish, and each one names the step it is.
+  const onboarding = readFileSync(join(root, 'src', 'client', 'onboarding.js'), 'utf8')
+  for (const count of [1, 2, 3, 4, 5]) {
+    assert.ok(new RegExp(`step: ${count}\\b`).test(onboarding), `step ${count} is missing its counter`)
   }
 })
 
