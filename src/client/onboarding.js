@@ -175,10 +175,8 @@ export function Guide() {
   const [packs, setPacks] = useState(null)
   const [tts, setTts] = useState(primedTts)
   const [job, setJob] = useState(null)
-  const [installPath, setInstallPath] = useState('')
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
-  const [downloadHint, setDownloadHint] = useState(false)
   // The engine is written to the config the moment it is picked, so the guide
   // never has to ask again; `engine` mirrors it locally to re-render.
   const [engine, setEngine] = useState(() => String(primed?.tts?.provider ?? 'edge'))
@@ -220,9 +218,10 @@ export function Guide() {
     api('/sfx/packs').then((data) => setPacks(data.packs ?? [])).catch(() => setPacks([]))
   }, [config])
 
-  // The install runs on the host, so the guide only watches it: closing the
-  // dialog must not cancel a download that is already under way. Both installs
-  // report through the same job channel, so one poller serves both.
+  // The sound-source install runs on the host, so the guide only watches it:
+  // closing the dialog must not cancel a download that is already under way.
+  // The pack install no longer starts from here — that is a download the person
+  // does in their browser — so only the font job has to be polled.
   useEffect(() => {
     if (!job || job.status !== 'running') return undefined
     const timer = setInterval(async () => {
@@ -230,15 +229,8 @@ export function Guide() {
         const data = await api(`/jobs?id=${encodeURIComponent(job.id)}`)
         setJob(data.job)
         if (data.job.status === 'done') {
-          const result = data.job.result ?? {}
-          if (data.job.kind === 'pack-install') {
-            setNote(t('已安装 {0}（{1} 条）', result.id ?? '', result.count ?? ''))
-            setInstallPath('')
-            api('/sfx/packs').then((packs) => setPacks(packs.packs ?? [])).catch(() => {})
-          } else {
-            setNote(t('音源已安装'))
-            api('/state').then((state) => setFonts(state.fonts)).catch(() => {})
-          }
+          setNote(t('音源已安装'))
+          api('/state').then((state) => setFonts(state.fonts)).catch(() => {})
         }
         if (data.job.status === 'error') setNote(data.job.error)
       } catch {
@@ -275,20 +267,6 @@ export function Guide() {
       const data = await api('/sources/install', { method: 'POST', body: { id: 'generaluser' } })
       setJob(data.job)
       setNote(t('正在下载，可以直接进入下一步'))
-    } catch (error) {
-      setNote(error.message)
-    } finally {
-      setBusy('')
-    }
-  }
-
-  async function installPack() {
-    const fromPath = installPath.trim()
-    if (!fromPath) return
-    setBusy('pack')
-    try {
-      const data = await api('/sfx/packs/install', { method: 'POST', body: { fromPath } })
-      setJob(data.job)
     } catch (error) {
       setNote(error.message)
     } finally {
@@ -366,20 +344,22 @@ export function Guide() {
   }
 
   if (step === 2) {
+    // A fresh install has downloaded nothing yet, so the page leads with the
+    // download and does not ask for a folder path: nobody has an unpacked folder
+    // at this point, and offering the box reads as "you cannot continue without
+    // one". The path lives in Settings, which is where someone returning from a
+    // slow download will actually be.
     return h(Modal, { title: t('装音效包'), step: 3, onClose: finish },
       h('p', { style: S.desc }, t('真实录音的音效库。基础包 BaseSFX 有 {0} 条：{1}。', BASE_PACK.count, t(BASE_PACK.summary))),
       packInstalled ? h(Notice, null, t('已安装')) : null,
-      downloadHint ? h(DownloadLinks, null) : null,
-      downloadHint
-        ? h(Notice, null, t('下载后解压，把解压出来的 BaseSFX 目录路径填在下面；也可以稍后在「设置 → AnyAudio → 音效」里安装。建议先进入下一步。'))
-        : null,
-      h('div', { style: S.row },
-        h(TextInput, { value: installPath, placeholder: t('把解压出来的 BaseSFX 文件夹路径粘贴到这里'), onChange: setInstallPath }),
-        h(Btn, { kind: 'primary', disabled: busy === 'pack' || !installPath.trim(), onClick: installPack }, t('安装')),
-      ),
+      packInstalled
+        ? null
+        : h(Fragment, null,
+          h('p', { style: S.desc }, t('建议下载基础音效包，音效的真实感会明显提升。解压后在「设置 → AnyAudio → 音效」里把文件夹装进来即可，现在跳过也没关系。')),
+          h(DownloadLinks, null),
+        ),
       note ? h(Notice, null, note) : null,
       h(Actions, null,
-        h(Btn, { onClick: () => { setDownloadHint(true) } }, t('去下载')),
         h(Btn, { onClick: () => goTo(3) }, packInstalled ? t('下一步') : t('跳过')),
       ),
     )

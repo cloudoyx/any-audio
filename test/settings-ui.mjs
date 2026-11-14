@@ -354,7 +354,22 @@ step('nothing still points at a tab that was renamed or removed', async () => {
   assert.deepEqual(stale, [], `these lines point at a tab that no longer exists: ${stale.join(', ')}`)
 })
 
-step('a failed download still offers the button again', () => {
+step('the pack step leads with the download and asks for nothing', () => {
+  // A fresh install has downloaded nothing, so there is no folder to paste and
+  // no install to run. The step offers the three links and a skip; the folder
+  // field lives in Settings, where someone returning from a slow download goes.
+  const onboarding = readFileSync(join(root, 'src', 'client', 'onboarding.js'), 'utf8')
+  assert.ok(onboarding.includes('建议下载基础音效包'), 'the pack step must recommend the download')
+  assert.ok(onboarding.includes('现在跳过也没关系'), 'and must say skipping is fine')
+  assert.ok(!onboarding.includes('把解压出来的 BaseSFX 文件夹路径粘贴到这里'), 'the guide must not ask for a folder path')
+  assert.ok(!onboarding.includes("t('去下载')"), 'the two-step download reveal is gone')
+  assert.ok(onboarding.includes('h(DownloadLinks, null)'), 'the three links must be on the page, not behind a button')
+  // Hiding the offer once the pack is there: three download links under an
+  // "已安装" notice would just be noise.
+  assert.ok(/packInstalled\s*\n?\s*\?\s*null/.test(onboarding), 'the download block must hide once the pack is installed')
+})
+
+step('a failed font download still offers the button again', () => {
   // The retry condition, not the success one: a job left in the error state
   // must not hide the button the person needs to press.
   assert.ok(

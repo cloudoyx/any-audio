@@ -75,7 +75,7 @@ export const EN = {
   '下一步': 'Next',
   '装音效包': 'Sound packs',
   '真实录音的音效库。基础包 BaseSFX 有 {0} 条：{1}。': 'A library of real recordings. The BaseSFX pack holds {0} sounds: {1}.',
-  '下载后解压，把解压出来的 BaseSFX 目录路径填在下面；也可以稍后在「设置 → AnyAudio → 音效」里安装。建议先进入下一步。': 'Unpack the download and paste the unpacked BaseSFX folder below — or install it later under Settings → AnyAudio → Sound packs. Going on to the next step is fine.',
+  '建议下载基础音效包，音效的真实感会明显提升。解压后在「设置 → AnyAudio → 音效」里把文件夹装进来即可，现在跳过也没关系。': 'Downloading the base pack makes the effects sound noticeably more real. Unpack it, then add the folder under Settings → AnyAudio → Sound packs — skipping for now is fine.',
   '去下载': 'Download',
   '配音引擎': 'Narration engine',
   '给视频或有声书配旁白的引擎。现在就选好，之后不用再找我。': 'The engine that reads narration for a video or an audiobook. Pick one now and it sticks.',
