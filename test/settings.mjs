@@ -149,6 +149,23 @@ server.listen(0, '127.0.0.1', async () => {
   console.log('  fonts:', state.fonts.rows.map((row) => `${row.name}:${row.status}`).join(', '))
   console.log('  default font:', state.fonts.defaultPath)
 
+  await step('a blocked download names its reason in a stable field', async () => {
+    // The message itself is written for the agent and stays English; the code is
+    // what lets the settings page say the same thing in the person's language.
+    // Port 1 on the loopback never accepts, so the failure is deterministic and
+    // nothing leaves the machine.
+    const install = await post('/sources/install', { id: '__unreachable__', url: 'https://127.0.0.1:1/nope.sf2' })
+    assert(install.ok && install.job?.id, install.error ?? 'no job id')
+    let job = install.job
+    for (let i = 0; i < 60 && job.status === 'running'; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      job = (await get(`/jobs?id=${encodeURIComponent(job.id)}`)).job
+    }
+    assert(job.status === 'error', `expected a failure, got ${job.status}`)
+    assert(job.errorCode === 'FONT_DOWNLOAD_FAILED', `the reason should be named, got ${JSON.stringify(job.errorCode)}`)
+    assert(/fromPath/.test(job.error), 'the agent-facing message must still name the fix')
+  })
+
   await step('rejects requests that do not come from the settings page', async () => {
     const bare = await fetch(base + '/state')
     assert(bare.status === 403, `expected 403 without client header, got ${bare.status}`)

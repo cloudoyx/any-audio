@@ -193,10 +193,15 @@ async function download(url, target, { onProgress, signal } = {}) {
   try {
     response = await fetch(url, { redirect: 'follow', signal: signal ?? AbortSignal.timeout(180000) })
   } catch (error) {
-    throw new Error(
+    // The message stays English because it is also what the agent reads when it
+    // calls the tool; `code` is what lets the settings page say the same thing in
+    // the person's own language.
+    const failure = new Error(
       `download failed (${error instanceof Error ? error.message : String(error)}). ` +
         'If GitHub is unreachable on this network, download the .sf2 with your proxy and pass "fromPath" instead.',
     )
+    failure.code = 'FONT_DOWNLOAD_FAILED'
+    throw failure
   }
   if (!response.ok || !response.body) throw new Error(`download failed with HTTP ${response.status}`)
   const total = Number(response.headers.get('content-length') ?? 0) || undefined

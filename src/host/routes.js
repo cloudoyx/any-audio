@@ -53,6 +53,7 @@ function publicJob(job) {
     total: job.total,
     message: job.message,
     error: job.error,
+    errorCode: job.errorCode ?? null,
     result: job.result,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
@@ -73,6 +74,10 @@ function startJob(kind, runner, label = '') {
       if (job.status === 'cancelled') return
       job.status = 'error'
       job.error = describeError(error)
+      // A stable id for failures the settings page can say in the person's own
+      // language. The message itself stays as it is: it is also what the agent
+      // reads from the tool, and it names the fix.
+      job.errorCode = typeof error?.code === 'string' ? error.code : null
       job.finishedAt = Date.now()
     })
   return job
@@ -469,20 +474,20 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     return providerInfo(providerId)?.voices?.[0] ?? ''
   }
 
-  function credentialRefFor(body) {
+  function credentialRefFor(body, { writable = true } = {}) {
     const requested = String(body?.provider ?? 'mimo').trim() || 'mimo'
     const info = providerInfo(requested)
     if (!info) throw new Error(`unknown provider "${requested}"`)
     if (!info.credentialRef) throw new Error(`${info.label} does not use an API key`)
-    if (info.keyIsAmbient) throw new Error(`${info.label} uses the account DSH signs in with; there is nothing to save here`)
+    if (writable && info.keyIsAmbient) throw new Error(`${info.label} uses the account DSH signs in with; there is nothing to save here`)
     return { requested, ref: info.credentialRef, label: info.label }
   }
 
   async function credentialsStatus(body = {}) {
     const credentials = getCredentials()
-    const { requested, ref } = credentialRefFor(body)
+    const { requested, ref } = credentialRefFor(body, { writable: false })
     const envName = ref
-    const result = { ok: true, service: Boolean(credentials), provider: requested, ref, configured: Boolean(process.env[envName]) }
+    const result = { ok: true, service: Boolean(credentials), provider: requested, ref, configured: Boolean(process.env[envName]), writable: !providerInfo(requested)?.keyIsAmbient }
     if (credentials) {
       try {
         const info = await credentials.describe(ref)

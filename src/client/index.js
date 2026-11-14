@@ -15,7 +15,7 @@ import { h } from './ui.js'
 import { Page, FontsTab, FxLibTab, TtsTab } from './settings.js'
 import { Guide, NarrationStep, primeOnboardingConfig, primeOnboardingTts, ONBOARDING_VERSION, onboardedVersion } from './onboarding.js'
 import { ClipBayPanel, CLIP_BAY_ID } from './clipbay/panel.js'
-import { detectLanguage, resolveLanguage, setLanguagePreference, translate } from './i18n.js'
+import { detectLanguage, resolveLanguage, setLanguage, setLanguagePreference, translate, jobFailure } from './i18n.js'
 import { api } from './api.js'
 import { bytes } from './ui.js'
 
@@ -93,4 +93,4 @@ function apply(ctx) {
 
 export { apply }
 
-export const __test = { bytes, detectLanguage, Page, Guide, NarrationStep, FontsTab, FxLibTab, TtsTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts }
+export const __test = { bytes, detectLanguage, Page, Guide, NarrationStep, FontsTab, FxLibTab, TtsTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts, jobFailure, setLanguage }

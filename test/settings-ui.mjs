@@ -31,6 +31,7 @@ const mod = entry.factory((id) => {
 })
 
 const { FontsTab, FxLibTab, TtsTab, Guide, NarrationStep, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
+const { jobFailure, setLanguage } = mod.__test
 
 function strings(node, out = []) {
   if (node === null || node === undefined || node === false) return out
@@ -352,6 +353,27 @@ step('nothing still points at a tab that was renamed or removed', async () => {
     }
   }
   assert.deepEqual(stale, [], `these lines point at a tab that no longer exists: ${stale.join(', ')}`)
+})
+
+step('a download failure is explained in the interface language', () => {
+  // The host message names the argument an agent should pass, so it stays
+  // English. The page has to say the same thing in the person's own language.
+  setLanguage('zh')
+  const zh = jobFailure({ errorCode: 'FONT_DOWNLOAD_FAILED', error: 'download failed (fetch failed)...' })
+  assert.ok(zh.startsWith('下载失败'), `the chinese message is missing, got "${zh}"`)
+  assert.ok(zh.includes('代理'), 'the Chinese message must mention the proxy route')
+  assert.ok(!zh.includes('fromPath'), 'jargon meant for the agent must not reach the person')
+
+  setLanguage('en')
+  const en = jobFailure({ errorCode: 'FONT_DOWNLOAD_FAILED', error: 'download failed (fetch failed)...' })
+  assert.ok(en.startsWith('The download failed'), `the english message is missing, got "${en}"`)
+  assert.ok(en.includes('proxy'), 'the English message must mention the proxy route')
+
+  // An unknown reason keeps the raw text: a vague sentence would hide the cause.
+  setLanguage('zh')
+  const other = jobFailure({ errorCode: null, error: 'download failed with HTTP 503' })
+  assert.equal(other, 'download failed with HTTP 503', 'an unknown failure must not be replaced with a generic line')
+  setLanguage('zh')
 })
 
 step('the pack step leads with the download and asks for nothing', () => {

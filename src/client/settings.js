@@ -7,7 +7,7 @@
  * cannot be the source of truth.
  */
 import { h, Fragment, useState, useEffect, useCallback, useMemo, C, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card, HelpTip } from './ui.js'
-import { t, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
+import { t, jobFailure, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
 import { api } from './api.js'
 import { BASE_PACK, DownloadLinks } from './base-pack.js'
 
@@ -45,7 +45,7 @@ function FontsTab({ state, reload, notify }) {
           notify(t('音源已安装'))
           await reload()
         }
-        if (data.job.status === 'error') notify(data.job.error, 'error')
+        if (data.job.status === 'error') notify(jobFailure(data.job), 'error')
       } catch (error) {
         notify(error.message, 'error')
         setJob(null)
@@ -161,7 +161,7 @@ function FontsTab({ state, reload, notify }) {
     },
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
         h('div', { style: { ...S.row, justifyContent: 'space-between' } },
-          h('span', { style: S.label }, job.status === 'running' ? `${t('正在安装')}${job.label ? ` ${job.label}` : ''}${job.total ? ` ${Math.round(percent)}%` : ''}` : job.status === 'done' ? t('完成：{0}', job.message || t('已安装')) : t('失败：{0}', job.error || '')),
+          h('span', { style: S.label }, job.status === 'running' ? `${t('正在安装')}${job.label ? ` ${job.label}` : ''}${job.total ? ` ${Math.round(percent)}%` : ''}` : job.status === 'done' ? t('完成：{0}', job.message || t('已安装')) : t('失败：{0}', jobFailure(job))),
           job.total ? h('span', { style: S.mono }, `${bytes(job.received)} / ${bytes(job.total)}`) : null,
         ),
         h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
@@ -515,7 +515,7 @@ function FxLibTab({ state, reload, notify }) {
           setInstallPath('')
           await load()
         }
-        if (data.job.status === 'error') notify(data.job.error, 'error')
+        if (data.job.status === 'error') notify(jobFailure(data.job), 'error')
       } catch (caught) {
         notify(caught.message, 'error')
         setJob(null)
@@ -633,7 +633,7 @@ function FxLibTab({ state, reload, notify }) {
         h('div', { style: { ...S.row, justifyContent: 'space-between' } },
           h('span', { style: S.label }, job.status === 'running'
             ? (job.total ? t('正在识别 {0} / {1}', job.received, job.total) : t('正在识别…'))
-            : job.status === 'done' ? t('完成：{0}', job.message || t('已安装')) : t('失败：{0}', job.error || '')),
+            : job.status === 'done' ? t('完成：{0}', job.message || t('已安装')) : t('失败：{0}', jobFailure(job))),
           job.total ? h('span', { style: S.mono }, `${job.received} / ${job.total}`) : null,
         ),
         h('div', { style: S.bar }, h('div', { style: S.barFill(job.total ? (job.received / job.total) * 100 : 0) })),

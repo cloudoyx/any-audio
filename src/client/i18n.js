@@ -93,6 +93,7 @@ export const EN = {
   '正在下载，可以直接进入下一步': 'Downloading — you can go on to the next step',
   '正在安装': 'Installing',
   '完成：{0}': 'Done: {0}',
+  '下载失败。这台机器连不上 GitHub，可以挂代理后重试；或者先自己下载 .sf2 文件，再用「安装音源」填它的路径。': 'The download failed — this machine cannot reach GitHub. Retry through a proxy, or download the .sf2 yourself and install it by path.',
   '失败：{0}': 'Failed: {0}',
   '试听：{0}': 'Preview: {0}',
   '音色': 'Voice',
@@ -469,4 +470,19 @@ export function t(key, ...args) {
 export function translate(lang, key, ...args) {
   const template = lang === 'zh' ? key : (EN[key] ?? key)
   return template.replace(/\{(\d+)\}/g, (_, index) => String(args[Number(index)] ?? ''))
+}
+
+/**
+ * Say a failed job in the person's language when the host named a known reason.
+ *
+ * The raw message is written for the agent — it names the argument to pass — so
+ * it is English and full of jargon. Someone reading the settings page only needs
+ * to know what went wrong and what to do about it. An unrecognised reason falls
+ * back to the raw text, which is better than a vague sentence that hides it.
+ */
+export function jobFailure(job) {
+  if (job?.errorCode === 'FONT_DOWNLOAD_FAILED') {
+    return translate(LANG, '下载失败。这台机器连不上 GitHub，可以挂代理后重试；或者先自己下载 .sf2 文件，再用「安装音源」填它的路径。')
+  }
+  return job?.error || ''
 }

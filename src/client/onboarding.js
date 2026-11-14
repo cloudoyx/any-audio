@@ -12,7 +12,7 @@
  * than a wall the person cannot get past.
  */
 import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, Select, TextInput, Notice, useSurface } from './ui.js'
-import { t } from './i18n.js'
+import { t, jobFailure } from './i18n.js'
 import { api, API } from './api.js'
 import { BASE_PACK, DownloadLinks } from './base-pack.js'
 import { createPortal } from 'react-dom'
@@ -232,7 +232,7 @@ export function Guide() {
           setNote(t('音源已安装'))
           api('/state').then((state) => setFonts(state.fonts)).catch(() => {})
         }
-        if (data.job.status === 'error') setNote(data.job.error)
+        if (data.job.status === 'error') setNote(jobFailure(data.job))
       } catch {
         setJob(null)
       }
