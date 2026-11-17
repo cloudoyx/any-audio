@@ -1,11 +1,13 @@
 import { registerMusicTool } from './music.js'
 import { registerProjectTool } from './project.js'
+import { registerSingTool } from './sing.js'
 import { registerSfxTool } from './sfx.js'
 import { registerSourcesTool } from './sources.js'
 import { registerTtsTool } from './tts.js'
 
 export const TOOL_REGISTRARS = [
   ['anyaudio_music', registerMusicTool],
+  ['anyaudio_sing', registerSingTool],
   ['anyaudio_tts', registerTtsTool],
   ['anyaudio_sfx', registerSfxTool],
   ['anyaudio_sources', registerSourcesTool],
@@ -28,5 +30,6 @@ export function registerAllTools(ctx, log = () => {}) {
 export { sourcesToolDefinition } from './sources.js'
 export { musicToolDefinition } from './music.js'
 export { projectToolDefinition } from './project.js'
+export { singToolDefinition } from './sing.js'
 export { sfxToolDefinition } from './sfx.js'
 export { ttsToolDefinition } from './tts.js'

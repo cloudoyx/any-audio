@@ -42,7 +42,7 @@ const step = async (label, run) => {
   }
 }
 
-const EXPECTED_TOOLS = ['anyaudio_sources', 'anyaudio_music', 'anyaudio_tts', 'anyaudio_sfx', 'anyaudio_project']
+const EXPECTED_TOOLS = ['anyaudio_sources', 'anyaudio_music', 'anyaudio_sing', 'anyaudio_tts', 'anyaudio_sfx', 'anyaudio_project']
 
 console.log(`plugin: ${name}, inject: ${JSON.stringify(inject)}`)
 apply(ctx, {})
