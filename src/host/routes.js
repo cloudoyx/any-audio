@@ -22,6 +22,7 @@ import { loadSoundBank, renderCompiled, listPresets } from '../audio/synth.js'
 import { assertPackDir, isPriorityPack, listPacks, readPack, userSfxDir } from '../audio/sfx-library.js'
 import { scanPackFolder } from '../audio/sfx-pack-scan.js'
 import { EDGE_VOICES, MIMO_VOICES, DEEPSEEK_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
+import { listSingingVoices, runSingingInstall, singingRoot, singingStatus } from '../audio/singing-install.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
@@ -42,6 +43,14 @@ const VERSION = (() => {
 
 const jobs = new Map()
 const audios = new Map()
+
+// Injectable so the settings/acceptance tests can drive the install job without
+// touching the network or the real machine-wide directory (same pattern as the
+// singing process factory used by the singing tool).
+let singingInstallRunner = runSingingInstall
+export function setSingingInstallRunner(fn) {
+  singingInstallRunner = typeof fn === 'function' ? fn : runSingingInstall
+}
 
 function publicJob(job) {
   return {
@@ -237,6 +246,49 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
   async function configReset() {
     const { config, path } = await resetConfig()
     return { ok: true, config, configPath: path }
+  }
+
+  /** Singing runtime status: what of the three artefacts is installed. */
+  async function singingStatusRoute() {
+    try {
+      return { ok: true, ...(await singingStatus()) }
+    } catch (error) {
+      return { ok: false, error: describeError(error) }
+    }
+  }
+
+  /** Installed singing voicebanks for the settings dropdown. */
+  async function singingVoicesRoute() {
+    try {
+      return await listSingingVoices()
+    } catch (error) {
+      return { ok: false, voices: [], error: describeError(error) }
+    }
+  }
+
+  /** Start (or join) a singing-environment install job. */
+  async function singingInstallRoute(body) {
+    // One install at a time: a second request joins the running job so two
+    // downloads never race on the same `.part` file (same as installSource).
+    const running = runningJob('singing-install')
+    if (running) return { ok: true, job: publicJob(running), reused: true }
+    const job = startJob('singing-install', async (current) => {
+      current.message = 'preparing'
+      const result = await singingInstallRunner({
+        signal: current.abort.signal,
+        onProgress: (event) => {
+          if (event.received !== undefined) {
+            current.received = event.received
+            current.total = event.total ?? 0
+          }
+          if (event.message) current.message = event.message
+          else if (event.phase) current.message = event.phase
+        },
+      })
+      current.message = 'ready'
+      return result
+    }, 'singing environment')
+    return { ok: true, job: publicJob(job), reused: false, root: singingRoot() }
   }
 
   async function installSource(body) {
@@ -722,6 +774,16 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       }
     }
     if (method === 'GET' && path === `${PREFIX}/diagnostics`) return json(res, 200, diagnostics())
+    if (method === 'GET' && path === `${PREFIX}/singing/status`) {
+      try {
+        return json(res, 200, await singingStatusRoute())
+      } catch (error) {
+        return json(res, 500, { ok: false, error: describeError(error) })
+      }
+    }
+    if (method === 'GET' && path === `${PREFIX}/singing/voices`) {
+      return json(res, 200, await singingVoicesRoute())
+    }
     if (method === 'GET' && path === `${PREFIX}/credentials`) return json(res, 200, await credentialsStatus({ provider: url.searchParams.get('provider') ?? undefined }))
     if (method === 'GET' && path === `${PREFIX}/sources/presets`) {
       try {
@@ -756,6 +818,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     try {
       if (path === `${PREFIX}/config`) return json(res, 200, await configUpdate(body))
       if (path === `${PREFIX}/config/reset`) return json(res, 200, await configReset())
+      if (path === `${PREFIX}/singing/install`) return json(res, 200, await singingInstallRoute(body))
       if (path === `${PREFIX}/sources/install`) return json(res, 200, await installSource(body))
       if (path === `${PREFIX}/sources/verify`) return json(res, 200, await verifySource(body))
       if (path === `${PREFIX}/sources/remove`) return json(res, 200, await removeSource(body))
