@@ -99,6 +99,7 @@ export const singToolDefinition = finalizeTool({
     'never write the character on every note. Notes are automatically split at rests into phrases, each phrase\'s timeline is zeroed, ' +
     'and the phrases are sung in sequence; this is the only mode (no whole-song-in-one-pass switch). ' +
     'The engine corrects polyphonic characters by reading the whole lyric line (e.g. 银行 → h ang). ' +
+    'When singing a named existing song, look up its real score first (do not invent the melody from memory) and tell the person which song and score source you used, the key/tempo, and where you applied slurs and breaths — so if the result is not to their taste they know it is a score matter, not a plugin limitation. ' +
     'Regenerating one line is the core strength: sing a four-line song, then only re-run this tool with the 3rd line\'s notes to replace just that line ' +
     '(change the score / voicebank / melody), and use the clip bay\'s split-and-replace to cut the old line and drop in the new — ' +
     'no need to regenerate the whole song. The first call may take a while (the runtime and voicebank must be installed).',
