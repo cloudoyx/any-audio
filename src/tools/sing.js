@@ -108,16 +108,9 @@ export const singToolDefinition = finalizeTool({
     properties: {
       notes: {
         type: 'array',
-        description: 'Song notes in four-field form: [startSec, durSec, midi|null, lyric]. Empty lyric = melisma continuing the previous character; midi null = rest (also the phrase separator). Absolutely positioned in seconds; the tool zeroes each phrase before sending it to the engine.',
+        description: 'Song notes in four-field form: [startSec, durSec, midi|null, lyric]. startSec and durSec are numbers, midi is an integer or null for a rest, lyric is a string (empty = melisma continuing the previous character). Absolutely positioned in seconds; the tool zeroes each phrase before sending it to the engine.',
         items: {
-          type: 'array',
-          minItems: 3,
-          items: [
-            { type: 'number' },
-            { type: 'number' },
-            { oneOf: [{ type: 'integer' }, { type: 'null' }] },
-            { type: 'string' },
-          ],
+          oneOf: [{ type: 'number' }, { type: 'string' }, { type: 'null' }],
         },
       },
       projectId: { type: 'string', description: 'The clip bay project this singing belongs to. Required: run anyaudio_project mode:"create" first when the task has no project yet.' },
