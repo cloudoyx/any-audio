@@ -432,6 +432,172 @@ function TtsTab({ state, reload, notify }) {
   )
 }
 
+/**
+ * Singing engine settings. Four controls only — engine status, install
+ * progress, voicebank and device. There is deliberately no "synthesis mode"
+ * switch: the tool sings one way (split at rests into phrases), and a toggle
+ * that never changes the outcome is worse than no toggle.
+ */
+function SingingTab({ state, reload, notify }) {
+  const [form, setForm] = useState(() => (state?.config?.singing ? JSON.parse(JSON.stringify(state.config.singing)) : null))
+  const [status, setStatus] = useState(null)
+  const [voices, setVoices] = useState([])
+  const [job, setJob] = useState(null)
+  const [busy, setBusy] = useState('')
+
+  const loadStatus = useCallback(async () => {
+    try {
+      setStatus(await api('/singing/status'))
+    } catch (error) {
+      setStatus({ ok: false, error: error.message })
+    }
+  }, [])
+  const loadVoices = useCallback(async () => {
+    try {
+      const data = await api('/singing/voices')
+      setVoices(data.voices ?? [])
+    } catch {
+      setVoices([])
+    }
+  }, [])
+
+  useEffect(() => { void loadStatus(); void loadVoices() }, [loadStatus, loadVoices])
+  useEffect(() => {
+    if (!form && state?.config?.singing) setForm(JSON.parse(JSON.stringify(state.config.singing)))
+  }, [state, form])
+
+  // Like the font installer, the job lives on the host: reopening settings must
+  // pick up an install that is still running.
+  useEffect(() => {
+    let cancelled = false
+    api('/jobs/active?kind=singing-install')
+      .then((data) => { if (!cancelled && data.job) setJob(data.job) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  useEffect(() => {
+    if (!job || job.status !== 'running') return undefined
+    const timer = setInterval(async () => {
+      try {
+        const data = await api(`/jobs?id=${encodeURIComponent(job.id)}`)
+        setJob(data.job)
+        if (data.job.status === 'done') {
+          notify(t('唱歌环境已安装'))
+          await loadStatus()
+          await loadVoices()
+          await reload()
+        }
+        if (data.job.status === 'error') notify(jobFailure(data.job), 'error')
+      } catch (error) {
+        notify(error.message, 'error')
+        setJob(null)
+      }
+    }, 700)
+    return () => clearInterval(timer)
+  }, [job, loadStatus, loadVoices, reload, notify])
+
+  if (!form) return null
+
+  async function save(patch) {
+    setBusy('save')
+    try {
+      const singing = { ...form, ...patch }
+      await api('/config', { method: 'POST', body: { patch: { singing } } })
+      setForm(singing)
+      notify(t('已保存为默认值（新任务生效，正在运行的任务不受影响）'))
+      await reload()
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function install() {
+    setBusy('install')
+    try {
+      const data = await api('/singing/install', { method: 'POST', body: {} })
+      setJob(data.job)
+      notify(data.reused ? t('已有一个下载任务在进行') : t('安装已开始，关掉设置页后仍会继续'))
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const installing = Boolean(job && job.status === 'running')
+  const percent = job && job.total ? (job.received / job.total) * 100 : 0
+  const ready = Boolean(status?.ready)
+  const parts = status?.ok
+    ? [
+      { label: t('运行环境'), ok: Boolean(status.runtime?.installed), detail: status.runtime?.version ? t('版本：{0}', status.runtime.version) : '' },
+      { label: t('声库'), ok: Boolean(status.voicebank?.installed), detail: status.voicebank?.name ?? '' },
+      { label: t('声码器'), ok: Boolean(status.vocoder?.installed), detail: '' },
+    ]
+    : []
+  // The configured bank must remain selectable even before it is installed, so
+  // the dropdown never silently jumps to a different value on first render.
+  const voiceOptions = [...new Set([form.voicebank, ...voices.map((voice) => voice.name)].filter(Boolean))]
+  const devices = [
+    { value: 'auto', label: t('自动') },
+    { value: 'cpu', label: 'CPU' },
+    { value: 'cuda', label: t('显卡（CUDA）') },
+  ]
+
+  return h(Fragment, null,
+    h(Card, { title: t('引擎状态'), desc: t('本地歌声合成需要先装好运行环境、声库和声码器。') },
+      status?.ok
+        ? h(Fragment, null,
+          h('div', { style: S.row },
+            ...parts.map((part) => h('span', { key: part.label, style: S.chip },
+              `${part.label}：${part.ok ? t('已安装') : t('未安装')}${part.detail ? ` ${part.detail}` : ''}`,
+            )),
+          ),
+          h('div', { style: S.desc }, ready ? t('唱歌环境已就绪') : t('唱歌环境尚未就绪')),
+        )
+        : h('p', { style: S.desc }, status?.error ? t('状态检测失败：{0}', status.error) : t('正在检测…')),
+    ),
+    h(Card, { title: t('安装唱歌环境'), desc: t('一键装好运行环境、绮萱声库与声码器；下载后按官方 SHA-256 校验。') },
+      h('div', { style: S.row },
+        h(Btn, { kind: 'primary', disabled: installing || busy === 'install', onClick: install }, t('安装')),
+      ),
+      job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+        h('div', { style: { ...S.row, justifyContent: 'space-between' } },
+          h('span', { style: S.label }, job.status === 'running'
+            ? `${t('正在安装')}${job.total ? ` ${Math.round(percent)}%` : ''}${job.message ? ` · ${job.message}` : ''}`
+            : job.status === 'done' ? t('完成：{0}', job.message || t('已安装')) : t('失败：{0}', jobFailure(job))),
+          job.total ? h('span', { style: S.mono }, `${bytes(job.received)} / ${bytes(job.total)}`) : null,
+        ),
+        h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
+      ) : null,
+    ),
+    h(Card, { title: t('选声库'), desc: t('列出这台机器上已装的声库；工具调用里显式写的声库优先。') },
+      h('div', { style: S.row },
+        h(Field, { label: t('声库') },
+          h(Select, {
+            value: form.voicebank,
+            onChange: value => void save({ voicebank: value }),
+            options: voiceOptions.map(name => ({ value: name, label: name })),
+          }),
+        ),
+      ),
+    ),
+    h(Card, { title: t('选设备'), desc: t('自动会在有显卡时优先用显卡，否则用 CPU；设备变更会重启唱歌进程。') },
+      h('div', { style: S.row },
+        h(Field, { label: t('推理设备') },
+          h(Select, {
+            value: form.device,
+            onChange: value => void save({ device: value }),
+            options: devices,
+          }),
+        ),
+      ),
+    ),
+    h(Card, { title: t('下载来源（预留）'), desc: t('当前从 GitHub 及其代理下载，按官方文件 SHA-256 校验。国内网盘来源待确定后在此选择；具体地址由你提供，不会写死在插件里。') }),
+  )
+}
+
 function MixTab({ state, reload, notify }) {
   const [form, setForm] = useState(null)
   const [busy, setBusy] = useState('')
@@ -747,6 +913,7 @@ function Page() {
     { id: 'sources', label: t('音源'), render: () => h(FontsTab, { state, reload, notify }) },
     { id: 'fxlib', label: t('音效'), render: () => h(FxLibTab, { state, reload, notify }) },
     { id: 'tts', label: t('配音'), render: () => h(TtsTab, { state, reload, notify }) },
+    { id: 'singing', label: t('唱歌'), render: () => h(SingingTab, { state, reload, notify }) },
     { id: 'mix', label: t('混音'), render: () => h(MixTab, { state, reload, notify }) },
     { id: 'advanced', label: t('高级'), render: () => h(AdvancedTab, { state, reload, notify }) },
   ]), [state, reload, notify])
@@ -805,4 +972,4 @@ function Page() {
   )
 }
 
-export { Page, FontsTab, FxLibTab, TtsTab }
+export { Page, FontsTab, FxLibTab, TtsTab, SingingTab }

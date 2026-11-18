@@ -30,7 +30,7 @@ const mod = entry.factory((id) => {
   throw new Error(`unexpected require(${JSON.stringify(id)})`)
 })
 
-const { FontsTab, FxLibTab, TtsTab, Guide, NarrationStep, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
+const { FontsTab, FxLibTab, TtsTab, SingingTab, Guide, NarrationStep, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
 const { jobFailure, setLanguage } = mod.__test
 
 function strings(node, out = []) {
@@ -474,6 +474,36 @@ step('the deepseek engine shows a readiness line and no key field', () => {
   const missing = text(TtsTab({ state: base(false), reload: () => {}, notify: () => {} }))
   assert.ok(missing.includes('未检测到 DeepSeek 账号'), `a missing account is not reported, got "${missing}"`)
   assert.ok(missing.includes('先登录 DSH 才能试听 DeepSeek'), 'the preview hint is missing when there is no account')
+})
+
+const singingState = {
+  config: {
+    singing: {
+      voicebank: 'Qixuan_v2.7.0_DiffSinger_OpenUtau',
+      device: 'auto',
+      idleSec: 60,
+    },
+  },
+}
+const singingTree = SingingTab({ state: singingState, reload: () => {}, notify: () => {} })
+const singingText = text(singingTree)
+
+step('the singing tab has status, install, voicebank and device sections', () => {
+  assert.deepEqual(titles(singingTree), ['引擎状态', '安装唱歌环境', '选声库', '选设备', '下载来源（预留）'])
+})
+
+step('the singing tab exposes voicebank and device dropdowns but no mode switch', () => {
+  const selects = []
+  const switches = []
+  walk(singingTree, (element) => {
+    if (Array.isArray(element.props?.options)) selects.push(element)
+    if (element.type === 'input' && element.props?.type === 'checkbox') switches.push(element)
+  })
+  assert.equal(selects.length, 2, `expected voicebank + device dropdowns, got ${selects.length}`)
+  assert.deepEqual(selects[1].props.options.map((option) => option.value), ['auto', 'cpu', 'cuda'], 'device options must be auto/cpu/cuda')
+  assert.equal(switches.length, 0, 'there must be no synthesis-mode switch')
+  assert.ok(!singingText.includes('合成模式'), 'there must be no synthesis-mode toggle')
+  assert.ok(findClickable(singingTree, '安装'), 'the install button is missing')
 })
 
 step('every dropdown goes through the shared Select', () => {

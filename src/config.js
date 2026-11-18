@@ -41,6 +41,12 @@ export const DEFAULTS = {
       timeoutSec: 120,
     },
   },
+  singing: {
+    // Kept in step with DEFAULT_VOICEBANK_DIR in audio/singing-install.js (M4).
+    voicebank: 'Qixuan_v2.7.0_DiffSinger_OpenUtau',
+    device: 'auto',
+    idleSec: 60,
+  },
   music: {
     font: '',
     peakDb: -3,
@@ -62,6 +68,9 @@ export const DEFAULTS = {
 
 const PROVIDERS = ['edge', 'mimo', 'deepseek']
 const UI_LANGUAGES = ['auto', 'zh', 'en']
+// The running worker (engine/worker.py) and the tool schema (tools/sing.js) both
+// speak auto/cpu/cuda - not "gpu" - so validation must accept exactly those.
+const SINGING_DEVICES = ['auto', 'cpu', 'cuda']
 const EDGE_VOICES = [
   'zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunyangNeural',
   'zh-CN-liaoning-XiaobeiNeural', 'zh-CN-shaanxi-XiaoniNeural',
@@ -147,6 +156,10 @@ export function normalizeConfig(input) {
   const mimoRaw = isPlainObject(ttsRaw.mimo) ? ttsRaw.mimo : {}
   const deepseekRaw = isPlainObject(ttsRaw.deepseek) ? ttsRaw.deepseek : {}
 
+  const singingRaw = isPlainObject(raw.singing) ? raw.singing : {}
+  const singingDevice = SINGING_DEVICES.includes(singingRaw.device) ? singingRaw.device : DEFAULTS.singing.device
+  if (singingRaw.device !== undefined && singingDevice !== singingRaw.device) issues.push(`singing.device "${String(singingRaw.device)}" is unknown; using "${singingDevice}"`)
+
   const musicRaw = isPlainObject(raw.music) ? raw.music : {}
   const music = {
     font: typeof musicRaw.font === 'string' ? musicRaw.font.trim() : DEFAULTS.music.font,
@@ -205,6 +218,13 @@ export function normalizeConfig(input) {
           proxy: typeof deepseekRaw.proxy === 'string' ? deepseekRaw.proxy.trim() : '',
           timeoutSec: Math.round(clampNumber(deepseekRaw.timeoutSec, 10, 600, DEFAULTS.tts.deepseek.timeoutSec)),
         },
+      },
+      singing: {
+        voicebank: typeof singingRaw.voicebank === 'string' && singingRaw.voicebank.trim()
+          ? singingRaw.voicebank.trim()
+          : DEFAULTS.singing.voicebank,
+        device: singingDevice,
+        idleSec: Math.round(clampNumber(singingRaw.idleSec, 0, 3600, DEFAULTS.singing.idleSec)),
       },
       music,
       sfx: {

@@ -207,6 +207,34 @@ server.listen(0, '127.0.0.1', async () => {
     assert(again.config.music.peakDb === -3, 'peak default not restored')
   })
 
+  // M3: the singing block round-trips through the same machine-wide config file,
+  // and an unknown device is repaired to the default (matching the runtime's
+  // auto/cpu/cuda set) instead of being written verbatim.
+  await step('singing config round-trips and an invalid device falls back', async () => {
+    const saved = await post('/config', { patch: { singing: { voicebank: 'MyVoicebank', device: 'cuda', idleSec: 120 } } })
+    assert(saved.ok, saved.error)
+    assert(saved.config.singing.voicebank === 'MyVoicebank', 'voicebank not saved')
+    assert(saved.config.singing.device === 'cuda', 'device not saved')
+    assert(saved.config.singing.idleSec === 120, 'idleSec not saved')
+    const again = await get('/state')
+    assert(again.config.singing.device === 'cuda', 'singing config did not persist')
+    const onDisk = JSON.parse(await readFile(again.configPath, 'utf8'))
+    assert(onDisk.singing.voicebank === 'MyVoicebank', 'singing config not written to disk')
+
+    const repaired = await post('/config', { patch: { singing: { device: 'gpu' } } })
+    assert(repaired.ok, repaired.error)
+    assert(repaired.config.singing.device === 'auto', `gpu must fall back to auto, got ${repaired.config.singing.device}`)
+
+    // The repair is also reported as an issue by the normalizer (route payloads
+    // deliberately expose only the clean config).
+    const { normalizeConfig } = await import('../src/config.js')
+    const normalized = normalizeConfig({ singing: { device: 'gpu' } })
+    assert(normalized.config.singing.device === 'auto', 'normalizer must fall back')
+    assert(normalized.issues.some((issue) => /singing\.device/.test(issue)), 'the fallback must be recorded as an issue')
+
+    await post('/config/reset', {})
+  })
+
   // The first-run guide keeps its own version number: the shell's "seen" set is
   // per page load, so this is the only thing that stops the guide coming back.
   await step('the onboarding version round-trips and resets to zero', async () => {
