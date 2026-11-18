@@ -30,7 +30,7 @@ const mod = entry.factory((id) => {
   throw new Error(`unexpected require(${JSON.stringify(id)})`)
 })
 
-const { FontsTab, FxLibTab, TtsTab, SingingTab, Guide, NarrationStep, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
+const { FontsTab, FxLibTab, TtsTab, SingingTab, Guide, NarrationStep, SingingStep, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
 const { jobFailure, setLanguage } = mod.__test
 
 function strings(node, out = []) {
@@ -318,19 +318,50 @@ step('the narration step tells the truth about each engine', () => {
   assert.ok(render('edge', base()).includes('免费'), 'Edge should say it is free')
 })
 
-step('the guide runs five steps', () => {
+step('the guide runs six steps', () => {
   primeOnboardingConfig({ ui: { onboardedVersion: 0 } })
   const welcome = Guide()
   assert.equal(welcome.props.step, 1, 'the welcome step should be step 1')
   // The counter lives inside the dialog component, so it is read from the built
   // bundle rather than from the element tree.
-  assert.ok(source.includes('${step} / 5'), 'the counter should say five steps')
-  // Every step must be reachable: the narration step sits between the pack and
-  // the finish, and each one names the step it is.
+  assert.ok(source.includes('${step} / 6'), 'the counter should say six steps')
+  // Every step must be reachable: singing sits between narration and the finish,
+  // and each one names the step it is.
   const onboarding = readFileSync(join(root, 'src', 'client', 'onboarding.js'), 'utf8')
-  for (const count of [1, 2, 3, 4, 5]) {
+  for (const count of [1, 2, 3, 4, 5, 6]) {
     assert.ok(new RegExp(`step: ${count}\\b`).test(onboarding), `step ${count} is missing its counter`)
   }
+})
+
+step('the singing step sits after narration, is skippable and reuses the shared install', () => {
+  const onboarding = readFileSync(join(root, 'src', 'client', 'onboarding.js'), 'utf8')
+  const narrationAt = onboarding.indexOf('step: 4')
+  const singingAt = onboarding.indexOf('step: 5')
+  const finishAt = onboarding.indexOf('step: 6')
+  assert.ok(narrationAt > 0 && singingAt > narrationAt && finishAt > singingAt, 'singing must be between narration and finish')
+
+  // Not installed, no job yet: offer Install and a Skip labelled button.
+  const tree = SingingStep({ status: { ok: true, ready: false }, job: null, note: '', busy: '', onInstall: () => {}, onClose: () => {}, onNext: () => {} })
+  const body = text(tree)
+  assert.equal(tree.props.title, '装唱歌引擎', 'the singing install step must name itself')
+  assert.ok(body.includes('声库和声码器'), 'the step must explain what it installs')
+  assert.ok(findClickable(tree, '下载安装'), 'the install button is missing')
+  assert.ok(findClickable(tree, '跳过'), 'the step must be skippable')
+
+  // The install button calls the injected callback (Guide wires it to the job).
+  let installed = false
+  const wired = SingingStep({ status: { ok: true, ready: false }, job: null, note: '', busy: '', onInstall: () => { installed = true }, onClose: () => {}, onNext: () => {} })
+  findClickable(wired, '下载安装').props.onClick()
+  assert.equal(installed, true, 'the install button must call onInstall')
+
+  // Guide wires that callback to the shared M4 routes, not a second installer.
+  assert.ok(onboarding.includes("api('/singing/install'"), 'the guide must reuse the M4 install route')
+  assert.ok(onboarding.includes("api('/singing/status'"), 'the guide must read status from the shared route')
+})
+
+step('the onboarding version was raised so old users see the singing step', () => {
+  assert.ok(ONBOARDING_VERSION >= 3, `the version must include the singing step, got ${ONBOARDING_VERSION}`)
+  assert.equal(onboardedVersion({ ui: { onboardedVersion: 2 } }) >= ONBOARDING_VERSION, false, 'a v2 record must not count as done')
 })
 
 step('nothing still points at a tab that was renamed or removed', async () => {

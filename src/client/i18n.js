@@ -98,6 +98,8 @@ export const EN = {
   '已安装 {0} 个音源': '{0} sound sources installed',
   '下一步': 'Next',
   '装音效包': 'Sound packs',
+  '装唱歌引擎': 'Install the singing engine',
+  '让 agent 把你写的旋律唱出来。这一步装好运行环境、声库和声码器；现在跳过也能以后在设置页「唱歌」里补装。': 'Let the agent sing the melody you write. This step installs the runtime, voicebank and vocoder; skip it now and install later under Settings → AnyAudio → Singing.',
   '真实录音的音效库。基础包 BaseSFX 有 {0} 条：{1}。': 'A library of real recordings. The BaseSFX pack holds {0} sounds: {1}.',
   '建议下载基础音效包，音效的真实感会明显提升。解压后在「设置 → AnyAudio → 音效」里把文件夹装进来即可，现在跳过也没关系。': 'Downloading the base pack makes the effects sound noticeably more real. Unpack it, then add the folder under Settings → AnyAudio → Sound packs — skipping for now is fine.',
   '去下载': 'Download',

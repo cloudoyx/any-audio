@@ -18,7 +18,7 @@ import { BASE_PACK, DownloadLinks } from './base-pack.js'
 import { createPortal } from 'react-dom'
 
 /** Bump this to show the guide again after a release that adds steps. */
-export const ONBOARDING_VERSION = 2
+export const ONBOARDING_VERSION = 3
 
 // The slot mounts before any request has finished, so the config read at plugin
 // load is primed here: without it the first render would flash the guide for
@@ -106,7 +106,7 @@ function Modal({ title, step, hero, children, onClose }) {
             // The banner already carries the wordmark, so the title would be the
             // same word twice in a row.
             hero ? null : h('span', { style: { fontSize: 16, fontWeight: 600 } }, title),
-            h('span', { style: { ...S.mono, marginLeft: 'auto' } }, `${step} / 5`),
+            h('span', { style: { ...S.mono, marginLeft: 'auto' } }, `${step} / 6`),
           ),
           children,
         ),
@@ -168,12 +168,60 @@ export function NarrationStep({ tts, engine, note, busy, keyInput, onPick, onKey
   )
 }
 
+/**
+ * Step 5: install the local singing engine.
+ *
+ * The install itself is the same `/singing/install` job the settings page uses —
+ * this step only starts it and watches the job, exactly like the sound-source
+ * step above. It is skippable: the "唱歌" tab in Settings can install it later.
+ * Most of the status wording reuses the keys the settings tab already added.
+ */
+export function SingingStep({ status, job, note, busy, onInstall, onClose, onNext }) {
+  const ready = Boolean(status?.ready)
+  const parts = status?.ok
+    ? [
+      { label: t('运行环境'), ok: Boolean(status.runtime?.installed) },
+      { label: t('声库'), ok: Boolean(status.voicebank?.installed) },
+      { label: t('声码器'), ok: Boolean(status.vocoder?.installed) },
+    ]
+    : []
+  const percent = job && job.total ? Math.round((job.received / job.total) * 100) : 0
+  const installing = Boolean(job && job.status === 'running')
+  return h(Modal, { title: t('装唱歌引擎'), step: 5, onClose },
+    h('p', { style: S.desc }, t('让 agent 把你写的旋律唱出来。这一步装好运行环境、声库和声码器；现在跳过也能以后在设置页「唱歌」里补装。')),
+    status?.ok
+      ? h(Fragment, null,
+        h('div', { style: S.row },
+          ...parts.map((part) => h('span', { key: part.label, style: S.chip },
+            `${part.label}：${part.ok ? t('已安装') : t('未安装')}`,
+          )),
+        ),
+        h('p', { style: S.desc }, ready ? t('唱歌环境已就绪') : t('唱歌环境尚未就绪')),
+      )
+      : h('p', { style: S.desc }, status?.error ? t('状态检测失败：{0}', status.error) : t('正在检测…')),
+    job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+      h('div', { style: { ...S.row, justifyContent: 'space-between' } },
+        h('span', { style: S.label }, job.status === 'running'
+          ? `${t('正在安装')} ${percent}%`
+          : job.status === 'done' ? t('完成：{0}', job.message || t('已安装')) : t('失败：{0}', jobFailure(job))),
+      ),
+      h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
+    ) : null,
+    note ? h(Notice, null, note) : null,
+    h(Actions, null,
+      ready || (job && job.status !== 'error') ? null : h(Btn, { kind: 'primary', disabled: installing || busy === 'singing', onClick: onInstall }, t('下载安装')),
+      h(Btn, { onClick: onNext }, ready || job ? t('下一步') : t('跳过')),
+    ),
+  )
+}
+
 export function Guide() {
   const [config, setConfig] = useState(primed)
   const [step, setStep] = useState(0)
   const [fonts, setFonts] = useState(null)
   const [packs, setPacks] = useState(null)
   const [tts, setTts] = useState(primedTts)
+  const [singing, setSinging] = useState(null)
   const [job, setJob] = useState(null)
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
@@ -198,6 +246,9 @@ export function Guide() {
         if (data?.tts) setTts(data.tts)
       })
       .catch(() => {})
+    // The singing step needs a fresh status read of its own: it lives on a
+    // separate host route, not in /state, and must not hold the other steps up.
+    api('/singing/status').then(setSinging).catch(() => setSinging({ ok: false }))
     return () => { cancelled = true }
   }, [])
 
@@ -231,6 +282,7 @@ export function Guide() {
         if (data.job.status === 'done') {
           setNote(t('音源已安装'))
           api('/state').then((state) => setFonts(state.fonts)).catch(() => {})
+          api('/singing/status').then(setSinging).catch(() => {})
         }
         if (data.job.status === 'error') setNote(jobFailure(data.job))
       } catch {
@@ -307,6 +359,22 @@ export function Guide() {
     }
   }
 
+  // Starts the same install job the settings page uses; the guide only watches
+  // it through the shared job poller above, so closing the dialog cannot cancel
+  // a download already in flight.
+  async function installSinging() {
+    setBusy('singing')
+    try {
+      const data = await api('/singing/install', { method: 'POST', body: {} })
+      setJob(data.job)
+      setNote(t('安装已开始，关掉设置页后仍会继续'))
+    } catch (error) {
+      setNote(error.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
   const fontInstalled = Boolean(fonts?.rows?.length)
   const packInstalled = Boolean(packs?.some((pack) => pack.id === BASE_PACK.id))
   const percent = job && job.total ? Math.round((job.received / job.total) * 100) : 0
@@ -376,7 +444,16 @@ export function Guide() {
     })
   }
 
-  return h(Modal, { title: t('完成'), step: 5, onClose: finish },
+  if (step === 4) {
+    return h(SingingStep, {
+      status: singing, job, note, busy,
+      onInstall: installSinging,
+      onClose: finish,
+      onNext: () => goTo(5),
+    })
+  }
+
+  return h(Modal, { title: t('完成'), step: 6, onClose: finish },
     h('p', { style: S.desc }, t('以后在「设置 → AnyAudio」里改。')),
     h('p', { style: S.desc }, t('剪辑台在对话上方的标签栏里。')),
     h('p', { style: S.desc }, t('也可以直接对 agent 说「帮我配一段音乐」，它会自己找。')),
