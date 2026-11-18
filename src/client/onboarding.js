@@ -388,7 +388,7 @@ export function Guide() {
 
   if (step === 0) {
     return h(Modal, { title: 'AnyAudio', step: 1, hero: HERO, onClose: finish },
-      h('p', { style: S.desc }, t('让 agent 帮你写谱、配音、加音效，最后在剪辑台上试听和微调。')),
+      h('p', { style: S.desc }, t('让 agent 帮你写谱、配音、加音效、唱歌，最后在剪辑台上试听和微调。')),
       h('p', { style: S.desc }, t('它本身不带音源和音效包，需要装一次，大概 2 分钟。')),
       h(Actions, null,
         h(Btn, { onClick: finish }, t('跳过')),

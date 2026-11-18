@@ -583,7 +583,11 @@ function SingingTab({ state, reload, notify }) {
     ),
     h(Card, { title: t('安装唱歌环境'), desc: t('一键装好运行环境、绮萱声库与声码器；下载后按官方 SHA-256 校验。') },
       h('div', { style: S.row },
-        h(Btn, { kind: 'primary', disabled: installing || busy === 'install', onClick: install }, t('安装')),
+        h(Btn, {
+          kind: 'primary',
+          disabled: ready || installing || busy === 'install',
+          onClick: install,
+        }, ready ? t('本机已安装') : t('安装')),
       ),
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
         h('div', { style: { ...S.row, justifyContent: 'space-between' } },
