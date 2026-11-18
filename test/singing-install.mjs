@@ -7,10 +7,13 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  __singingInstallTest, defaultManifest, listSingingVoices, runSingingInstall,
-  sha256File, singingRoot, singingStatus,
+  __singingInstallTest, defaultManifest, installVoicebankFromZip, listSingingVoices,
+  runSingingInstall, sha256File, singingRoot, singingStatus,
+  VOICEBANK_FILE, VOICEBANK_SHA256, VOICEBANK_SOURCES,
 } from '../src/audio/singing-install.js'
-import { registerAnyAudioRoutes, setSingingInstallRunner } from '../src/host/routes.js'
+import {
+  registerAnyAudioRoutes, setSingingInstallRunner, setVoicebankZipInstaller,
+} from '../src/host/routes.js'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const testDir = join(root, '.anyaudio', 'test-singing-install')
@@ -81,28 +84,27 @@ function fakeExtract(archive, dest, ctx) {
       writeFile(join(dest, process.platform === 'win32' ? 'python.exe' : 'python'), 'fake'))
   }
   if (name.includes('Qixuan')) {
+    // The official zip carries its own vocoder — mimic that exactly.
     const bank = join(dest, 'Qixuan_v2.7.0_DiffSinger_OpenUtau')
-    return mkdir(bank, { recursive: true }).then(() => writeFile(join(bank, 'dsconfig.yaml'), 'bank'))
-  }
-  if (name.includes('oudep')) {
-    return mkdir(dest, { recursive: true }).then(() => writeFile(join(dest, 'vocoder.yaml'), 'vocoder'))
+    return (async () => {
+      await mkdir(join(bank, 'dsvocoder'), { recursive: true })
+      await writeFile(join(bank, 'dsconfig.yaml'), 'bank')
+      await writeFile(join(bank, 'dsvocoder', 'vocoder.yaml'), 'vocoder')
+    })()
   }
   throw new Error(`unknown archive ${name}`)
 }
 
 const RUNTIME_BUF = Buffer.from('fake runtime archive payload'.repeat(20))
 const BANK_BUF = Buffer.from('fake voicebank zip payload'.repeat(40))
-const VOCODER_BUF = Buffer.from('fake vocoder payload'.repeat(30))
 const BUFFER_EMPTY = Buffer.alloc(0)
 
-function localManifest({ runtimeUrl, bankUrl, vocUrl } = {}) {
+function localManifest({ runtimeUrl, bankUrl } = {}) {
   const m = defaultManifest()
   m.runtime.urls = [runtimeUrl]
   m.runtime.sha256 = sha(RUNTIME_BUF)
   m.voicebank.urls = [bankUrl]
   m.voicebank.sha256 = sha(BANK_BUF)
-  m.vocoder.urls = [vocUrl]
-  m.vocoder.sha256 = sha(VOCODER_BUF)
   return m
 }
 
@@ -118,17 +120,15 @@ const fakePip = (python, group, ctx) => {
 // ---------------------------------------------------------------------------
 const runtimeServer = serveBuffer(RUNTIME_BUF)
 const bankServer = serveBuffer(BANK_BUF)
-const vocServer = serveBuffer(VOCODER_BUF)
 const runtimeUrl = await start(runtimeServer.server)
 const bankUrl = await start(bankServer.server)
-const vocUrl = await start(vocServer.server)
 
 await step('install from empty dir: runtime + voicebank + vocoder land with markers', async () => {
   await rm(testDir, { recursive: true, force: true })
   const events = []
   const status = await runSingingInstall({
     root: testDir,
-    manifest: localManifest({ runtimeUrl, bankUrl, vocUrl }),
+    manifest: localManifest({ runtimeUrl, bankUrl }),
     extractImpl: fakeExtract,
     pipImpl: fakePip,
     onProgress: (e) => events.push(e),
@@ -163,7 +163,7 @@ await step('mirror failure falls back to the next URL', async () => {
   const downUrl = await start(down.server)
   const goodServer = serveBuffer(RUNTIME_BUF)
   const goodUrl = await start(goodServer.server)
-  const m = localManifest({ runtimeUrl: `${downUrl}|${goodUrl}`, bankUrl, vocUrl })
+  const m = localManifest({ runtimeUrl: `${downUrl}|${goodUrl}`, bankUrl })
   m.runtime.urls = [downUrl, goodUrl]
   const fallbackRoot = join(testDir, 'fallback')
   await rm(fallbackRoot, { recursive: true, force: true })
@@ -276,10 +276,69 @@ await step('progress is pollable through the jobs route', async () => {
   setSingingInstallRunner(undefined)
 })
 
+// ---------------------------------------------------------------------------
+// Local-zip install + source list (t12)
+// ---------------------------------------------------------------------------
+await step('voicebank sources expose GitHub / Baidu / Quark links', async () => {
+  assert(VOICEBANK_SOURCES.length === 3, `expected 3 sources, got ${VOICEBANK_SOURCES.length}`)
+  assert(VOICEBANK_SOURCES.map((s) => s.id).join(',') === 'github,baidu,quark', 'source ids wrong')
+  assert(VOICEBANK_SOURCES.find((s) => s.id === 'github').url.startsWith('https://github.com/'), 'github link wrong')
+  assert(VOICEBANK_SOURCES.find((s) => s.id === 'baidu').url.includes('pan.baidu.com'), 'baidu link wrong')
+  assert(VOICEBANK_SOURCES.find((s) => s.id === 'quark').url.includes('pan.quark.cn'), 'quark link wrong')
+  assert(VOICEBANK_SHA256 === 'fe8ee7c95883d327a2b7facbbe832a7a53e1344918dc791ca83fc23b080341110', 'official sha changed')
+})
+
+await step('install voicebank from a local official zip (bundled vocoder used)', async () => {
+  const zipRoot = join(testDir, 'local-zip')
+  await rm(zipRoot, { recursive: true, force: true })
+  await mkdir(zipRoot, { recursive: true })
+  const zip = join(zipRoot, VOICEBANK_FILE)
+  await writeFile(zip, BANK_BUF) // content hash is our fake "official" digest
+  const events = []
+  const status = await installVoicebankFromZip({
+    root: zipRoot, zipPath: zip, expectedSha256: sha(BANK_BUF),
+    extractImpl: fakeExtract, onProgress: (e) => events.push(e),
+  })
+  assert(status.voicebank.installed, 'voicebank not installed from local zip')
+  assert(status.vocoder.installed, 'bundled vocoder not detected after local install')
+  assert(existsSync(join(zipRoot, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau', 'dsconfig.yaml')), 'dsconfig missing')
+  assert(events.some((e) => e.phase === 'voicebank-verify'), 'verification phase not reported')
+})
+
+await step('local zip with wrong SHA-256 is rejected before extraction', async () => {
+  const badRoot = join(testDir, 'local-zip-bad')
+  await rm(badRoot, { recursive: true, force: true })
+  await mkdir(badRoot, { recursive: true })
+  const zip = join(badRoot, VOICEBANK_FILE)
+  await writeFile(zip, Buffer.from('tampered'))
+  let error = null
+  try {
+    await installVoicebankFromZip({ root: badRoot, zipPath: zip, extractImpl: fakeExtract })
+  } catch (e) { error = e }
+  assert(error && error.code === 'SHA256_MISMATCH', `expected SHA256_MISMATCH, got ${error?.code}: ${error?.message}`)
+  assert(!existsSync(join(badRoot, 'voicebank')), 'a rejected zip must not be extracted')
+})
+
+await step('GET singing/sources and POST singing/install-zip through the routes', async () => {
+  const sources = await apiGet('/singing/sources')
+  assert(sources.ok && sources.sources?.length === 3, `sources route: ${JSON.stringify(sources)}`)
+  let seenZip
+  setVoicebankZipInstaller(({ zipPath }) => {
+    seenZip = zipPath
+    return Promise.resolve({ ok: true, ready: true })
+  })
+  const installed = await apiPost('/singing/install-zip', { zipPath: 'D:\\fake\\qixuan.zip' })
+  assert(installed.ok === true, `install-zip route: ${JSON.stringify(installed)}`)
+  assert(seenZip === 'D:\\fake\\qixuan.zip', 'zipPath not forwarded to installer')
+  const missing = await apiPost('/singing/install-zip', {})
+  assert(missing.ok === false && missing.code === 'BAD_ZIP_PATH', 'missing zipPath must be rejected')
+  setVoicebankZipInstaller(undefined)
+})
+
 setSingingInstallRunner(undefined)
+setVoicebankZipInstaller(undefined)
 await stop(runtimeServer.server)
 await stop(bankServer.server)
-await stop(vocServer.server)
 await new Promise((ok) => api.close(ok))
 await rm(testDir, { recursive: true, force: true })
 delete process.env.ANYAUDIO_SINGING_DIR

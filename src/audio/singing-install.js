@@ -2,11 +2,13 @@
  * Local singing environment installer — plan M4, route B (build a minimal
  * runtime ourselves instead of shipping the 1 GB generic base).
  *
- * Three artefacts are installed under one machine-wide root
+ * Two artefacts are installed under one machine-wide root
  * (`~/.dsh/anyaudio/singing`, overridable by ANYAUDIO_SINGING_DIR):
  *   1. a redistributable CPython 3.12 runtime (python-build-standalone)
- *   2. the Qixuan voicebank (GitHub release, via gh-proxy mirrors)
- *   3. the openvpi neural vocoder (GitHub release, via gh-proxy mirror)
+ *   2. the Qixuan voicebank (official zip from GitHub or a local copy)
+ * The official voicebank zip ALREADY CONTAINS its neural vocoder in `dsvocoder/`
+ * (verified in stage 1), so no separate vocoder download is needed — doing one
+ * would only add a stalled GitHub transfer for users in mainland China.
  * Then a fixed dependency list is pip-installed into that runtime so the
  * exact `runtime/python.exe` M1 launches can import diffsinger_utau.
  *
@@ -64,10 +66,21 @@ export const PIP_GROUPS = [
  * `defaultManifest` is a function so callers can deep-clone and override URLs
  * for the offline test without mutating shared state.
  */
+/** Official SHA-256 of the Qixuan zip; also verifies a locally downloaded copy. */
+export const VOICEBANK_SHA256 = 'fe8ee7c95883d327a2b7facbbe832a7a53e1344918dc791ca83fc23b080341110'
+export const VOICEBANK_FILE = 'Qixuan_v2.7.0_DiffSinger_OpenUtau.zip'
+
+/** Public download sources for the official voicebank zip. The net-disk links
+ *  are the public share links supplied by the user — no credentials. */
+export const VOICEBANK_SOURCES = [
+  { id: 'github', label: 'GitHub', url: 'https://github.com/yqzhishen/qixuan-diffsinger/releases/download/v2.7.0/Qixuan_v2.7.0_DiffSinger_OpenUtau.zip' },
+  { id: 'baidu', label: '百度网盘', url: 'https://pan.baidu.com/s/1WUuBy2QLmC52-uzqppr6Qg?pwd=6666' },
+  { id: 'quark', label: '夸克网盘', url: 'https://pan.quark.cn/s/b7dbaf52c430' },
+]
+
 export function defaultManifest() {
   const runtime = `${GITHUB}/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.12.16%2B20261110-x86_64-pc-windows-msvc-install_only.tar.gz`
-  const bank = `${GITHUB}/yqzhishen/qixuan-diffsinger/releases/download/v2.7.0/Qixuan_v2.7.0_DiffSinger_OpenUtau.zip`
-  const vocoder = `${GITHUB}/openvpi/vocoders/releases/download/pc-nsf-hifigan-44.1k-hop512-128bin-2025.02/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.oudep`
+  const bank = VOICEBANK_SOURCES[0].url
   return {
     runtime: {
       file: 'cpython-3.12.16+20261110-x86_64-pc-windows-msvc-install_only.tar.gz',
@@ -78,11 +91,6 @@ export function defaultManifest() {
       file: 'Qixuan_v2.7.0_DiffSinger_OpenUtau.zip',
       sha256: 'fe8ee7c95883d327a2b7facbbe832a7a53e1344918dc791ca83fc23b08034110',
       urls: [PROXIES[0] + bank, PROXIES[1] + bank, bank],
-    },
-    vocoder: {
-      file: 'pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.oudep',
-      sha256: 'ba7d43142d41f6900c8264b5662ca7125a50feb8760bb8b9615c61a8f5e6902e',
-      urls: [PROXIES[0] + vocoder, vocoder],
     },
   }
 }
@@ -392,18 +400,11 @@ export async function runSingingInstall(options = {}) {
     note('voicebank', 'voicebank already present, skipping')
   }
 
-  // 3. Vocoder: download → extract into `voicebank/<bank>/dsvocoder/`.
-  if (!existsSync(join(bankDir, 'dsvocoder', 'vocoder.yaml'))) {
-    const vocArchive = join(downloads, manifest.vocoder.file)
-    await downloadArtifact(manifest.vocoder, vocArchive, { ...ctx, phase: 'vocoder' })
-    note('vocoder-extract', 'extracting vocoder')
-    await mkdir(join(bankDir, 'dsvocoder'), { recursive: true })
-    await ctx.extractImpl(vocArchive, join(bankDir, 'dsvocoder'), { ...ctx, phase: 'vocoder-extract' })
-  } else {
-    note('vocoder', 'vocoder already present, skipping')
-  }
+  // The official voicebank zip already carries dsvocoder/ (with the neural
+  // vocoder onnx) — no separate vocoder download. Just confirm it came through.
+  note('vocoder', `using bundled vocoder at ${join(bankDir, 'dsvocoder')}`)
 
-  // 4. Fixed-version dependencies into the exact interpreter M1 launches.
+  // 3. Fixed-version dependencies into the exact interpreter M1 launches.
   if (options.pipImpl) {
     note('pip', 'pip install delegated (test mode)')
     for (const group of options.pipGroups ?? PIP_GROUPS) {
@@ -424,6 +425,68 @@ export async function runSingingInstall(options = {}) {
     throw failure
   }
   return status
+}
+
+/**
+ * Install the voicebank from a zip the user downloaded themselves (net-disk or
+ * GitHub). Verifies the official SHA-256 before extracting anything, so a
+ * corrupt / tampered / wrong file can never reach the voicebank folder. The
+ * official zip already contains dsvocoder/, so no separate vocoder download.
+ *
+ * Returns the machine-wide status after extraction. Throws a tagged error
+ * (`code`) with a clear, translated-by-the-client message on bad input.
+ */
+export async function installVoicebankFromZip(options = {}) {
+  const root = singingRoot(options)
+  const zipPath = typeof options.zipPath === 'string' ? resolve(options.zipPath.trim()) : ''
+  if (!zipPath) throw Object.assign(new Error('zipPath is required'), { code: 'BAD_ZIP_PATH' })
+  if (!existsSync(zipPath)) {
+    throw Object.assign(new Error(`voicebank zip not found: ${zipPath}`), { code: 'ZIP_NOT_FOUND' })
+  }
+  const info = await stat(zipPath)
+  if (!info.isFile()) throw Object.assign(new Error('zipPath must be a file'), { code: 'BAD_ZIP_PATH' })
+
+  const ctx = {
+    signal: options.signal,
+    onProgress: options.onProgress ?? (() => {}),
+    extractImpl: options.extractImpl ?? defaultExtract,
+  }
+  // The expected digest is fixed to the official value. The override exists
+  // ONLY for the offline test (which uses a tiny fake zip); the HTTP route never
+  // forwards it, so a client can never weaken the check.
+  const expected = options.expectedSha256 ?? VOICEBANK_SHA256
+  ctx.onProgress?.({ phase: 'voicebank-verify', message: 'verifying official SHA-256', received: 0, total: info.size })
+  const digest = await sha256File(zipPath)
+  if (digest !== expected) {
+    const failure = new Error(
+      `voicebank SHA-256 mismatch: expected ${expected}, got ${digest}. ` +
+        'The file is not the official Qixuan v2.7.0 zip — redownload it from one of the official sources.',
+    )
+    failure.code = 'SHA256_MISMATCH'
+    failure.expected = expected
+    failure.actual = digest
+    throw failure
+  }
+
+  const name = options.voicebank ?? DEFAULT_VOICEBANK_DIR
+  const bankDir = voicebankDir(root, name)
+  if (existsSync(join(bankDir, 'dsconfig.yaml'))) {
+    throw Object.assign(new Error('voicebank already installed; remove it first to reinstall'), {
+      code: 'ALREADY_INSTALLED', path: bankDir,
+    })
+  }
+  ctx.onProgress?.({ phase: 'voicebank-extract', message: 'extracting voicebank and bundled vocoder' })
+  await mkdir(join(root, 'voicebank'), { recursive: true })
+  await ctx.extractImpl(zipPath, join(root, 'voicebank'), { ...ctx, phase: 'voicebank-extract' })
+
+  // The bundled vocoder is what makes this zip self-sufficient; confirm both
+  // markers landed so a bad archive never reports success.
+  if (!existsSync(join(bankDir, 'dsconfig.yaml')) || !existsSync(join(bankDir, 'dsvocoder', 'vocoder.yaml'))) {
+    const failure = new Error('extracted voicebank is missing dsconfig.yaml or its bundled dsvocoder/vocoder.yaml')
+    failure.code = 'BAD_ARCHIVE'
+    throw failure
+  }
+  return singingStatus({ root, voicebank: name })
 }
 
 export const __singingInstallTest = {

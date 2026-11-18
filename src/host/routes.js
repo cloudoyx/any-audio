@@ -22,7 +22,10 @@ import { loadSoundBank, renderCompiled, listPresets } from '../audio/synth.js'
 import { assertPackDir, isPriorityPack, listPacks, readPack, userSfxDir } from '../audio/sfx-library.js'
 import { scanPackFolder } from '../audio/sfx-pack-scan.js'
 import { EDGE_VOICES, MIMO_VOICES, DEEPSEEK_VOICES, providerInfo, resolveVoice, synthesizeSpeech } from '../audio/tts-providers.js'
-import { listSingingVoices, runSingingInstall, singingRoot, singingStatus } from '../audio/singing-install.js'
+import {
+  installVoicebankFromZip, listSingingVoices, runSingingInstall,
+  singingRoot, singingStatus, VOICEBANK_SOURCES,
+} from '../audio/singing-install.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
@@ -50,6 +53,11 @@ const audios = new Map()
 let singingInstallRunner = runSingingInstall
 export function setSingingInstallRunner(fn) {
   singingInstallRunner = typeof fn === 'function' ? fn : runSingingInstall
+}
+// Injectable local-zip installer for offline tests (same pattern as above).
+let voicebankZipInstaller = installVoicebankFromZip
+export function setVoicebankZipInstaller(fn) {
+  voicebankZipInstaller = typeof fn === 'function' ? fn : installVoicebankFromZip
 }
 
 function publicJob(job) {
@@ -263,6 +271,29 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       return await listSingingVoices()
     } catch (error) {
       return { ok: false, voices: [], error: describeError(error) }
+    }
+  }
+
+  /** Public download sources for the official voicebank zip (GitHub / net-disk). */
+  function singingSourcesRoute() {
+    return { ok: true, sources: VOICEBANK_SOURCES }
+  }
+
+  /** Install the voicebank from a local official zip (verified by SHA-256). */
+  async function singingInstallZipRoute(body) {
+    const zipPath = typeof body?.zipPath === 'string' ? body.zipPath.trim() : ''
+    if (!zipPath) return { ok: false, error: 'zipPath is required', code: 'BAD_ZIP_PATH' }
+    try {
+      const status = await voicebankZipInstaller({
+        zipPath,
+        onProgress: (event) => {
+          // A local install is quick; surface the phase for parity with jobs.
+          if (event.message) note(`singing/install-zip: ${event.message}`)
+        },
+      })
+      return { ok: true, status }
+    } catch (error) {
+      return { ok: false, error: describeError(error), code: error?.code ?? 'INSTALL_FAILED' }
     }
   }
 
@@ -784,6 +815,9 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     if (method === 'GET' && path === `${PREFIX}/singing/voices`) {
       return json(res, 200, await singingVoicesRoute())
     }
+    if (method === 'GET' && path === `${PREFIX}/singing/sources`) {
+      return json(res, 200, singingSourcesRoute())
+    }
     if (method === 'GET' && path === `${PREFIX}/credentials`) return json(res, 200, await credentialsStatus({ provider: url.searchParams.get('provider') ?? undefined }))
     if (method === 'GET' && path === `${PREFIX}/sources/presets`) {
       try {
@@ -819,6 +853,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       if (path === `${PREFIX}/config`) return json(res, 200, await configUpdate(body))
       if (path === `${PREFIX}/config/reset`) return json(res, 200, await configReset())
       if (path === `${PREFIX}/singing/install`) return json(res, 200, await singingInstallRoute(body))
+      if (path === `${PREFIX}/singing/install-zip`) return json(res, 200, await singingInstallZipRoute(body))
       if (path === `${PREFIX}/sources/install`) return json(res, 200, await installSource(body))
       if (path === `${PREFIX}/sources/verify`) return json(res, 200, await verifySource(body))
       if (path === `${PREFIX}/sources/remove`) return json(res, 200, await removeSource(body))
