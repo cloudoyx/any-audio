@@ -66,7 +66,50 @@ option for users who prefer it.
 Other banks found in the market with unconfirmed or non-redistributable terms
 are not referenced or fetched by the plugin.
 
+## Singing runtime and models (downloaded on first use, not bundled)
+
+The singing feature builds a minimal local environment on the user's request. None of the following is included in the npm package; each is downloaded by the installer, checked against its official SHA-256 where the publisher provides one, and installed under `~/.dsh/anyaudio/singing`. Their licenses and attribution requirements remain in force.
+
+**CPython 3.12 runtime** — redistributable build from
+<https://github.com/astral-sh/python-build-standalone> (`install_only` build).
+CPython is under the PSF License; the python-build-standalone redistribution
+project is under MPL 2.0. The runtime is installed independently of the plugin
+and is not modified or redistributed by this repository.
+
+**PyTorch (CPU wheel)** — <https://download.pytorch.org/whl/cpu>, BSD-style
+license, from the official PyTorch CPU wheel index. It is pip-installed into the
+singing runtime for inference.
+
+**Qixuan (绮萱) DiffSinger voicebank** — the author's official release at
+<https://github.com/yqzhishen/qixuan-diffsinger> (v2.7.0, OpenUTAU edition), also
+announced by the author at <https://www.bilibili.com/opus/844555716205215764>.
+The bank is not bundled. Per the author's published usage terms it may be used
+commercially without extra permission, provided that released works credit the
+voicebank name "绮萱", the synthesis technology "DiffSinger", and state visibly
+that the content was synthesised with AI technology. This version downloads and
+uses the bank as-is; the user is responsible for following those terms in the
+works they publish.
+
+**Neural vocoder** — the PC-NSF-HiFiGAN model from the OpenVPI / DiffSinger
+Community Vocoders project, <https://github.com/openvpi/vocoders> (release page
+<https://openvpi.github.io/vocoders/>). The model weights are licensed under
+**CC BY-NC-SA 4.0**, a non-commercial license: redistribution and integration
+are permitted under that license with attribution to OpenVPI / DiffSinger
+Community and a link to the release page; synthesising or producing commercial
+work with the vocoder is not restricted by the license. The plugin downloads the
+weights on request and does not redistribute them itself.
+
+**diffsinger-utau** — version 0.3.8, MIT license,
+<https://pypi.org/project/diffsinger-utau/> (source:
+<https://github.com/bingcheng1998/diffsinger_utau>). It performs the actual
+DiffSinger inference and is pip-installed as a normal dependency into the
+singing runtime, not vendored here. The remaining pip dependencies of that
+runtime (onnxruntime, numpy, scipy, librosa, pypinyin, PyYAML, matplotlib) keep
+their own open-source licenses.
+
 ## Design reference (no content copied)
+
+**cortico-world-singer-for-coopanion** — <https://github.com/wocwang/cortico-world-singer-for-coopanion>, MIT License, Copyright (c) 2026 wocwang. AnyAudio's singing feature was **designed after** this project: we studied its approach to turning lyrics and notes into a DiffSinger score, but wrote our own engine and **copied no source code** from it. The project itself is not bundled or redistributed here.
 
 **AI_MUSIC_CREATOR** — <https://github.com/maxtinnate/AI_MUSIC_CREATOR>.
 Read only to understand how a music skill, a note-level score and a SoundFont

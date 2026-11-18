@@ -12,6 +12,8 @@
   },
   "files": [
     "src",
+    "engine/*.py",
+    "engine/*.md",
     "lib",
     "cordis.patch.yml",
     "scripts/fetch-font.mjs",

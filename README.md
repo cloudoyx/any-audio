@@ -7,7 +7,7 @@
 [![DSH plugin](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4b6bfb.svg)](#install)
 [![Status](https://img.shields.io/badge/status-early%20release-orange.svg)](#known-limitations)
 
-[Hear the difference](#hear-the-difference) · [The DAW](#the-daw) · [Install](#install) · [Sound sources](#sound-sources) · [Speech TTS](#speech-tts) · [中文说明](https://github.com/cloudoyx/any-audio/blob/main/README.zh-CN.md)
+[Hear the difference](#hear-the-difference) · [The DAW](#the-daw) · [Install](#install) · [Sound sources](#sound-sources) · [Speech TTS](#speech-tts) · [Singing](#singing) · [中文说明](https://github.com/cloudoyx/any-audio/blob/main/README.zh-CN.md)
 
 </div>
 
@@ -30,6 +30,7 @@ Models can already write code that makes sound, but it rarely sounds like an ins
 - **Notes land directly on the timeline** — millisecond accuracy; music, narration and effects share one clock.
 - **Automatic mix balance** — tracks are placed in order with per-track gain, pan and fades; declaring a track as `narration` makes the plugin duck the other buses under the voice, and the master is peak-normalised so the whole mix does not clip. Every change can be auditioned section by section, and changed again.
 - **Effects and voices** — sound effects come from an installed sound library first (a pack of real recordings, searched by name), then from online CC0 when the library has nothing, and only then from the SoundFont banks or the procedural generators; speech goes through Edge TTS, MiMo-V2.5-TTS (currently free) or DeepSeek TTS (using the account DSH is signed in with).
+- **Singing** — give the agent notes and lyrics and it synthesises a vocal locally, landing on its own track in the DAW; ask for a song or a sung line and the agent calls the singing tool on its own.
 
 ## Hear the difference
 
@@ -85,7 +86,7 @@ dsh plugin --profile desktop add dsh-any-audio
 
 If DSH boots a different profile, replace `desktop` with that profile name. Restart DSH once after installing so it picks up the plugin.
 
-Then open the **AnyAudio** page in DSH Settings to install a sound source (GeneralUser GS is the default suggestion), switch the speech engine and adjust mixing defaults. No SoundFont and no sound pack is bundled with the package.
+Then open the **AnyAudio** page in DSH Settings to install a sound source (GeneralUser GS is the default suggestion), switch the speech engine and adjust mixing defaults. No SoundFont and no sound pack is bundled with the package. Singing is installed separately from the **Singing** tab — see [Singing](#singing).
 
 On a fresh install, opening a new conversation shows a five-step guide: welcome, install a sound source, install a sound pack, pick the narration engine, meet the clip bay. Every step can be skipped, and **Settings → AnyAudio → Advanced → Replay the guide** brings it back.
 
@@ -159,6 +160,25 @@ Three engines, one interface:
 
 MiMo and DeepSeek are both opt-in: saving a key or signing in does not switch the default engine, you choose it explicitly. MiMo's default voice `mimo_default` is resolved by the service cluster and may differ between regions; this version supports normal Open Platform keys only. DeepSeek's key is the one DSH itself signs in with — the plugin never writes or clears it, because removing it would break model access, not just narration.
 
+## Singing
+
+Give the agent notes and lyrics and it synthesises a **real vocal on your own machine** with DiffSinger, then drops the result on its own vocal track in the clip bay — ready to audition, gain-adjust and regenerate line by line. This is singing, not instrumental music (`anyaudio_music`) and not speech (`anyaudio_tts`), and it is not composition or cover-singing: you supply the notes and the words. Just ask for a song, a sung line, or lyrics set to a melody and the agent calls the singing tool automatically; no need to name it.
+
+The final vocal quality is set by the **voicebank and how it is tuned** — pitch, timing, parameter tweaks and training — not by the plugin. AnyAudio only provides the install channel, the interface and the way to use it; the model, voicebank and tuning are yours to choose. This version is tested with the Qixuan voicebank; the format is provisional and other banks are not guaranteed yet.
+
+### Installing the singing environment
+
+Open **Settings → AnyAudio → Singing → Install singing environment**. Download after download, the plugin builds a minimal runtime on demand rather than shipping a ~1 GB base: it fetches a CPython 3.12 runtime, the Qixuan voicebank and an OpenVPI neural vocoder, verifies each against its official SHA-256, then pip-installs a fixed set of dependencies into that runtime. Nothing is bundled in the npm package. The first run takes a while — the download plus environment setup, and the first synthesis has to load the model.
+
+By default downloads come from GitHub and its proxies. If GitHub is unreachable, set a proxy; a domestic drive mirror is reserved in the tab and will become selectable once its address is confirmed (the plugin never hard-codes a link you did not supply).
+
+### Known singing limits
+
+- **Voicebank format is provisional** — v1 guarantees only the Qixuan bank that was actually tested; other banks may not load.
+- **Speed varies by device** — a three-minute song takes roughly four minutes on CPU; on a segmented GPU run it took about 28.5 seconds. The first call is slower while the runtime, voicebank and model load.
+- **One mode only** — notes are split at rests into phrases and sung in sequence; there is no whole-song-in-one-pass switch. A dragged syllable (one word over several notes) is written as one note with the word plus following notes with an empty lyric; a rest is a note with a null pitch.
+- **Runtime, voicebank and vocoder are installed on first use** — they are not in the package; expect a download and a wait on a fresh machine.
+
 ## Known limitations
 
 - **Project size caps** — a project is at most 15 minutes long and 20 tracks wide; going past either is an error.
@@ -167,6 +187,7 @@ MiMo and DeepSeek are both opt-in: saving a key or signing in does not switch th
 - **SoundFont only** — no SFZ, Kontakt or VST; converting other source formats is out of scope for this version.
 - **No per-note envelope control** — attack and release come from the preset; use short notes with gaps for staccato and velocity plus expression for dynamics.
 - **Chinese instruments are GM approximations** — `guzheng` maps to Koto, `dizi` to Flute, `erhu` to Fiddle; dedicated banks will do better.
+- **Singing has its own limits** — voicebank format is provisional (v1 guarantees only the tested Qixuan bank), and the runtime and voicebank download on first use; see [Singing](#singing).
 
 ## Support the project
 
