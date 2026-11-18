@@ -9,7 +9,7 @@
 import { h, Fragment, useState, useEffect, useCallback, useMemo, C, S, bytes, Btn, Field, TextInput, NumberInput, Select, Switch, Notice, Card, HelpTip } from './ui.js'
 import { t, jobFailure, detectLanguage, setLanguage, setLanguagePreference, language } from './i18n.js'
 import { api } from './api.js'
-import { BASE_PACK, DownloadLinks } from './base-pack.js'
+import { BASE_PACK, DownloadLinks, VoicebankDownloadLinks, useVoicebankSources, installVoicebankZip } from './base-pack.js'
 
 const GITHUB_URL = 'https://github.com/cloudoyx/any-audio'
 
@@ -444,6 +444,8 @@ function SingingTab({ state, reload, notify }) {
   const [voices, setVoices] = useState([])
   const [job, setJob] = useState(null)
   const [busy, setBusy] = useState('')
+  const [zipPath, setZipPath] = useState('')
+  const voicebankSources = useVoicebankSources()
 
   const loadStatus = useCallback(async () => {
     try {
@@ -526,6 +528,27 @@ function SingingTab({ state, reload, notify }) {
     }
   }
 
+  // Install the same official zip the three links serve, from a local copy.
+  // zipPath must be absolute: the browser's file input hides the full path, so
+  // the person pastes it, exactly like the sound-pack install field.
+  async function installZip() {
+    const path = zipPath.trim()
+    if (!path) return
+    setBusy('zip')
+    try {
+      const result = await installVoicebankZip(path)
+      notify(t('声库已安装，刷新后即可选用'))
+      setZipPath('')
+      await loadStatus()
+      await loadVoices()
+      await reload()
+    } catch (error) {
+      notify(t('声库 zip 安装失败：{0}', error.message), 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
   const installing = Boolean(job && job.status === 'running')
   const percent = job && job.total ? (job.received / job.total) * 100 : 0
   const ready = Boolean(status?.ready)
@@ -594,7 +617,19 @@ function SingingTab({ state, reload, notify }) {
         ),
       ),
     ),
-    h(Card, { title: t('下载来源（预留）'), desc: t('当前从 GitHub 及其代理下载，按官方文件 SHA-256 校验。国内网盘来源待确定后在此选择；具体地址由你提供，不会写死在插件里。') }),
+    h(Card, { title: t('声库下载来源'), desc: t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。') },
+      h(VoicebankDownloadLinks, { sources: voicebankSources }),
+    ),
+    h(Card, { title: t('安装本地声库包'), desc: t('填一个下载好的官方 .zip 文件的完整路径（绝对路径）。') },
+      h('div', { style: S.row },
+        h(TextInput, { value: zipPath, onChange: setZipPath, placeholder: t('粘贴声库 zip 的完整路径') }),
+        h(Btn, {
+          kind: 'primary',
+          disabled: !zipPath.trim() || busy === 'zip' || installing,
+          onClick: installZip,
+        }, busy === 'zip' ? t('正在安装声库…') : t('安装 zip')),
+      ),
+    ),
   )
 }
 

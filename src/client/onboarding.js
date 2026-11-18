@@ -14,7 +14,7 @@
 import { h, Fragment, useState, useEffect, useCallback, C, S, Btn, Select, TextInput, Notice, useSurface } from './ui.js'
 import { t, jobFailure } from './i18n.js'
 import { api, API } from './api.js'
-import { BASE_PACK, DownloadLinks } from './base-pack.js'
+import { BASE_PACK, DownloadLinks, VoicebankDownloadLinks, useVoicebankSources } from './base-pack.js'
 import { createPortal } from 'react-dom'
 
 /** Bump this to show the guide again after a release that adds steps. */
@@ -176,7 +176,7 @@ export function NarrationStep({ tts, engine, note, busy, keyInput, onPick, onKey
  * step above. It is skippable: the "唱歌" tab in Settings can install it later.
  * Most of the status wording reuses the keys the settings tab already added.
  */
-export function SingingStep({ status, job, note, busy, onInstall, onClose, onNext }) {
+export function SingingStep({ status, job, note, busy, sources, onInstall, onClose, onNext }) {
   const ready = Boolean(status?.ready)
   const parts = status?.ok
     ? [
@@ -199,6 +199,9 @@ export function SingingStep({ status, job, note, busy, onInstall, onClose, onNex
         h('p', { style: S.desc }, ready ? t('唱歌环境已就绪') : t('唱歌环境尚未就绪')),
       )
       : h('p', { style: S.desc }, status?.error ? t('状态检测失败：{0}', status.error) : t('正在检测…')),
+    h('p', { style: S.desc }, t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。')),
+    h(VoicebankDownloadLinks, { sources }),
+    h('p', { style: S.desc }, t('选好后下载，再把 zip 的完整路径填到下面安装。')),
     job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
       h('div', { style: { ...S.row, justifyContent: 'space-between' } },
         h('span', { style: S.label }, job.status === 'running'
@@ -224,6 +227,7 @@ export function Guide() {
   const [singing, setSinging] = useState(null)
   const [job, setJob] = useState(null)
   const [busy, setBusy] = useState('')
+  const voicebankSources = useVoicebankSources()
   const [note, setNote] = useState('')
   // The engine is written to the config the moment it is picked, so the guide
   // never has to ask again; `engine` mirrors it locally to re-render.
@@ -446,7 +450,7 @@ export function Guide() {
 
   if (step === 4) {
     return h(SingingStep, {
-      status: singing, job, note, busy,
+      status: singing, job, note, busy, sources: voicebankSources,
       onInstall: installSinging,
       onClose: finish,
       onNext: () => goTo(5),

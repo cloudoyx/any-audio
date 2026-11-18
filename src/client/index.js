@@ -14,6 +14,7 @@
 import { h } from './ui.js'
 import { Page, FontsTab, FxLibTab, TtsTab, SingingTab } from './settings.js'
 import { Guide, NarrationStep, SingingStep, primeOnboardingConfig, primeOnboardingTts, ONBOARDING_VERSION, onboardedVersion } from './onboarding.js'
+import { VoicebankDownloadLinks, VOICEBANK_SOURCES, installVoicebankZip } from './base-pack.js'
 import { ClipBayPanel, CLIP_BAY_ID } from './clipbay/panel.js'
 import { detectLanguage, resolveLanguage, setLanguage, setLanguagePreference, translate, jobFailure } from './i18n.js'
 import { api } from './api.js'
@@ -93,4 +94,4 @@ function apply(ctx) {
 
 export { apply }
 
-export const __test = { bytes, detectLanguage, Page, Guide, NarrationStep, SingingStep, FontsTab, FxLibTab, TtsTab, SingingTab, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts, jobFailure, setLanguage }
+export const __test = { bytes, detectLanguage, Page, Guide, NarrationStep, SingingStep, FontsTab, FxLibTab, TtsTab, SingingTab, VoicebankDownloadLinks, VOICEBANK_SOURCES, installVoicebankZip, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts, jobFailure, setLanguage }

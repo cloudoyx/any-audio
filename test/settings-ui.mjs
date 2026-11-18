@@ -30,7 +30,7 @@ const mod = entry.factory((id) => {
   throw new Error(`unexpected require(${JSON.stringify(id)})`)
 })
 
-const { FontsTab, FxLibTab, TtsTab, SingingTab, Guide, NarrationStep, SingingStep, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
+const { FontsTab, FxLibTab, TtsTab, SingingTab, Guide, NarrationStep, SingingStep, VoicebankDownloadLinks, VOICEBANK_SOURCES, installVoicebankZip, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
 const { jobFailure, setLanguage } = mod.__test
 
 function strings(node, out = []) {
@@ -359,6 +359,18 @@ step('the singing step sits after narration, is skippable and reuses the shared 
   assert.ok(onboarding.includes("api('/singing/status'"), 'the guide must read status from the shared route')
 })
 
+step('the singing step shows the same three voicebank download sources', () => {
+  const withSources = SingingStep({ status: { ok: true, ready: false }, job: null, note: '', busy: '', sources: VOICEBANK_SOURCES, onInstall: () => {}, onClose: () => {}, onNext: () => {} })
+  const labels = []
+  walk(withSources, (element) => { if (typeof element.props?.onClick === 'function' && typeof element.props?.children === 'string') labels.push(element.props.children) })
+  for (const label of ['GitHub', '百度网盘', '夸克网盘']) {
+    assert.ok(text(withSources).includes(label), `the guide must offer the ${label} source`)
+  }
+  // It reuses the shared component rather than a second hard-coded link list.
+  const onboarding = readFileSync(join(root, 'src', 'client', 'onboarding.js'), 'utf8')
+  assert.ok(onboarding.includes('VoicebankDownloadLinks'), 'the guide must reuse the shared download links')
+})
+
 step('the onboarding version was raised so old users see the singing step', () => {
   assert.ok(ONBOARDING_VERSION >= 3, `the version must include the singing step, got ${ONBOARDING_VERSION}`)
   assert.equal(onboardedVersion({ ui: { onboardedVersion: 2 } }) >= ONBOARDING_VERSION, false, 'a v2 record must not count as done')
@@ -520,7 +532,51 @@ const singingTree = SingingTab({ state: singingState, reload: () => {}, notify: 
 const singingText = text(singingTree)
 
 step('the singing tab has status, install, voicebank and device sections', () => {
-  assert.deepEqual(titles(singingTree), ['引擎状态', '安装唱歌环境', '选声库', '选设备', '下载来源（预留）'])
+  assert.deepEqual(titles(singingTree), ['引擎状态', '安装唱歌环境', '选声库', '选设备', '声库下载来源', '安装本地声库包'])
+})
+
+step('the voicebank sources are GitHub / Baidu / Quark with the exact shared links', () => {
+  assert.deepEqual(VOICEBANK_SOURCES.map((s) => s.id), ['github', 'baidu', 'quark'])
+  const byId = Object.fromEntries(VOICEBANK_SOURCES.map((s) => [s.id, s]))
+  assert.ok(!/google/i.test(JSON.stringify(VOICEBANK_SOURCES)), 'there must be no Google Drive source')
+  assert.equal(byId.baidu.url, 'https://pan.baidu.com/s/1WUuBy2QLmC52-uzqppr6Qg?pwd=6666', 'Baidu link must match the user-supplied link verbatim')
+  assert.equal(byId.quark.url, 'https://pan.quark.cn/s/b7dbaf52c430', 'Quark link must match the user-supplied link verbatim')
+  assert.ok(/github.com\/yqzhishen\/qixuan-diffsinger/.test(byId.github.url), 'GitHub source must be the official Qixuan release')
+  // The front-end list must stay byte-identical to the server's authoritative
+  // VOICEBANK_SOURCES (audio/singing-install.js).
+  const backend = readFileSync(join(root, 'src', 'audio', 'singing-install.js'), 'utf8')
+  for (const source of VOICEBANK_SOURCES) {
+    assert.ok(backend.includes(source.url), `source url ${source.id} is out of sync with the backend: ${source.url}`)
+  }
+})
+
+step('the download links open each source in the browser', () => {
+  const tree = VoicebankDownloadLinks({ sources: VOICEBANK_SOURCES })
+  const buttons = []
+  walk(tree, (element) => { if (typeof element.props?.onClick === 'function') buttons.push(element) })
+  assert.equal(buttons.length, 3, 'there should be three download buttons')
+  assert.deepEqual(buttons.map((b) => text(b)), ['GitHub', '百度网盘', '夸克网盘'])
+  // window.open lives in the bundle's factory closure, so verify the wiring in
+  // source rather than executing it: each button must open its item's URL in a
+  // new tab, exactly like base-pack.js DownloadLinks.
+  const mod = readFileSync(join(root, 'src', 'client', 'base-pack.js'), 'utf8')
+  assert.ok(/window\.open\(item\.url, '_blank'/.test(mod), 'each source must open in a new browser tab')
+  assert.ok(mod.includes('list.map(item =>'), 'buttons are rendered from the shared source list, not hard-coded twice')
+})
+
+step('installVoicebankZip posts the absolute path in the zipPath field', () => {
+  // step() is synchronous, so verify the exact request the helper builds by
+  // reading its source: it must POST /singing/install-zip with only { zipPath },
+  // matching the backend contract (field name agreed with t12).
+  assert.equal(typeof installVoicebankZip, 'function', 'the installer helper must be exported')
+  const mod = readFileSync(join(root, 'src', 'client', 'base-pack.js'), 'utf8')
+  assert.ok(mod.includes("api('/singing/install-zip'"), 'installer must call the local-zip route')
+  assert.ok(/method:\s*'POST'/.test(mod), 'installer must POST')
+  assert.ok(/body:\s*\{\s*zipPath\s*\}/.test(mod), 'the request body must be exactly { zipPath }')
+  // The settings page must wire that helper into a pasted absolute path.
+  const settings = readFileSync(join(root, 'src', 'client', 'settings.js'), 'utf8')
+  assert.ok(settings.includes('installVoicebankZip(path)'), 'the singing tab must call the zip installer')
+  assert.ok(settings.includes('zipPath.trim()'), 'the zip path must be taken from the paste field')
 })
 
 step('the singing tab exposes voicebank and device dropdowns but no mode switch', () => {
