@@ -164,7 +164,9 @@ MiMo and DeepSeek are both opt-in: saving a key or signing in does not switch th
 
 Give the agent notes and lyrics and it synthesises a **real vocal on your own machine** with DiffSinger, then drops the result on its own vocal track in the clip bay — ready to audition, gain-adjust and regenerate line by line. This is singing, not instrumental music (`anyaudio_music`) and not speech (`anyaudio_tts`), and it is not composition or cover-singing: you supply the notes and the words. Just ask for a song, a sung line, or lyrics set to a melody and the agent calls the singing tool automatically; no need to name it.
 
-The final vocal quality is set by the **voicebank and how it is tuned** — pitch, timing, parameter tweaks and training — not by the plugin. AnyAudio only provides the install channel, the interface and the way to use it; the model, voicebank and tuning are yours to choose. This version is tested with the Qixuan voicebank; the format is provisional and other banks are not guaranteed yet.
+The final vocal quality is set by the **voicebank and how it is tuned** — pitch, timing, parameter tweaks and training — not by the plugin. AnyAudio only provides the install channel, the interface and the way to use it; the model, voicebank and tuning are yours to choose.
+
+This version **only guarantees the Qixuan voicebank** works at a basic level. The singing interface is open: you can add other DiffSinger voicebanks yourself (supply a local voicebank zip in Settings), and the plugin will accept them, but it does **not** guarantee they load or that they sound good — different voicebanks use very different pronunciation dictionaries and model structures. Whether a third-party bank sings, and how well, depends on the bank itself, the score you feed it and subsequent tuning; you (or your agent) will need to work that out. Only the interface is wired up here; the result is not guaranteed.
 
 ### Installing the singing environment
 
@@ -174,7 +176,7 @@ By default downloads come from GitHub and its proxies. If GitHub is unreachable,
 
 ### Known singing limits
 
-- **Voicebank format is provisional** — v1 guarantees only the Qixuan bank that was actually tested; other banks may not load.
+- **Only Qixuan is guaranteed** — v1 guarantees the Qixuan bank works at a basic level; other banks are accepted through the open interface but loading and vocal quality are not guaranteed, and need your own tuning and troubleshooting.
 - **Speed varies by device** — a three-minute song takes roughly four minutes on CPU; on a segmented GPU run it took about 28.5 seconds. The first call is slower while the runtime, voicebank and model load.
 - **One mode only** — notes are split at rests into phrases and sung in sequence; there is no whole-song-in-one-pass switch. A dragged syllable (one word over several notes) is written as one note with the word plus following notes with an empty lyric; a rest is a note with a null pitch.
 - **Runtime, voicebank and vocoder are installed on first use** — they are not in the package; expect a download and a wait on a fresh machine.
