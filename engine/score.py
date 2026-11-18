@@ -6,8 +6,9 @@
 韵母占满本音符；浊响音（m/n/l/r/y/w）留在音符开头；拖腔标连音；
 按休止切句并把每句时间轴归零（句间靠分段 + 段首短休止形成气口）。
 
-依赖公开约定：pypinyin 查拼音，diffsinger-utau 的 opencpop 词典查拼音音素，
-声库自带的 *.phonemes.json 提供合法音素表。依赖均可注入，便于不加载推理模型单测。
+依赖公开约定：pypinyin 查拼音，声库自带的 dsdict-zh.yaml 提供权威拼音→音素映射，
+diffsinger-utau 的 opencpop 词典作为兜底，*.phonemes.json 提供合法音素表。
+依赖均可注入，便于不加载推理模型单测。
 """
 import json
 import re
@@ -44,7 +45,7 @@ class ScoreConverter:
 
     @classmethod
     def from_voicebank(cls, voicebank_dir, pinyin_fn=None):
-        """从声库目录装配：读音素表 + diffsinger-utau 的 opencpop 拼音词典。"""
+        """从声库目录装配：读音素表 + 声库权威拼音词典（缺时回退 opencpop）。"""
         bank = Path(voicebank_dir)
         tables = sorted(bank.glob("*.phonemes.json"))
         if not tables:
@@ -54,7 +55,35 @@ class ScoreConverter:
 
         from diffsinger_utau.voice_bank.commons.ds_reader import DSTextReplacer
         pinyin_dict = dict(DSTextReplacer().opencpop_dict)
+        # 声库自带的 dsdict-zh.yaml 才是权威读音表：opencpop 的 yan/ye 写成
+        # y En / y E，绮萱音素表里没有 En/E（只有 ian/ie），整字会哑。用声库
+        # 字典覆盖：601 条读音与全量 yaml 解析一致，行扫描 ~0.18s（yaml 全量要 5s）。
+        bank_dict = cls._load_bank_pinyin_dict(bank)
+        pinyin_dict.update(bank_dict)
         return cls(phoneme_set, pinyin_dict, pinyin_fn)
+
+    @staticmethod
+    def _load_bank_pinyin_dict(bank):
+        """从 dsdict-zh.yaml 轻量提取 拼音 → [音素]，只认纯小写拼音条目。"""
+        for candidate in (Path(bank) / "dsdur" / "dsdict-zh.yaml", Path(bank) / "dsdict-zh.yaml"):
+            if not candidate.is_file():
+                continue
+            result = {}
+            current = None
+            with candidate.open(encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("- grapheme: "):
+                        key = line[len("- grapheme: "):].strip()
+                        if re.fullmatch(r"[a-z]{1,7}", key) and key not in result:
+                            current = key
+                            result[current] = []
+                        else:
+                            current = None
+                    elif current is not None and line.startswith("  - "):
+                        result[current].append(line[4:].strip())
+            if result:
+                return result
+        return {}
 
     # ---------- 拼音 → 音素 ----------
 
@@ -81,7 +110,9 @@ class ScoreConverter:
         raw = self.pinyin_dict.get(reading)
         if not raw:
             return []
-        return self.map_phonemes(raw.split())
+        # 声库字典的值可能是 list（权威）或空格串（opencpop 兜底）。
+        phones = raw.split() if isinstance(raw, str) else list(raw)
+        return self.map_phonemes(phones)
 
     @staticmethod
     def split_onset(phones):

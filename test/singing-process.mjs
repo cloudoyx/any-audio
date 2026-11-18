@@ -10,12 +10,13 @@
  */
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
   createSingingProcess, resolveSingingConfig, DEFAULT_IDLE_SEC,
 } from '../src/audio/singing-process.js'
+import { homedir } from 'node:os'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const FAKE_WORKER = join(here, 'fixtures', 'fake-singing-worker.mjs')
@@ -158,6 +159,21 @@ test('bad notes are rejected before any process is spawned', async () => {
   } finally {
     await mgr.stop()
   }
+})
+
+test('bare voicebank name resolves to machine-level path; custom paths stay intact', () => {
+  const root = join(homedir(), '.dsh', 'anyaudio', 'singing')
+  // A bare name (what Settings stores) must become <root>/voicebank/<name>.
+  const bare = resolveSingingConfig({ voicebank: 'Qixuan_v2.7.0_DiffSinger_OpenUtau' })
+  assert.equal(bare.voicebank, join(root, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau'))
+  // Default (no option) uses the same bare-name default, resolved to a path.
+  const def = resolveSingingConfig({})
+  assert.equal(def.voicebank, join(root, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau'))
+  // An explicit absolute path must never be rewritten.
+  const custom = join(here, 'my-custom-bank')
+  assert.equal(resolveSingingConfig({ voicebank: custom }).voicebank, custom)
+  // A relative path with a separator is treated as a path, not a bare name.
+  assert.equal(resolveSingingConfig({ voicebank: './banks/x' }).voicebank, resolve('./banks/x'))
 })
 
 test('missing runtime / voicebank surfaces explicit, actionable errors', async () => {

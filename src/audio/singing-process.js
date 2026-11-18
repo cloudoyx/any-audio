@@ -59,8 +59,12 @@ function envPath(name) {
 export function resolveSingingConfig(options = {}) {
   const injected = Boolean(options.command || options.args)
   const root = envPath('ANYAUDIO_SINGING_DIR') ?? join(homedir(), '.dsh', 'anyaudio', 'singing')
-  const voicebank = options.voicebank
-    ?? (process.env.ANYAUDIO_SINGING_VOICEBANK || join(root, 'voicebank', DEFAULT_VOICEBANK))
+  const requestedBank = options.voicebank
+    ?? (process.env.ANYAUDIO_SINGING_VOICEBANK || DEFAULT_VOICEBANK)
+  // Settings/config store a bare voicebank NAME, not a path. Resolve a bare name
+  // against the machine-level voicebank dir; leave absolute/custom paths intact.
+  const bareName = !isAbsolute(requestedBank) && !requestedBank.includes('/') && !requestedBank.includes('\\')
+  const voicebank = bareName ? join(root, 'voicebank', requestedBank) : resolve(requestedBank)
   const worker = options.worker ?? envPath('ANYAUDIO_SINGING_WORKER') ?? DEFAULT_WORKER
   const python = options.python ?? envPath('ANYAUDIO_SINGING_PYTHON')
     ?? join(root, 'runtime', process.platform === 'win32' ? 'python.exe' : 'python')
