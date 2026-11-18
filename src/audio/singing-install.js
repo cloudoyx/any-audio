@@ -436,6 +436,23 @@ export async function runSingingInstall(options = {}) {
  * Returns the machine-wide status after extraction. Throws a tagged error
  * (`code`) with a clear, translated-by-the-client message on bad input.
  */
+/**
+ * Find the actual voicebank directory inside an extracted archive: the first
+ * directory (shallowest) containing `dsconfig.yaml`. Third-party zips either
+ * put dsconfig.yaml at the root or nest one folder (e.g. Lianhua ships
+ * `Lianhua_DiffSinger_v2.1.50_beta/dsconfig.yaml`); both are handled here.
+ */
+async function findVoicebankDir(base, depth = 0) {
+  if (existsSync(join(base, 'dsconfig.yaml'))) return base
+  if (depth >= 3 || !existsSync(base)) return null
+  for (const entry of await readdir(base, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const found = await findVoicebankDir(join(base, entry.name), depth + 1)
+    if (found) return found
+  }
+  return null
+}
+
 export async function installVoicebankFromZip(options = {}) {
   const root = singingRoot(options)
   const zipPath = typeof options.zipPath === 'string' ? resolve(options.zipPath.trim()) : ''
@@ -451,42 +468,39 @@ export async function installVoicebankFromZip(options = {}) {
     onProgress: options.onProgress ?? (() => {}),
     extractImpl: options.extractImpl ?? defaultExtract,
   }
-  // The expected digest is fixed to the official value. The override exists
-  // ONLY for the offline test (which uses a tiny fake zip); the HTTP route never
-  // forwards it, so a client can never weaken the check.
-  const expected = options.expectedSha256 ?? VOICEBANK_SHA256
-  ctx.onProgress?.({ phase: 'voicebank-verify', message: 'verifying official SHA-256', received: 0, total: info.size })
-  const digest = await sha256File(zipPath)
-  if (digest !== expected) {
-    const failure = new Error(
-      `voicebank SHA-256 mismatch: expected ${expected}, got ${digest}. ` +
-        'The file is not the official Qixuan v2.7.0 zip — redownload it from one of the official sources.',
-    )
-    failure.code = 'SHA256_MISMATCH'
-    failure.expected = expected
-    failure.actual = digest
-    throw failure
-  }
+  // No checksum / whitelist here on purpose (user request): a locally supplied
+  // zip may be ANY third-party DiffSinger bank with no published digest. Only
+  // basic input validation above and a dsconfig.yaml check after extraction.
+  ctx.onProgress?.({ phase: 'voicebank-extract', message: 'extracting voicebank', received: 0, total: info.size })
+  const vault = join(root, 'voicebank')
+  await mkdir(vault, { recursive: true })
+  const staging = join(root, '.voicebank-stage')
+  await rm(staging, { recursive: true, force: true })
+  await mkdir(staging, { recursive: true })
+  await ctx.extractImpl(zipPath, staging, { ...ctx, phase: 'voicebank-extract' })
 
-  const name = options.voicebank ?? DEFAULT_VOICEBANK_DIR
+  // dsconfig.yaml is the only validity signal; whether the bank carries its own
+  // vocoder is left to the user to hear/test — we never reject on that.
+  const extracted = await findVoicebankDir(staging)
+  if (!extracted) {
+    await rm(staging, { recursive: true, force: true })
+    throw Object.assign(new Error('no DiffSinger voicebank found in the zip (no dsconfig.yaml)'), {
+      code: 'BAD_ARCHIVE',
+    })
+  }
+  const fallbackName = basename(zipPath).replace(/\.(zip|oudep)$/i, '')
+  const name = options.voicebank ?? (extracted === staging ? fallbackName : basename(extracted))
   const bankDir = voicebankDir(root, name)
   if (existsSync(join(bankDir, 'dsconfig.yaml'))) {
+    await rm(staging, { recursive: true, force: true })
     throw Object.assign(new Error('voicebank already installed; remove it first to reinstall'), {
       code: 'ALREADY_INSTALLED', path: bankDir,
     })
   }
-  ctx.onProgress?.({ phase: 'voicebank-extract', message: 'extracting voicebank and bundled vocoder' })
-  await mkdir(join(root, 'voicebank'), { recursive: true })
-  await ctx.extractImpl(zipPath, join(root, 'voicebank'), { ...ctx, phase: 'voicebank-extract' })
-
-  // The bundled vocoder is what makes this zip self-sufficient; confirm both
-  // markers landed so a bad archive never reports success.
-  if (!existsSync(join(bankDir, 'dsconfig.yaml')) || !existsSync(join(bankDir, 'dsvocoder', 'vocoder.yaml'))) {
-    const failure = new Error('extracted voicebank is missing dsconfig.yaml or its bundled dsvocoder/vocoder.yaml')
-    failure.code = 'BAD_ARCHIVE'
-    throw failure
-  }
-  return singingStatus({ root, voicebank: name })
+  await mkdir(vault, { recursive: true })
+  await rename(extracted, bankDir)
+  await rm(staging, { recursive: true, force: true })
+  return { ...(await singingStatus({ root, voicebank: name })), name }
 }
 
 export const __singingInstallTest = {

@@ -83,16 +83,19 @@ function fakeExtract(archive, dest, ctx) {
     return mkdir(dest, { recursive: true }).then(() =>
       writeFile(join(dest, process.platform === 'win32' ? 'python.exe' : 'python'), 'fake'))
   }
-  if (name.includes('Qixuan')) {
-    // The official zip carries its own vocoder — mimic that exactly.
-    const bank = join(dest, 'Qixuan_v2.7.0_DiffSinger_OpenUtau')
-    return (async () => {
+  // Any voicebank zip: nest one folder named after the zip (like Lianhua /
+  // Qixuan both do) containing dsconfig.yaml. Vocoder is optional and driven
+  // by ctx.withVocoder so a third-party bank without one can be exercised.
+  const folder = name.replace(/\.(zip|oudep)$/i, '')
+  const bank = join(dest, folder)
+  return (async () => {
+    await mkdir(bank, { recursive: true })
+    await writeFile(join(bank, 'dsconfig.yaml'), 'bank')
+    if (ctx.withVocoder !== false) {
       await mkdir(join(bank, 'dsvocoder'), { recursive: true })
-      await writeFile(join(bank, 'dsconfig.yaml'), 'bank')
       await writeFile(join(bank, 'dsvocoder', 'vocoder.yaml'), 'vocoder')
-    })()
-  }
-  throw new Error(`unknown archive ${name}`)
+    }
+  })()
 }
 
 const RUNTIME_BUF = Buffer.from('fake runtime archive payload'.repeat(20))
@@ -288,35 +291,57 @@ await step('voicebank sources expose GitHub / Baidu / Quark links', async () => 
   assert(VOICEBANK_SHA256 === 'fe8ee7c95883d327a2b7facbbe832a7a53e1344918dc791ca83fc23b080341110', 'official sha changed')
 })
 
-await step('install voicebank from a local official zip (bundled vocoder used)', async () => {
+await step('local third-party zip installs WITHOUT any SHA check, nested folder归位', async () => {
   const zipRoot = join(testDir, 'local-zip')
   await rm(zipRoot, { recursive: true, force: true })
   await mkdir(zipRoot, { recursive: true })
-  const zip = join(zipRoot, VOICEBANK_FILE)
-  await writeFile(zip, BANK_BUF) // content hash is our fake "official" digest
+  // A made-up third-party bank with arbitrary content (NOT the Qixuan digest).
+  const zip = join(zipRoot, 'Lianhua_DiffSinger_v2.1.50_beta.zip')
+  await writeFile(zip, Buffer.from('some third-party bank bytes, no official digest'))
   const events = []
   const status = await installVoicebankFromZip({
-    root: zipRoot, zipPath: zip, expectedSha256: sha(BANK_BUF),
-    extractImpl: fakeExtract, onProgress: (e) => events.push(e),
+    root: zipRoot, zipPath: zip, extractImpl: fakeExtract, onProgress: (e) => events.push(e),
   })
+  assert(status.name === 'Lianhua_DiffSinger_v2.1.50_beta', `name wrong: ${status.name}`)
   assert(status.voicebank.installed, 'voicebank not installed from local zip')
-  assert(status.vocoder.installed, 'bundled vocoder not detected after local install')
-  assert(existsSync(join(zipRoot, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau', 'dsconfig.yaml')), 'dsconfig missing')
-  assert(events.some((e) => e.phase === 'voicebank-verify'), 'verification phase not reported')
+  // 嵌套一层文件夹被归位到 voicebank/<name>/dsconfig.yaml
+  assert(existsSync(join(zipRoot, 'voicebank', 'Lianhua_DiffSinger_v2.1.50_beta', 'dsconfig.yaml')), 'nested bank not归位')
+  // listSingingVoices 能扫到，下拉框可见
+  const voices = await listSingingVoices({ root: zipRoot })
+  assert(voices.voices.some((v) => v.name === 'Lianhua_DiffSinger_v2.1.50_beta'), 'voicebank not discoverable')
+  assert(existsSync(join(zipRoot, '.voicebank-stage')) === false, 'staging dir should be cleaned')
 })
 
-await step('local zip with wrong SHA-256 is rejected before extraction', async () => {
-  const badRoot = join(testDir, 'local-zip-bad')
+await step('local zip WITHOUT dsvocoder still installs (only dsconfig.yaml required)', async () => {
+  const novoc = join(testDir, 'local-novoc')
+  await rm(novoc, { recursive: true, force: true })
+  await mkdir(novoc, { recursive: true })
+  const zip = join(novoc, 'MyCustomBank.zip')
+  await writeFile(zip, Buffer.from('custom bank no vocoder'))
+  const status = await installVoicebankFromZip({
+    root: novoc, zipPath: zip,
+    extractImpl: (archive, dest, ctx) => fakeExtract(archive, dest, { ...ctx, withVocoder: false }),
+  })
+  assert(status.voicebank.installed, 'bank without vocoder must still install')
+  assert(existsSync(join(novoc, 'voicebank', 'MyCustomBank', 'dsconfig.yaml')), 'dsconfig missing')
+  assert(existsSync(join(novoc, 'voicebank', 'MyCustomBank', 'dsvocoder', 'vocoder.yaml')) === false, 'should not have vocoder')
+})
+
+await step('local zip with no dsconfig.yaml anywhere is rejected (BAD_ARCHIVE)', async () => {
+  const badRoot = join(testDir, 'local-bad')
   await rm(badRoot, { recursive: true, force: true })
   await mkdir(badRoot, { recursive: true })
-  const zip = join(badRoot, VOICEBANK_FILE)
-  await writeFile(zip, Buffer.from('tampered'))
+  const zip = join(badRoot, 'NotABank.zip')
+  await writeFile(zip, Buffer.from('garbage'))
   let error = null
   try {
-    await installVoicebankFromZip({ root: badRoot, zipPath: zip, extractImpl: fakeExtract })
+    await installVoicebankFromZip({
+      root: badRoot, zipPath: zip,
+      extractImpl: () => Promise.resolve(), // extracts nothing
+    })
   } catch (e) { error = e }
-  assert(error && error.code === 'SHA256_MISMATCH', `expected SHA256_MISMATCH, got ${error?.code}: ${error?.message}`)
-  assert(!existsSync(join(badRoot, 'voicebank')), 'a rejected zip must not be extracted')
+  assert(error && error.code === 'BAD_ARCHIVE', `expected BAD_ARCHIVE, got ${error?.code}: ${error?.message}`)
+  assert(existsSync(join(badRoot, '.voicebank-stage')) === false, 'staging must be cleaned on failure')
 })
 
 await step('GET singing/sources and POST singing/install-zip through the routes', async () => {
