@@ -86,32 +86,14 @@ dsh plugin --profile desktop add dsh-any-audio
 
 If DSH boots a different profile, replace `desktop` with that profile name. Restart DSH once after installing so it picks up the plugin.
 
-Then open the **AnyAudio** page in DSH Settings to install a sound source (GeneralUser GS is the default suggestion), switch the speech engine and adjust mixing defaults. No SoundFont and no sound pack is bundled with the package. Singing is installed separately from the **Singing** tab — see [Singing](#singing).
+On a fresh install, opening a new conversation shows a six-step guide: welcome, install a sound source, install a sound pack, pick the narration engine, install the singing engine, meet the clip bay. Every step can be skipped, and **Settings → AnyAudio → Advanced → Replay the guide** brings it back.
 
-On a fresh install, opening a new conversation shows a five-step guide: welcome, install a sound source, install a sound pack, pick the narration engine, meet the clip bay. Every step can be skipped, and **Settings → AnyAudio → Advanced → Replay the guide** brings it back.
+The package bundles no audio resources; they are downloaded and installed on first use. Default suggestions:
 
-A sound pack is a library of real recordings, installed once and shared by every project. The recommended BaseSFX pack (237 sounds, CC0) has its download links on step 3 of the guide and on the **Sound effects** tab: download the archive, unpack it, and paste the unpacked `BaseSFX` folder into **Install**.
-
-### From source
-
-For local development, install from a clone instead of the registry:
-
-```bash
-git clone https://github.com/cloudoyx/any-audio.git
-cd any-audio
-npm install && npm run font
-dsh plugin --profile desktop add "<absolute path to the cloned folder>"
-```
-
-The path must be absolute (on Windows, `D:/any-audio` style), and DSH needs a restart once after adding it. `npm run font` downloads both suggested banks (about 72 MB) into the shared sound library, which is handy when you want the banks ready before opening Settings.
-
-The browser half is generated: edit the sources under `src/client/` and run `npm run build` to regenerate the single bundle in `lib/client.js` that DSH loads. Installing from the registry ships that file prebuilt, so no build step is needed there — only a clone does.
-
-A clone also gives you the headless renderer, useful for iterating on a score without an agent:
-
-```bash
-node scripts/anyaudio-cli.mjs render score.json out.wav
-```
+- Sound source: GeneralUser GS (general-purpose instruments, about 32 MB)
+- Sound pack: BaseSFX (237 real recordings, about 161 MB)
+- TTS engine: Edge (MiMo-TTS is also available, currently free)
+- Singing voicebank: Qixuan (sweet female voice, about 401 MB)
 
 ## Quick start
 
@@ -126,6 +108,10 @@ You can adjust musical detail and mixing behaviour as you go:
 For a song, state the brief and call it directly:
 
 > Write me a Japanese RPG battle theme, loopable, 30 to 60 seconds. Drums, electric guitar and strings.
+
+Or have the lyrics sung:
+
+> Sing the chorus of "Blue and White Porcelain" with Qixuan — the "the sky is clear, the rain is fine" lines.
 
 You can even build an audiobook from scratch:
 
@@ -190,11 +176,6 @@ Nothing is bundled in the npm package; the first use needs a download and instal
 
 Measured speed: a three-minute song takes about 247 s on CPU and about 28.5 s on GPU — roughly 8.7× faster.
 
-### Known singing limits
-
-- Final vocal quality is set by the voicebank and how it is tuned; the plugin only provides the install channel, the interface and the way to use it.
-- Only the Qixuan voicebank is guaranteed to work at a basic level; other banks are accepted through the open interface but loading and vocal quality are not guaranteed, and need your own tuning.
-
 ## Known limitations
 
 - **Project size caps** — a project is at most 15 minutes long and 20 tracks wide; going past either is an error.
@@ -203,7 +184,8 @@ Measured speed: a three-minute song takes about 247 s on CPU and about 28.5 s on
 - **SoundFont only** — no SFZ, Kontakt or VST; converting other source formats is out of scope for this version.
 - **No per-note envelope control** — attack and release come from the preset; use short notes with gaps for staccato and velocity plus expression for dynamics.
 - **Chinese instruments are GM approximations** — `guzheng` maps to Koto, `dizi` to Flute, `erhu` to Fiddle; dedicated banks will do better.
-- **Singing has its own limits** — see the known limits in the [Singing](#singing) section.
+- **Singing quality depends on the voicebank and tuning** — the plugin only provides the install channel, interface and usage.
+- **Only the Qixuan voicebank is guaranteed** to work at a basic level; other banks are accepted through the open interface but loading and quality are not guaranteed, and need your own tuning.
 
 ## Support the project
 
