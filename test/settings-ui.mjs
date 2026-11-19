@@ -628,6 +628,29 @@ step('every dropdown goes through the shared Select', () => {
   assert.deepEqual(offenders, [], `a raw <select> bypasses the theme fix: ${offenders.join(', ')}`)
 })
 
+step('the singing tab shows the GPU component status and CPU hint', () => {
+  const card = singingTree.children.find((element) => element?.props?.title === '选设备')
+  assert.ok(card, 'the device card is missing')
+  const body = text(card)
+  assert.ok(body.includes('显卡组件'), 'the GPU component status is missing')
+  assert.ok(body.includes('未安装'), 'the not-installed state is missing')
+  assert.ok(body.includes('无论选什么，实际都按 CPU 运行'), 'the CPU hint is missing')
+})
+
+step('the device dropdown routes through chooseDevice', () => {
+  const settings = readFileSync(join(root, 'src', 'client', 'settings.js'), 'utf8')
+  assert.ok(/onChange: value => void chooseDevice\(value\)/.test(settings), 'the device dropdown must use chooseDevice')
+  assert.ok(settings.includes("api('/singing/gpu-status')"), 'the page must read GPU status from the host')
+  assert.ok(settings.includes("api('/singing/gpu-install', { method: 'POST', body: {} })"), 'the page must POST the GPU install route')
+  assert.ok(/kind=singing-gpu-install/.test(settings), 'the install job must be rediscovered with the right kind')
+})
+
+step('an installed GPU component changes the device copy', () => {
+  const settings = readFileSync(join(root, 'src', 'client', 'settings.js'), 'utf8')
+  assert.ok(settings.includes("t('「自动」和「显卡」都走显卡，「CPU」仍走 CPU。')"), 'the installed copy must say auto/GPU use the card')
+  assert.ok(settings.includes("t('显卡组件安装中，当前按 CPU 运行。')"), 'the installing copy must say it is running on CPU')
+})
+
 step('every t() key has an English translation', () => {
   // A key with no EN entry silently stays Chinese in English mode, which is
   // invisible to anyone testing in Chinese.

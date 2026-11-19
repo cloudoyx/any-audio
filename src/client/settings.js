@@ -443,6 +443,8 @@ function SingingTab({ state, reload, notify }) {
   const [status, setStatus] = useState(null)
   const [voices, setVoices] = useState([])
   const [job, setJob] = useState(null)
+  const [gpuStatus, setGpuStatus] = useState(null)
+  const [gpuJob, setGpuJob] = useState(null)
   const [busy, setBusy] = useState('')
   const [zipPath, setZipPath] = useState('')
   const voicebankSources = useVoicebankSources()
@@ -462,8 +464,15 @@ function SingingTab({ state, reload, notify }) {
       setVoices([])
     }
   }, [])
+  const loadGpuStatus = useCallback(async () => {
+    try {
+      setGpuStatus(await api('/singing/gpu-status'))
+    } catch (error) {
+      setGpuStatus({ ok: false, error: error.message })
+    }
+  }, [])
 
-  useEffect(() => { void loadStatus(); void loadVoices() }, [loadStatus, loadVoices])
+  useEffect(() => { void loadStatus(); void loadVoices(); void loadGpuStatus() }, [loadStatus, loadVoices, loadGpuStatus])
   useEffect(() => {
     if (!form && state?.config?.singing) setForm(JSON.parse(JSON.stringify(state.config.singing)))
   }, [state, form])
@@ -498,6 +507,34 @@ function SingingTab({ state, reload, notify }) {
     return () => clearInterval(timer)
   }, [job, loadStatus, loadVoices, reload, notify])
 
+  // The GPU install is its own host job: it survives closing this page, so the
+  // running job has to be rediscovered when settings opens again.
+  useEffect(() => {
+    let cancelled = false
+    api('/jobs/active?kind=singing-gpu-install')
+      .then((data) => { if (!cancelled && data.job) setGpuJob(data.job) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  useEffect(() => {
+    if (!gpuJob || gpuJob.status !== 'running') return undefined
+    const timer = setInterval(async () => {
+      try {
+        const data = await api(`/jobs?id=${encodeURIComponent(gpuJob.id)}`)
+        setGpuJob(data.job)
+        if (data.job.status === 'done') {
+          notify(t('显卡组件已安装'))
+          await loadGpuStatus()
+        }
+        if (data.job.status === 'error') notify(jobFailure(data.job), 'error')
+      } catch (error) {
+        notify(error.message, 'error')
+        setGpuJob(null)
+      }
+    }, 700)
+    return () => clearInterval(timer)
+  }, [gpuJob, loadGpuStatus, notify])
+
   if (!form) return null
 
   async function save(patch) {
@@ -526,6 +563,27 @@ function SingingTab({ state, reload, notify }) {
     } finally {
       setBusy('')
     }
+  }
+
+  // Choosing the GPU is a commitment: the component is a ~216 MB download and
+  // takes a while. Ask first, and say plainly that until it finishes every
+  // request still runs on CPU and that closing this page will not stop it.
+  async function chooseDevice(value) {
+    if (value === 'cuda' && !gpuInstalled && !gpuInstalling) {
+      const ok = window.confirm(t('选显卡需要先下载显卡组件（约 216 MB），耗时较久。下载期间仍按 CPU 运行；现在关闭设置页也会在后台继续。现在开始下载？'))
+      if (!ok) return
+      setBusy('gpu-install')
+      try {
+        const data = await api('/singing/gpu-install', { method: 'POST', body: {} })
+        setGpuJob(data.job)
+        notify(data.reused ? t('已有一个下载任务在进行') : t('显卡组件下载已开始，关掉设置页后仍会继续'))
+      } catch (error) {
+        notify(error.message, 'error')
+      } finally {
+        setBusy('')
+      }
+    }
+    await save({ device: value })
   }
 
   // Install the same official zip the three links serve, from a local copy.
@@ -566,6 +624,9 @@ function SingingTab({ state, reload, notify }) {
   // The configured bank must remain selectable even before it is installed, so
   // the dropdown never silently jumps to a different value on first render.
   const voiceOptions = [...new Set([form.voicebank, ...voices.map((voice) => voice.name)].filter(Boolean))]
+  const gpuInstalled = Boolean(gpuStatus?.ok && gpuStatus.installed)
+  const gpuInstalling = Boolean(gpuJob && gpuJob.status === 'running')
+  const gpuPercent = gpuJob && gpuJob.total ? (gpuJob.received / gpuJob.total) * 100 : 0
   const devices = [
     { value: 'auto', label: t('自动') },
     { value: 'cpu', label: 'CPU' },
@@ -627,16 +688,36 @@ function SingingTab({ state, reload, notify }) {
         ),
       ),
     ),
-    h(Card, { title: t('选设备'), desc: t('自动会在有显卡时优先用显卡，否则用 CPU；设备变更会重启唱歌进程。') },
+    h(Card, { title: t('选设备'), desc: t('装好显卡组件后，「自动」和「显卡」都走显卡，只有「CPU」走 CPU；设备变更会重启唱歌进程。') },
       h('div', { style: S.row },
         h(Field, { label: t('推理设备') },
           h(Select, {
             value: form.device,
-            onChange: value => void save({ device: value }),
+            onChange: value => void chooseDevice(value),
             options: devices,
           }),
         ),
       ),
+      h('div', { style: S.row },
+        h('span', { style: S.label }, t('显卡组件')),
+        h('span', { style: S.chip }, gpuInstalling ? t('安装中') : gpuInstalled ? t('已安装') : t('未安装')),
+        gpuStatus?.ok && gpuStatus.version ? h('span', { style: S.mono }, t('版本：{0}', gpuStatus.version)) : null,
+      ),
+      gpuInstalled
+        ? h('div', { style: S.desc }, t('「自动」和「显卡」都走显卡，「CPU」仍走 CPU。'))
+        : h('div', { style: S.desc }, t('未装显卡组件时，无论选什么，实际都按 CPU 运行。')),
+      gpuInstalling
+        ? h(Fragment, null,
+          h('div', { style: S.desc }, t('显卡组件安装中，当前按 CPU 运行。')),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+            h('div', { style: { ...S.row, justifyContent: 'space-between' } },
+              h('span', { style: S.label }, `${t('正在安装')}${gpuJob.total ? ` ${Math.round(gpuPercent)}%` : ''}${gpuJob.message ? ` · ${gpuJob.message}` : ''}`),
+              gpuJob.total ? h('span', { style: S.mono }, `${bytes(gpuJob.received)} / ${bytes(gpuJob.total)}`) : null,
+            ),
+            h('div', { style: S.bar }, h('div', { style: S.barFill(gpuPercent) })),
+          ),
+        )
+        : null,
     ),
   )
 }
