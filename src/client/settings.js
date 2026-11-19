@@ -664,7 +664,7 @@ function SingingTab({ state, reload, notify }) {
         h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
       ) : null,
     ),
-    h(Card, { title: t('第二步：下载声库包'), desc: t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。') },
+    h(Card, { title: t('第二步：下载声库包'), desc: t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后到第三步选本地文件安装。') },
       h(VoicebankDownloadLinks, { sources: voicebankSources }),
     ),
     h(Card, { title: t('第三步：安装声库包'), desc: t('填一个下载好的官方 .zip 文件的完整路径（绝对路径）。') },

@@ -212,7 +212,7 @@ export function SingingStep({ status, job, note, busy, sources, onInstall, onClo
     ) : null,
     // Step 2: download the voicebank from one of the three official sources.
     h('p', { style: S.desc }, t('第二步：下载声库包')),
-    h('p', { style: S.desc }, t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。')),
+    h('p', { style: S.desc }, t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后到设置页选本地文件安装。')),
     h(VoicebankDownloadLinks, { sources }),
     h('p', { style: S.desc }, t('声库包下载完成后，进入设置页 → AnyAudio → 唱歌，安装声库包。')),
     note ? h(Notice, null, note) : null,

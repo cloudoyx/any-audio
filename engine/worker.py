@@ -256,6 +256,10 @@ def main(argv):
         send({"type": "fatal", "error": f"声库目录不存在：{bank}"})
         return 2
     requested = argv[2] if len(argv) > 2 else "auto"
+    # Resolve auto/cuda against the actual runtime: only upgrade to cuda when the
+    # CUDA execution provider is really available (gpu component installed).
+    # Without it, every choice runs CPU — matches the settings-page promise.
+    requested = prepare_device(requested)
 
     singer = Singer(bank, requested)
     try:
