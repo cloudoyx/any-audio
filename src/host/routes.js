@@ -26,6 +26,7 @@ import {
   installVoicebankFromZip, listSingingVoices, runSingingInstall,
   singingRoot, singingStatus, VOICEBANK_SOURCES,
 } from '../audio/singing-install.js'
+import { gpuStatus, installGpuRuntime } from '../audio/singing-gpu.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
@@ -58,6 +59,15 @@ export function setSingingInstallRunner(fn) {
 let voicebankZipInstaller = installVoicebankFromZip
 export function setVoicebankZipInstaller(fn) {
   voicebankZipInstaller = typeof fn === 'function' ? fn : installVoicebankFromZip
+}
+// Injectable GPU installer/probe for offline route tests (same pattern).
+let gpuInstallRunner = installGpuRuntime
+export function setGpuInstallRunner(fn) {
+  gpuInstallRunner = typeof fn === 'function' ? fn : installGpuRuntime
+}
+let gpuStatusProbe = gpuStatus
+export function setGpuStatusProbe(fn) {
+  gpuStatusProbe = typeof fn === 'function' ? fn : gpuStatus
 }
 
 function publicJob(job) {
@@ -295,6 +305,38 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     } catch (error) {
       return { ok: false, error: describeError(error), code: error?.code ?? 'INSTALL_FAILED' }
     }
+  }
+
+  /** Status of the optional CUDA acceleration component. */
+  async function singingGpuStatusRoute() {
+    try {
+      return { ok: true, ...(await gpuStatusProbe()) }
+    } catch (error) {
+      return { ok: false, error: describeError(error) }
+    }
+  }
+
+  /** Start (or join) a GPU-component install job (measures mirrors, then installs). */
+  async function singingGpuInstallRoute(body) {
+    const running = runningJob('singing-gpu-install')
+    if (running) return { ok: true, job: publicJob(running), reused: true }
+    const job = startJob('singing-gpu-install', async (current) => {
+      current.message = 'preparing'
+      const result = await gpuInstallRunner({
+        signal: current.abort.signal,
+        onProgress: (event) => {
+          if (event.received !== undefined) {
+            current.received = event.received
+            current.total = event.total ?? 0
+          }
+          if (event.message) current.message = event.message
+          else if (event.phase) current.message = event.phase
+        },
+      })
+      current.message = 'ready'
+      return result
+    }, 'singing GPU component')
+    return { ok: true, job: publicJob(job), reused: false }
   }
 
   /** Start (or join) a singing-environment install job. */
@@ -818,6 +860,13 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     if (method === 'GET' && path === `${PREFIX}/singing/sources`) {
       return json(res, 200, singingSourcesRoute())
     }
+    if (method === 'GET' && path === `${PREFIX}/singing/gpu-status`) {
+      try {
+        return json(res, 200, await singingGpuStatusRoute())
+      } catch (error) {
+        return json(res, 500, { ok: false, error: describeError(error) })
+      }
+    }
     if (method === 'GET' && path === `${PREFIX}/credentials`) return json(res, 200, await credentialsStatus({ provider: url.searchParams.get('provider') ?? undefined }))
     if (method === 'GET' && path === `${PREFIX}/sources/presets`) {
       try {
@@ -854,6 +903,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       if (path === `${PREFIX}/config/reset`) return json(res, 200, await configReset())
       if (path === `${PREFIX}/singing/install`) return json(res, 200, await singingInstallRoute(body))
       if (path === `${PREFIX}/singing/install-zip`) return json(res, 200, await singingInstallZipRoute(body))
+      if (path === `${PREFIX}/singing/gpu-install`) return json(res, 200, await singingGpuInstallRoute(body))
       if (path === `${PREFIX}/sources/install`) return json(res, 200, await installSource(body))
       if (path === `${PREFIX}/sources/verify`) return json(res, 200, await verifySource(body))
       if (path === `${PREFIX}/sources/remove`) return json(res, 200, await removeSource(body))
