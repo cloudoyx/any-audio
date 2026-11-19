@@ -2,15 +2,14 @@
  * Local singing environment installer — plan M4, route B (build a minimal
  * runtime ourselves instead of shipping the 1 GB generic base).
  *
- * Two artefacts are installed under one machine-wide root
- * (`~/.dsh/anyaudio/singing`, overridable by ANYAUDIO_SINGING_DIR):
- *   1. a redistributable CPython 3.12 runtime (python-build-standalone)
- *   2. the Qixuan voicebank (official zip from GitHub or a local copy)
- * The official voicebank zip ALREADY CONTAINS its neural vocoder in `dsvocoder/`
- * (verified in stage 1), so no separate vocoder download is needed — doing one
- * would only add a stalled GitHub transfer for users in mainland China.
- * Then a fixed dependency list is pip-installed into that runtime so the
- * exact `runtime/python.exe` M1 launches can import diffsinger_utau.
+ * Installing the runtime and installing a voicebank are deliberately separate:
+ * this module installs a redistributable CPython 3.12 runtime under one
+ * machine-wide root (`~/.dsh/anyaudio/singing`, overridable by
+ * ANYAUDIO_SINGING_DIR) plus a fixed pip dependency list, so the exact
+ * `runtime/python.exe` M1 launches can import diffsinger_utau. No voicebank is
+ * downloaded here — the user picks a source (GitHub / net-disk) or installs a
+ * local official zip themselves, so a user who cannot reach GitHub is never
+ * stuck behind a 400 MB download. See installVoicebankFromZip for that step.
  *
  * Everything that touches the network, the shell or a fixed path is an
  * injectable option so the settings test can drive the whole flow against a
@@ -66,10 +65,6 @@ export const PIP_GROUPS = [
  * `defaultManifest` is a function so callers can deep-clone and override URLs
  * for the offline test without mutating shared state.
  */
-/** Official SHA-256 of the Qixuan zip; also verifies a locally downloaded copy. */
-export const VOICEBANK_SHA256 = 'fe8ee7c95883d327a2b7facbbe832a7a53e1344918dc791ca83fc23b080341110'
-export const VOICEBANK_FILE = 'Qixuan_v2.7.0_DiffSinger_OpenUtau.zip'
-
 /** Public download sources for the official voicebank zip. The net-disk links
  *  are the public share links supplied by the user — no credentials. */
 export const VOICEBANK_SOURCES = [
@@ -80,17 +75,11 @@ export const VOICEBANK_SOURCES = [
 
 export function defaultManifest() {
   const runtime = `${GITHUB}/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.12.16%2B20261110-x86_64-pc-windows-msvc-install_only.tar.gz`
-  const bank = VOICEBANK_SOURCES[0].url
   return {
     runtime: {
       file: 'cpython-3.12.16+20261110-x86_64-pc-windows-msvc-install_only.tar.gz',
       sha256: 'e23fe5b16926de1d81661b1a97352e89fb167549c55a6825796ccd0f32ec7f1b',
       urls: [PROXIES[0] + runtime, runtime],
-    },
-    voicebank: {
-      file: 'Qixuan_v2.7.0_DiffSinger_OpenUtau.zip',
-      sha256: 'fe8ee7c95883d327a2b7facbbe832a7a53e1344918dc791ca83fc23b08034110',
-      urls: [PROXIES[0] + bank, PROXIES[1] + bank, bank],
     },
   }
 }
@@ -353,8 +342,11 @@ export async function listSingingVoices(options = {}) {
 }
 
 /**
- * Install everything. Idempotent at the file level: a downloaded, checksum-
- * verified archive is reused, so a retry resumes instead of restarting.
+ * Install the singing RUNTIME only (45 MB CPython + fixed pip dependencies).
+ * The voicebank is intentionally NOT downloaded here: the user picks a source
+ * (GitHub / Baidu / Quark) or installs a local official zip themselves, so a
+ * user who cannot reach GitHub is never stuck behind a 400 MB download.
+ * Idempotent at the file level: a verified runtime archive is reused.
  */
 export async function runSingingInstall(options = {}) {
   const root = singingRoot(options)
@@ -388,23 +380,9 @@ export async function runSingingInstall(options = {}) {
     note('runtime', 'runtime already present, skipping')
   }
 
-  // 2. Voicebank: download → extract into `voicebank/`.
-  const bankArchive = join(downloads, manifest.voicebank.file)
-  const bankDir = voicebankDir(root, options.voicebank ?? DEFAULT_VOICEBANK_DIR)
-  if (!existsSync(join(bankDir, 'dsconfig.yaml'))) {
-    await downloadArtifact(manifest.voicebank, bankArchive, { ...ctx, phase: 'voicebank' })
-    note('voicebank-extract', 'extracting voicebank')
-    await mkdir(join(root, 'voicebank'), { recursive: true })
-    await ctx.extractImpl(bankArchive, join(root, 'voicebank'), { ...ctx, phase: 'voicebank-extract' })
-  } else {
-    note('voicebank', 'voicebank already present, skipping')
-  }
+  // Voicebank is intentionally NOT installed here — see the function doc.
 
-  // The official voicebank zip already carries dsvocoder/ (with the neural
-  // vocoder onnx) — no separate vocoder download. Just confirm it came through.
-  note('vocoder', `using bundled vocoder at ${join(bankDir, 'dsvocoder')}`)
-
-  // 3. Fixed-version dependencies into the exact interpreter M1 launches.
+  // 2. Fixed-version dependencies into the exact interpreter M1 launches.
   if (options.pipImpl) {
     note('pip', 'pip install delegated (test mode)')
     for (const group of options.pipGroups ?? PIP_GROUPS) {
@@ -418,8 +396,10 @@ export async function runSingingInstall(options = {}) {
   }
 
   const status = await singingStatus({ root, voicebank: options.voicebank })
-  if (!status.ready) {
-    const failure = new Error('install finished but artefacts are incomplete')
+  // This job only promises the runtime + pip deps; the voicebank is a separate
+  // user-driven step, so its absence must NOT fail the install.
+  if (!status.runtime.installed) {
+    const failure = new Error('install finished but the runtime is incomplete')
     failure.code = 'INSTALL_INCOMPLETE'
     failure.status = status
     throw failure
@@ -428,19 +408,9 @@ export async function runSingingInstall(options = {}) {
 }
 
 /**
- * Install the voicebank from a zip the user downloaded themselves (net-disk or
- * GitHub). Verifies the official SHA-256 before extracting anything, so a
- * corrupt / tampered / wrong file can never reach the voicebank folder. The
- * official zip already contains dsvocoder/, so no separate vocoder download.
- *
- * Returns the machine-wide status after extraction. Throws a tagged error
- * (`code`) with a clear, translated-by-the-client message on bad input.
- */
-/**
  * Find the actual voicebank directory inside an extracted archive: the first
  * directory (shallowest) containing `dsconfig.yaml`. Third-party zips either
- * put dsconfig.yaml at the root or nest one folder (e.g. Lianhua ships
- * `Lianhua_DiffSinger_v2.1.50_beta/dsconfig.yaml`); both are handled here.
+ * put dsconfig.yaml at the root or nest one folder; both are handled here.
  */
 async function findVoicebankDir(base, depth = 0) {
   if (existsSync(join(base, 'dsconfig.yaml'))) return base
@@ -453,6 +423,14 @@ async function findVoicebankDir(base, depth = 0) {
   return null
 }
 
+/**
+ * Install a voicebank from a zip the user downloaded themselves (net-disk or
+ * GitHub). No checksum / whitelist: any third-party DiffSinger bank is accepted;
+ * only dsconfig.yaml decides validity, and a bank missing its vocoder simply
+ * will not sing until the user supplies one. The extracted bank is moved under
+ * `voicebank/` so the settings dropdown can find it. Throws a tagged error
+ * (`code`) with a clear message on bad input.
+ */
 export async function installVoicebankFromZip(options = {}) {
   const root = singingRoot(options)
   const zipPath = typeof options.zipPath === 'string' ? resolve(options.zipPath.trim()) : ''

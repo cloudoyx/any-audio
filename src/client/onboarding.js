@@ -199,9 +199,9 @@ export function SingingStep({ status, job, note, busy, sources, onInstall, onClo
         h('p', { style: S.desc }, ready ? t('唱歌环境已就绪') : t('唱歌环境尚未就绪')),
       )
       : h('p', { style: S.desc }, status?.error ? t('状态检测失败：{0}', status.error) : t('正在检测…')),
-    h('p', { style: S.desc }, t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。')),
-    h(VoicebankDownloadLinks, { sources }),
-    h('p', { style: S.desc }, t('选好后下载，再把 zip 的完整路径填到下面安装。')),
+    // Step 1: install the runtime. The button moved up here with its progress.
+    h('p', { style: S.desc }, t('第一步：安装唱歌环境')),
+    ready || (job && job.status !== 'error') ? null : h(Btn, { kind: 'primary', disabled: installing || busy === 'singing', onClick: onInstall }, t('安装唱歌环境')),
     job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
       h('div', { style: { ...S.row, justifyContent: 'space-between' } },
         h('span', { style: S.label }, job.status === 'running'
@@ -210,9 +210,13 @@ export function SingingStep({ status, job, note, busy, sources, onInstall, onClo
       ),
       h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
     ) : null,
+    // Step 2: download the voicebank from one of the three official sources.
+    h('p', { style: S.desc }, t('第二步：下载声库包')),
+    h('p', { style: S.desc }, t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。')),
+    h(VoicebankDownloadLinks, { sources }),
+    h('p', { style: S.desc }, t('声库包下载完成后，进入设置页 → AnyAudio → 唱歌，安装声库包。')),
     note ? h(Notice, null, note) : null,
     h(Actions, null,
-      ready || (job && job.status !== 'error') ? null : h(Btn, { kind: 'primary', disabled: installing || busy === 'singing', onClick: onInstall }, t('下载安装')),
       h(Btn, { onClick: onNext }, ready || job ? t('下一步') : t('跳过')),
     ),
   )

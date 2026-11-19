@@ -340,18 +340,23 @@ step('the singing step sits after narration, is skippable and reuses the shared 
   const finishAt = onboarding.indexOf('step: 6')
   assert.ok(narrationAt > 0 && singingAt > narrationAt && finishAt > singingAt, 'singing must be between narration and finish')
 
-  // Not installed, no job yet: offer Install and a Skip labelled button.
-  const tree = SingingStep({ status: { ok: true, ready: false }, job: null, note: '', busy: '', onInstall: () => {}, onClose: () => {}, onNext: () => {} })
+  // Not installed, no job yet: the step is arranged status → Step 1 install
+  // button → Step 2 download sources → bottom guidance, and is skippable.
+  const tree = SingingStep({ status: { ok: true, ready: false }, job: null, note: '', busy: '', sources: VOICEBANK_SOURCES, onInstall: () => {}, onClose: () => {}, onNext: () => {} })
   const body = text(tree)
   assert.equal(tree.props.title, '装唱歌引擎', 'the singing install step must name itself')
+  assert.ok(body.includes('第一步：安装唱歌环境'), 'step 1 heading is missing')
+  assert.ok(body.includes('第二步：下载声库包'), 'step 2 heading is missing')
   assert.ok(body.includes('声库和声码器'), 'the step must explain what it installs')
-  assert.ok(findClickable(tree, '下载安装'), 'the install button is missing')
+  assert.ok(body.includes('进入设置页 → AnyAudio → 唱歌，安装声库包'), 'the bottom guidance must send the person to Settings')
+  assert.ok(!body.includes('选好后下载，再把 zip 的完整路径填到下面安装'), 'the old zip-path line must be gone from the guide')
+  assert.ok(findClickable(tree, '安装唱歌环境'), 'the install button is missing')
   assert.ok(findClickable(tree, '跳过'), 'the step must be skippable')
 
   // The install button calls the injected callback (Guide wires it to the job).
   let installed = false
-  const wired = SingingStep({ status: { ok: true, ready: false }, job: null, note: '', busy: '', onInstall: () => { installed = true }, onClose: () => {}, onNext: () => {} })
-  findClickable(wired, '下载安装').props.onClick()
+  const wired = SingingStep({ status: { ok: true, ready: false }, job: null, note: '', busy: '', sources: VOICEBANK_SOURCES, onInstall: () => { installed = true }, onClose: () => {}, onNext: () => {} })
+  findClickable(wired, '安装唱歌环境').props.onClick()
   assert.equal(installed, true, 'the install button must call onInstall')
 
   // Guide wires that callback to the shared M4 routes, not a second installer.
@@ -531,8 +536,18 @@ const singingState = {
 const singingTree = SingingTab({ state: singingState, reload: () => {}, notify: () => {} })
 const singingText = text(singingTree)
 
-step('the singing tab has status, install, voicebank and device sections', () => {
-  assert.deepEqual(titles(singingTree), ['引擎状态', '安装唱歌环境', '选声库', '选设备', '声库下载来源', '安装本地声库包'])
+step('the singing tab has the six sections in the three-step order', () => {
+  assert.deepEqual(titles(singingTree), ['引擎状态', '第一步：安装唱歌环境', '第二步：下载声库包', '第三步：安装声库包', '选声库', '选设备'])
+})
+
+step('the environment button follows the runtime, not the whole singing readiness', () => {
+  // With a runtime but no voicebank the machine is not "ready", yet the
+  // runtime-install button must still be disabled and say it is installed.
+  // Built bundle is rebuilt after source changes, so read the source contract.
+  const settings = readFileSync(join(root, 'src', 'client', 'settings.js'), 'utf8')
+  assert.ok(/const runtimeInstalled = Boolean\(status\?\.runtime\?\.installed\)/.test(settings), 'runtimeInstalled must be derived from runtime only')
+  assert.ok(/disabled: runtimeInstalled \|\| installing \|\| busy === 'install'/.test(settings), 'the install button must key off runtimeInstalled')
+  assert.ok(/runtimeInstalled \? t\('运行环境已安装'\) : t\('安装'\)/.test(settings), 'the button label must reflect the runtime state')
 })
 
 step('the voicebank sources are GitHub / Baidu / Quark with the exact shared links', () => {

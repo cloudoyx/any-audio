@@ -552,6 +552,10 @@ function SingingTab({ state, reload, notify }) {
   const installing = Boolean(job && job.status === 'running')
   const percent = job && job.total ? (job.received / job.total) * 100 : 0
   const ready = Boolean(status?.ready)
+  // The environment install installs only the runtime now; the voicebank is a
+  // separate step. The button state here must follow the runtime alone, or a
+  // machine with a runtime but no voicebank still looks like "not installed".
+  const runtimeInstalled = Boolean(status?.runtime?.installed)
   const parts = status?.ok
     ? [
       { label: t('运行环境'), ok: Boolean(status.runtime?.installed), detail: status.runtime?.version ? t('版本：{0}', status.runtime.version) : '' },
@@ -581,13 +585,13 @@ function SingingTab({ state, reload, notify }) {
         )
         : h('p', { style: S.desc }, status?.error ? t('状态检测失败：{0}', status.error) : t('正在检测…')),
     ),
-    h(Card, { title: t('安装唱歌环境'), desc: t('一键装好运行环境、绮萱声库与声码器；下载后按官方 SHA-256 校验。') },
+    h(Card, { title: t('第一步：安装唱歌环境'), desc: t('安装运行环境与依赖；声库请在下一步自行下载并安装。') },
       h('div', { style: S.row },
         h(Btn, {
           kind: 'primary',
-          disabled: ready || installing || busy === 'install',
+          disabled: runtimeInstalled || installing || busy === 'install',
           onClick: install,
-        }, ready ? t('本机已安装') : t('安装')),
+        }, runtimeInstalled ? t('运行环境已安装') : t('安装')),
       ),
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
         h('div', { style: { ...S.row, justifyContent: 'space-between' } },
@@ -598,6 +602,19 @@ function SingingTab({ state, reload, notify }) {
         ),
         h('div', { style: S.bar }, h('div', { style: S.barFill(percent) })),
       ) : null,
+    ),
+    h(Card, { title: t('第二步：下载声库包'), desc: t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。') },
+      h(VoicebankDownloadLinks, { sources: voicebankSources }),
+    ),
+    h(Card, { title: t('第三步：安装声库包'), desc: t('填一个下载好的官方 .zip 文件的完整路径（绝对路径）。') },
+      h('div', { style: S.row },
+        h(TextInput, { value: zipPath, onChange: setZipPath, placeholder: t('粘贴声库 zip 的完整路径') }),
+        h(Btn, {
+          kind: 'primary',
+          disabled: !zipPath.trim() || busy === 'zip' || installing,
+          onClick: installZip,
+        }, busy === 'zip' ? t('正在安装声库…') : t('安装 zip')),
+      ),
     ),
     h(Card, { title: t('选声库'), desc: t('列出这台机器上已装的声库；工具调用里显式写的声库优先。') },
       h('div', { style: S.row },
@@ -619,19 +636,6 @@ function SingingTab({ state, reload, notify }) {
             options: devices,
           }),
         ),
-      ),
-    ),
-    h(Card, { title: t('声库下载来源'), desc: t('国外用 GitHub，国内用百度网盘或夸克网盘。三处都是同一个官方原包：下好后选本地文件安装，按官方 SHA-256 校验。') },
-      h(VoicebankDownloadLinks, { sources: voicebankSources }),
-    ),
-    h(Card, { title: t('安装本地声库包'), desc: t('填一个下载好的官方 .zip 文件的完整路径（绝对路径）。') },
-      h('div', { style: S.row },
-        h(TextInput, { value: zipPath, onChange: setZipPath, placeholder: t('粘贴声库 zip 的完整路径') }),
-        h(Btn, {
-          kind: 'primary',
-          disabled: !zipPath.trim() || busy === 'zip' || installing,
-          onClick: installZip,
-        }, busy === 'zip' ? t('正在安装声库…') : t('安装 zip')),
       ),
     ),
   )

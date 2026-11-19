@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import {
   __singingInstallTest, defaultManifest, installVoicebankFromZip, listSingingVoices,
   runSingingInstall, sha256File, singingRoot, singingStatus,
-  VOICEBANK_FILE, VOICEBANK_SHA256, VOICEBANK_SOURCES,
+  VOICEBANK_SOURCES,
 } from '../src/audio/singing-install.js'
 import {
   registerAnyAudioRoutes, setSingingInstallRunner, setVoicebankZipInstaller,
@@ -102,12 +102,10 @@ const RUNTIME_BUF = Buffer.from('fake runtime archive payload'.repeat(20))
 const BANK_BUF = Buffer.from('fake voicebank zip payload'.repeat(40))
 const BUFFER_EMPTY = Buffer.alloc(0)
 
-function localManifest({ runtimeUrl, bankUrl } = {}) {
+function localManifest({ runtimeUrl } = {}) {
   const m = defaultManifest()
   m.runtime.urls = [runtimeUrl]
   m.runtime.sha256 = sha(RUNTIME_BUF)
-  m.voicebank.urls = [bankUrl]
-  m.voicebank.sha256 = sha(BANK_BUF)
   return m
 }
 
@@ -126,20 +124,23 @@ const bankServer = serveBuffer(BANK_BUF)
 const runtimeUrl = await start(runtimeServer.server)
 const bankUrl = await start(bankServer.server)
 
-await step('install from empty dir: runtime + voicebank + vocoder land with markers', async () => {
+await step('install from empty dir: ONLY runtime + pip deps, NO voicebank download', async () => {
   await rm(testDir, { recursive: true, force: true })
   const events = []
   const status = await runSingingInstall({
     root: testDir,
-    manifest: localManifest({ runtimeUrl, bankUrl }),
+    manifest: localManifest({ runtimeUrl }),
     extractImpl: fakeExtract,
     pipImpl: fakePip,
     onProgress: (e) => events.push(e),
   })
-  assert(status.ready === true, 'status.ready must be true after install')
+  // Runtime must be ready; a voicebank is a separate user-driven step.
+  assert(status.runtime.installed === true, 'runtime must be installed')
   assert(existsSync(join(testDir, 'runtime', process.platform === 'win32' ? 'python.exe' : 'python')), 'runtime python missing')
-  assert(existsSync(join(testDir, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau', 'dsconfig.yaml')), 'dsconfig.yaml missing')
-  assert(existsSync(join(testDir, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau', 'dsvocoder', 'vocoder.yaml')), 'vocoder.yaml missing')
+  // No voicebank was downloaded — that is the whole point of the decoupling.
+  assert(bankServer.seen.length === 0, 'the install job must NOT download a voicebank zip')
+  assert(existsSync(join(testDir, 'voicebank')) === false, 'install job must not create a voicebank dir')
+  assert(events.some((e) => String(e.phase).startsWith('runtime')), 'runtime phase not reported')
   assert(events.some((e) => e.received > 0 && e.total >= e.received), 'progress must report received/total')
   assert(pipCalls.length === 2, `expected 2 pip groups, got ${pipCalls.length}`)
   assert(pipCalls.some((c) => c.specs.includes('diffsinger-utau==0.3.8')), 'diffsinger-utau pin missing')
@@ -166,18 +167,14 @@ await step('mirror failure falls back to the next URL', async () => {
   const downUrl = await start(down.server)
   const goodServer = serveBuffer(RUNTIME_BUF)
   const goodUrl = await start(goodServer.server)
-  const m = localManifest({ runtimeUrl: `${downUrl}|${goodUrl}`, bankUrl })
+  const m = localManifest({ runtimeUrl: goodUrl })
   m.runtime.urls = [downUrl, goodUrl]
   const fallbackRoot = join(testDir, 'fallback')
   await rm(fallbackRoot, { recursive: true, force: true })
-  // Reuse installed bank/vocoder from the main root to keep this step focused.
-  await mkdir(join(fallbackRoot, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau', 'dsvocoder'), { recursive: true })
-  await writeFile(join(fallbackRoot, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau', 'dsconfig.yaml'), 'bank')
-  await writeFile(join(fallbackRoot, 'voicebank', 'Qixuan_v2.7.0_DiffSinger_OpenUtau', 'dsvocoder', 'vocoder.yaml'), 'vocoder')
   const status = await runSingingInstall({
     root: fallbackRoot, manifest: m, extractImpl: fakeExtract, pipImpl: fakePip,
   })
-  assert(status.ready, 'fallback install must succeed')
+  assert(status.runtime.installed, 'fallback install must succeed')
   await stop(down.server); await stop(goodServer.server)
 })
 
@@ -200,13 +197,15 @@ await step('resumable download: no Range on a fresh file, Range when .part exist
   assert(sha(await readFile(dest)) === sha(RUNTIME_BUF), 'resumed content mismatch')
 })
 
-await step('status and voices reflect an installed environment', async () => {
+await step('status reflects the installed runtime; voices scans the voicebank dir', async () => {
   process.env.ANYAUDIO_SINGING_DIR = testDir
   const status = await singingStatus()
-  assert(status.ready === true, 'status must be ready for the installed root')
+  assert(status.runtime.installed === true, 'runtime must be reported installed')
   assert(status.root === testDir, `root redirected to ${status.root}`)
+  // No voicebank is installed by the runtime job: ready is false until one is added.
+  assert(status.voicebank.installed === false, 'runtime-only install must not imply a voicebank')
   const voices = await listSingingVoices()
-  assert(voices.voices.some((v) => v.name === 'Qixuan_v2.7.0_DiffSinger_OpenUtau'), 'voicebank not listed')
+  assert(Array.isArray(voices.voices), 'voices must be a list')
 })
 
 // ---------------------------------------------------------------------------
@@ -244,9 +243,9 @@ async function apiPost(path, body = {}) {
 
 await step('GET singing/status and singing/voices through the real routes', async () => {
   const status = await apiGet('/singing/status')
-  assert(status.ok && status.ready === true, `status route: ${JSON.stringify(status)}`)
+  assert(status.ok && status.runtime?.installed === true, `status route: ${JSON.stringify(status)}`)
   const voices = await apiGet('/singing/voices')
-  assert(voices.ok && voices.voices.length >= 1, 'voices route empty')
+  assert(voices.ok && Array.isArray(voices.voices), 'voices route shape')
 })
 
 await step('POST singing/install reuses the running job (idempotent)', async () => {
@@ -288,7 +287,6 @@ await step('voicebank sources expose GitHub / Baidu / Quark links', async () => 
   assert(VOICEBANK_SOURCES.find((s) => s.id === 'github').url.startsWith('https://github.com/'), 'github link wrong')
   assert(VOICEBANK_SOURCES.find((s) => s.id === 'baidu').url.includes('pan.baidu.com'), 'baidu link wrong')
   assert(VOICEBANK_SOURCES.find((s) => s.id === 'quark').url.includes('pan.quark.cn'), 'quark link wrong')
-  assert(VOICEBANK_SHA256 === 'fe8ee7c95883d327a2b7facbbe832a7a53e1344918dc791ca83fc23b080341110', 'official sha changed')
 })
 
 await step('local third-party zip installs WITHOUT any SHA check, nested folder归位', async () => {
