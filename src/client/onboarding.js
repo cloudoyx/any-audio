@@ -132,7 +132,7 @@ export function NarrationStep({ tts, engine, note, busy, keyInput, onPick, onKey
   const mimoReady = Boolean(tts?.mimoConfigured)
   const deepseekReady = Boolean(tts?.deepseekConfigured)
   return h(Modal, { title: t('配音引擎'), step: 4, onClose },
-    h('p', { style: S.desc }, t('给视频或有声书配旁白的引擎。现在就选好，之后不用再找我。')),
+    h('p', { style: S.desc }, t('给视频或有声书配旁白的引擎。')),
     engines.length
       ? h(Select, {
         value: engine,

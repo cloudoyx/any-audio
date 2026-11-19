@@ -120,7 +120,7 @@ export const EN = {
   '建议下载基础音效包，音效的真实感会明显提升。解压后在「设置 → AnyAudio → 音效」里把文件夹装进来即可，现在跳过也没关系。': 'Downloading the base pack makes the effects sound noticeably more real. Unpack it, then add the folder under Settings → AnyAudio → Sound packs — skipping for now is fine.',
   '去下载': 'Download',
   '配音引擎': 'Narration engine',
-  '给视频或有声书配旁白的引擎。现在就选好，之后不用再找我。': 'The engine that reads narration for a video or an audiobook. Pick one now and it sticks.',
+  '给视频或有声书配旁白的引擎。': 'The engine that reads narration for a video or an audiobook.',
   '免费，不需要账号，中文旁白够用。': 'Free, no account needed, and good enough for Chinese narration.',
   '使用本机 DeepSeek 账号，无需配置。只有两个音色，不能调语速。': 'Uses this machine’s DeepSeek account — nothing to configure. Two voices only, and no speed control.',
   '未检测到 DeepSeek 账号，登录 DSH 之后才能用；也可以先用别的引擎。': 'No DeepSeek account found — it works once you sign in to DSH. Another engine is fine for now.',
