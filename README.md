@@ -170,16 +170,38 @@ This version **only guarantees the Qixuan voicebank** works at a basic level. Th
 
 ### Installing the singing environment
 
-Open **Settings → AnyAudio → Singing → Install singing environment**. Download after download, the plugin builds a minimal runtime on demand rather than shipping a ~1 GB base: it fetches a CPython 3.12 runtime, the Qixuan voicebank and an OpenVPI neural vocoder, verifies each against its official SHA-256, then pip-installs a fixed set of dependencies into that runtime. Nothing is bundled in the npm package. The first run takes a while — the download plus environment setup, and the first synthesis has to load the model.
+Singing installs in three user-visible steps. The vocoder and the voicebank are deliberately downloaded separately so that domestic and international sources serve byte-for-byte identical content.
 
-By default downloads come from GitHub and its proxies. If GitHub is unreachable, set a proxy; a domestic drive mirror is reserved in the tab and will become selectable once its address is confirmed (the plugin never hard-codes a link you did not supply).
+1. **Install the runtime (Step 1).** Open **Settings → AnyAudio → Singing → Install singing environment**. The plugin builds a minimal CPython 3.12 runtime on demand rather than shipping a ~1 GB base: it downloads Python and its dependencies (about 45 MB) plus the OpenVPI neural vocoder (about 50 MB), checks each against its official SHA-256, and pip-installs a fixed set of dependencies. The vocoder is only *staged* at this point — it is not unpacked yet.
+2. **Download a voicebank archive (Step 2).** Get the official voicebank zip from **GitHub** (abroad) or **Baidu Drive / Quark Drive** (in China). All three serve the same official archive, so the content is identical whichever source you use.
+3. **Install the voicebank (Step 3).** Back in Settings, paste the full path of the downloaded local zip and install it. The plugin unpacks the bank into the shared voicebank directory and, if the bank does not carry its own vocoder, moves the staged vocoder into place automatically. A bank that already ships its own `dsvocoder/` keeps it untouched.
+
+Nothing is bundled in the npm package. The first run takes a while — the download plus environment setup, and the first synthesis has to load the model.
+
+### GPU acceleration (optional)
+
+Singing runs on CPU by default, with CUDA acceleration available as an optional enhancement:
+
+- **One-time download.** Choosing the GPU asks for confirmation first, then downloads an extra `onnxruntime-gpu` component of about 216 MB. CUDA/cuDNN are included in that component, so no separate toolkit is needed. The plugin measures several PyPI mirrors and installs through the fastest one.
+- **Runs in the background.** While the component downloads, synthesis stays on CPU; closing Settings does not stop the download.
+- **Automatic afterwards.** Once installed, both **Auto** and **GPU** use the graphics card, while only **CPU** stays on the CPU. The install replaces the CPU build of onnxruntime in place; if the GPU environment turns out to be incompatible, reinstalling the singing environment restores the working CPU setup.
+
+**Measured speed, stated precisely** (a three-minute song, both paths internally sing sentence by sentence):
+
+| Path | CPU | GPU | Difference |
+| --- | --- | --- | --- |
+| Segmented (one call per sentence) | ~247 s | ~28.5 s | ~8.7× faster |
+| Whole score in a single call | ~229.7 s | ~224 s | almost no advantage |
+
+The GPU advantage comes from **faster single-sentence inference**. The engine synthesises sentences in sequence, not in parallel — it does **not** generate multiple segments at the same time — so a whole song passed in one call sees almost no benefit. The first call is slower on both paths while the runtime, voicebank and model load.
 
 ### Known singing limits
 
 - **Only Qixuan is guaranteed** — v1 guarantees the Qixuan bank works at a basic level; other banks are accepted through the open interface but loading and vocal quality are not guaranteed, and need your own tuning and troubleshooting.
-- **Speed varies by device** — a three-minute song takes roughly four minutes on CPU; on a segmented GPU run it took about 28.5 seconds. The first call is slower while the runtime, voicebank and model load.
-- **One mode only** — notes are split at rests into phrases and sung in sequence; there is no whole-song-in-one-pass switch. A dragged syllable (one word over several notes) is written as one note with the word plus following notes with an empty lyric; a rest is a note with a null pitch.
-- **Runtime, voicebank and vocoder are installed on first use** — they are not in the package; expect a download and a wait on a fresh machine.
+- **Local voicebanks are not verified** — installing a local zip applies no checksum or whitelist; any archive that contains a `dsconfig.yaml` is accepted. Third-party banks are not guaranteed to load or to sound good.
+- **Speed depends on device and mode** — see the measured table under [GPU acceleration](#gpu-acceleration-optional). The GPU helps segmented, sentence-by-sentence synthesis but brings almost no gain to a whole-song single call.
+- **One mode only** — notes are split at rests into phrases and sung in sequence; there is no separate whole-song switch. A dragged syllable (one word over several notes) is written as one note with the word plus following notes with an empty lyric; a rest is a note with a null pitch.
+- **Runtime, vocoder and voicebank are installed on first use** — they are not in the package; expect a download and a wait on a fresh machine.
 
 ## Known limitations
 
@@ -189,7 +211,7 @@ By default downloads come from GitHub and its proxies. If GitHub is unreachable,
 - **SoundFont only** — no SFZ, Kontakt or VST; converting other source formats is out of scope for this version.
 - **No per-note envelope control** — attack and release come from the preset; use short notes with gaps for staccato and velocity plus expression for dynamics.
 - **Chinese instruments are GM approximations** — `guzheng` maps to Koto, `dizi` to Flute, `erhu` to Fiddle; dedicated banks will do better.
-- **Singing has its own limits** — voicebank format is provisional (v1 guarantees only the tested Qixuan bank), and the runtime and voicebank download on first use; see [Singing](#singing).
+- **Singing has its own limits** — voicebank format is provisional (v1 guarantees only the tested Qixuan bank), the runtime, vocoder and voicebank download on first use, and GPU acceleration is optional; see [Singing](#singing).
 
 ## Support the project
 
