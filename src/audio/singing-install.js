@@ -6,10 +6,13 @@
  * this module installs a redistributable CPython 3.12 runtime under one
  * machine-wide root (`~/.dsh/anyaudio/singing`, overridable by
  * ANYAUDIO_SINGING_DIR) plus a fixed pip dependency list, so the exact
- * `runtime/python.exe` M1 launches can import diffsinger_utau. No voicebank is
- * downloaded here — the user picks a source (GitHub / net-disk) or installs a
- * local official zip themselves, so a user who cannot reach GitHub is never
- * stuck behind a 400 MB download. See installVoicebankFromZip for that step.
+ * `runtime/python.exe` M1 launches can import diffsinger_utau. The standalone
+ * neural vocoder is downloaded here too, but only STAGED under `downloads/`
+ * (never bundled into a voicebank zip); it is extracted into a bank's
+ * `dsvocoder/` only when that bank is installed without shipping its own.
+ * No voicebank is downloaded here — the user picks a source (GitHub / net-disk)
+ * or installs a local official zip themselves, so a user who cannot reach
+ * GitHub is never stuck behind a 400 MB download. See installVoicebankFromZip.
  *
  * Everything that touches the network, the shell or a fixed path is an
  * injectable option so the settings test can drive the whole flow against a
@@ -75,13 +78,29 @@ export const VOICEBANK_SOURCES = [
 
 export function defaultManifest() {
   const runtime = `${GITHUB}/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.12.16%2B20261110-x86_64-pc-windows-msvc-install_only.tar.gz`
+  const vocoder = `${GITHUB}/openvpi/vocoders/releases/download/pc-nsf-hifigan-44.1k-hop512-128bin-2025.02/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.oudep`
   return {
     runtime: {
       file: 'cpython-3.12.16+20261110-x86_64-pc-windows-msvc-install_only.tar.gz',
       sha256: 'e23fe5b16926de1d81661b1a97352e89fb167549c55a6825796ccd0f32ec7f1b',
       urls: [PROXIES[0] + runtime, runtime],
     },
+    // Official openvpi vocoder: mirrors first, official GitHub URL last.
+    // Staged under downloads/ during the environment step; extracted into the
+    // bank's dsvocoder/ only when installing a bank without its own vocoder.
+    vocoder: {
+      file: 'pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.oudep',
+      sha256: 'ba7d43142d41f6900c8264b5662ca7125a50feb8760bb8b9615c61a8f5e6902e',
+      urls: [PROXIES[0] + vocoder, PROXIES[1] + vocoder, vocoder],
+    },
   }
+}
+
+/** Temp vocoder archive path — front-end/QA can inspect this staging file. */
+export function stagedVocoderPath(options = {}) {
+  const root = singingRoot(options)
+  const manifest = options.manifest ?? defaultManifest()
+  return join(root, 'downloads', manifest.vocoder.file)
 }
 
 export function singingRoot(options = {}) {
@@ -220,6 +239,26 @@ async function downloadArtifact(spec, dest, ctx) {
   throw failure
 }
 
+/**
+ * Stage an artifact only when a verified copy is not already on disk. The
+ * vocoder is downloaded during the environment step but consumed later, during
+ * the voicebank step, so its staging file is the only idempotency marker.
+ */
+async function ensureStagedArtifact(spec, dest, ctx) {
+  if (existsSync(dest)) {
+    try {
+      if (await sha256File(dest) === spec.sha256) {
+        ctx.onProgress?.({ phase: `${ctx.phase}-download`, message: `${spec.file} already staged, skipping`, file: spec.file })
+        return { path: dest, sha256: spec.sha256, skipped: true }
+      }
+    } catch {
+      // Unreadable/truncated staging file: fall through and re-download.
+    }
+    await rm(dest, { force: true })
+  }
+  return downloadArtifact(spec, dest, ctx)
+}
+
 function urlLabel(url) {
   try {
     return new URL(url).host
@@ -296,9 +335,13 @@ export async function singingStatus(options = {}) {
   const bankName = options.voicebank ?? DEFAULT_VOICEBANK_DIR
   const bank = voicebankDir(root, bankName)
   const vocoder = join(bank, 'dsvocoder', 'vocoder.yaml')
+  // stagedPath is the temp package downloaded by the environment step, waiting
+  // to be归位 when a voicebank without its own vocoder is installed. Front-end
+  // can use `staged` to distinguish "downloaded, awaiting bank" from "absent".
+  const stagedPath = stagedVocoderPath({ root, manifest: options.manifest ?? defaultManifest() })
   const runtime = { installed: existsSync(py), path: py }
   const voicebank = { installed: existsSync(join(bank, 'dsconfig.yaml')), path: bank, name: bankName }
-  const voc = { installed: existsSync(vocoder), path: vocoder }
+  const voc = { installed: existsSync(vocoder), path: vocoder, staged: existsSync(stagedPath), stagedPath }
   let runtimeVersion = null
   if (runtime.installed) {
     try {
@@ -342,11 +385,13 @@ export async function listSingingVoices(options = {}) {
 }
 
 /**
- * Install the singing RUNTIME only (45 MB CPython + fixed pip dependencies).
- * The voicebank is intentionally NOT downloaded here: the user picks a source
- * (GitHub / Baidu / Quark) or installs a local official zip themselves, so a
- * user who cannot reach GitHub is never stuck behind a 400 MB download.
- * Idempotent at the file level: a verified runtime archive is reused.
+ * Install the singing ENVIRONMENT: the runtime (45 MB CPython), the standalone
+ * neural vocoder (staged only) and fixed pip dependencies. The vocoder archive
+ * is downloaded into `downloads/` and left unpacked; it is extracted into a
+ * bank's `dsvocoder/` only later, by installVoicebankFromZip. The voicebank
+ * itself is intentionally NOT downloaded here: the user picks a source
+ * (GitHub / Baidu / Quark) or installs a local official zip themselves.
+ * Idempotent at the file level: verified archives are reused.
  */
 export async function runSingingInstall(options = {}) {
   const root = singingRoot(options)
@@ -380,9 +425,22 @@ export async function runSingingInstall(options = {}) {
     note('runtime', 'runtime already present, skipping')
   }
 
+  // 2. Vocoder: download the standalone official package into downloads/ ONLY.
+  // No extraction, no voicebank dir — that happens in installVoicebankFromZip.
+  // A verified staged copy is reused, so repeating the environment step does
+  // not download the ~50 MB archive again.
+  const vocoder = manifest.vocoder
+  if (!vocoder) {
+    const failure = new Error('manifest is missing the vocoder artifact')
+    failure.code = 'INSTALL_INCOMPLETE'
+    throw failure
+  }
+  const vocoderArchive = stagedVocoderPath({ root, manifest })
+  await ensureStagedArtifact(vocoder, vocoderArchive, { ...ctx, phase: 'vocoder' })
+
   // Voicebank is intentionally NOT installed here — see the function doc.
 
-  // 2. Fixed-version dependencies into the exact interpreter M1 launches.
+  // 3. Fixed-version dependencies into the exact interpreter M1 launches.
   if (options.pipImpl) {
     note('pip', 'pip install delegated (test mode)')
     for (const group of options.pipGroups ?? PIP_GROUPS) {
@@ -395,7 +453,7 @@ export async function runSingingInstall(options = {}) {
     }
   }
 
-  const status = await singingStatus({ root, voicebank: options.voicebank })
+  const status = await singingStatus({ root, voicebank: options.voicebank, manifest })
   // This job only promises the runtime + pip deps; the voicebank is a separate
   // user-driven step, so its absence must NOT fail the install.
   if (!status.runtime.installed) {
@@ -426,13 +484,15 @@ async function findVoicebankDir(base, depth = 0) {
 /**
  * Install a voicebank from a zip the user downloaded themselves (net-disk or
  * GitHub). No checksum / whitelist: any third-party DiffSinger bank is accepted;
- * only dsconfig.yaml decides validity, and a bank missing its vocoder simply
- * will not sing until the user supplies one. The extracted bank is moved under
- * `voicebank/` so the settings dropdown can find it. Throws a tagged error
- * (`code`) with a clear message on bad input.
+ * only dsconfig.yaml decides validity. After归位, if the bank did not ship its
+ * own `dsvocoder/vocoder.yaml`, the vocoder staged by runSingingInstall is
+ * extracted into `dsvocoder/` so the bank can sing. The extracted bank is moved
+ * under `voicebank/` so the settings dropdown can find it. Throws a tagged
+ * error (`code`) with a clear message on bad input.
  */
 export async function installVoicebankFromZip(options = {}) {
   const root = singingRoot(options)
+  const manifest = options.manifest ?? defaultManifest()
   const zipPath = typeof options.zipPath === 'string' ? resolve(options.zipPath.trim()) : ''
   if (!zipPath) throw Object.assign(new Error('zipPath is required'), { code: 'BAD_ZIP_PATH' })
   if (!existsSync(zipPath)) {
@@ -478,9 +538,36 @@ export async function installVoicebankFromZip(options = {}) {
   await mkdir(vault, { recursive: true })
   await rename(extracted, bankDir)
   await rm(staging, { recursive: true, force: true })
-  return { ...(await singingStatus({ root, voicebank: name })), name }
+
+  // Vocoder归位: a bank that ships its own dsvocoder/vocoder.yaml is respected
+  // as-is (never overwritten). Otherwise unrepack the standalone package staged
+  // by the environment step into <bank>/dsvocoder/. A missing staging file is a
+  // recoverable condition: the bank is still installed, just not singable until
+  // the environment step (re)downloads the vocoder and this bank is reinstalled.
+  const bankVocoder = join(bankDir, 'dsvocoder', 'vocoder.yaml')
+  if (!existsSync(bankVocoder)) {
+    const vocoderArchive = stagedVocoderPath({ root, manifest })
+    if (existsSync(vocoderArchive)) {
+      ctx.onProgress?.({ phase: 'vocoder-extract', message: 'extracting staged vocoder into voicebank' })
+      const vocDest = join(bankDir, 'dsvocoder')
+      await mkdir(vocDest, { recursive: true })
+      await ctx.extractImpl(vocoderArchive, vocDest, { ...ctx, phase: 'vocoder-extract' })
+      ctx.onProgress?.({
+        phase: 'vocoder-extract',
+        message: existsSync(bankVocoder) ? 'vocoder归位完成' : 'vocoder archive extracted but vocoder.yaml not found',
+      })
+    } else {
+      ctx.onProgress?.({
+        phase: 'vocoder-extract',
+        message: 'no staged vocoder found; run the environment install first',
+      })
+    }
+  } else {
+    ctx.onProgress?.({ phase: 'vocoder-extract', message: 'voicebank ships its own vocoder, keeping it' })
+  }
+  return { ...(await singingStatus({ root, voicebank: name, manifest })), name }
 }
 
 export const __singingInstallTest = {
-  downloadUrl, downloadArtifact, defaultExtract, defaultPip, runtimeExe, voicebankDir, runProcess,
+  downloadUrl, downloadArtifact, ensureStagedArtifact, defaultExtract, defaultPip, runtimeExe, voicebankDir, runProcess,
 }

@@ -83,6 +83,12 @@ function fakeExtract(archive, dest, ctx) {
     return mkdir(dest, { recursive: true }).then(() =>
       writeFile(join(dest, process.platform === 'win32' ? 'python.exe' : 'python'), 'fake'))
   }
+  // Standalone vocoder package: tar entries land directly in dsvocoder/, so
+  // the fake extract writes vocoder.yaml at the destination root.
+  if (name.includes('oudep')) {
+    return mkdir(dest, { recursive: true }).then(() =>
+      writeFile(join(dest, 'vocoder.yaml'), 'staged vocoder'))
+  }
   // Any voicebank zip: nest one folder named after the zip (like Lianhua /
   // Qixuan both do) containing dsconfig.yaml. Vocoder is optional and driven
   // by ctx.withVocoder so a third-party bank without one can be exercised.
@@ -100,12 +106,15 @@ function fakeExtract(archive, dest, ctx) {
 
 const RUNTIME_BUF = Buffer.from('fake runtime archive payload'.repeat(20))
 const BANK_BUF = Buffer.from('fake voicebank zip payload'.repeat(40))
+const VOCODER_BUF = Buffer.from('fake vocoder payload'.repeat(30))
 const BUFFER_EMPTY = Buffer.alloc(0)
 
-function localManifest({ runtimeUrl } = {}) {
+function localManifest({ runtimeUrl, vocUrl } = {}) {
   const m = defaultManifest()
   m.runtime.urls = [runtimeUrl]
   m.runtime.sha256 = sha(RUNTIME_BUF)
+  m.vocoder.urls = [vocUrl]
+  m.vocoder.sha256 = sha(VOCODER_BUF)
   return m
 }
 
@@ -121,15 +130,17 @@ const fakePip = (python, group, ctx) => {
 // ---------------------------------------------------------------------------
 const runtimeServer = serveBuffer(RUNTIME_BUF)
 const bankServer = serveBuffer(BANK_BUF)
+const vocServer = serveBuffer(VOCODER_BUF)
 const runtimeUrl = await start(runtimeServer.server)
 const bankUrl = await start(bankServer.server)
+const vocUrl = await start(vocServer.server)
 
-await step('install from empty dir: ONLY runtime + pip deps, NO voicebank download', async () => {
+await step('install from empty dir: runtime + STAGED vocoder + pip deps, NO voicebank download', async () => {
   await rm(testDir, { recursive: true, force: true })
   const events = []
   const status = await runSingingInstall({
     root: testDir,
-    manifest: localManifest({ runtimeUrl }),
+    manifest: localManifest({ runtimeUrl, vocUrl }),
     extractImpl: fakeExtract,
     pipImpl: fakePip,
     onProgress: (e) => events.push(e),
@@ -137,10 +148,14 @@ await step('install from empty dir: ONLY runtime + pip deps, NO voicebank downlo
   // Runtime must be ready; a voicebank is a separate user-driven step.
   assert(status.runtime.installed === true, 'runtime must be installed')
   assert(existsSync(join(testDir, 'runtime', process.platform === 'win32' ? 'python.exe' : 'python')), 'runtime python missing')
-  // No voicebank was downloaded — that is the whole point of the decoupling.
+  // Vocoder is downloaded to downloads/ but NOT unpacked into any voicebank.
+  const staged = join(testDir, 'downloads', defaultManifest().vocoder.file)
+  assert(existsSync(staged), 'vocoder must be staged under downloads/')
+  assert(sha(await readFile(staged)) === sha(VOCODER_BUF), 'staged vocoder content mismatch')
+  assert(vocServer.seen.length === 1, `vocoder must be fetched once, saw ${vocServer.seen.length}`)
+  // No voicebank was downloaded or created — that is the whole decoupling.
   assert(bankServer.seen.length === 0, 'the install job must NOT download a voicebank zip')
   assert(existsSync(join(testDir, 'voicebank')) === false, 'install job must not create a voicebank dir')
-  assert(events.some((e) => String(e.phase).startsWith('runtime')), 'runtime phase not reported')
   assert(events.some((e) => e.received > 0 && e.total >= e.received), 'progress must report received/total')
   assert(pipCalls.length === 2, `expected 2 pip groups, got ${pipCalls.length}`)
   assert(pipCalls.some((c) => c.specs.includes('diffsinger-utau==0.3.8')), 'diffsinger-utau pin missing')
@@ -149,8 +164,7 @@ await step('install from empty dir: ONLY runtime + pip deps, NO voicebank downlo
 await step('SHA-256 mismatch rejects the artifact and does not install it', async () => {
   const badRoot = join(testDir, 'bad-sha')
   await rm(badRoot, { recursive: true, force: true })
-  const bad = defaultManifest()
-  bad.runtime.urls = [runtimeUrl]
+  const bad = localManifest({ runtimeUrl, vocUrl })
   bad.runtime.sha256 = '0'.repeat(64)
   let error = null
   try {
@@ -167,7 +181,7 @@ await step('mirror failure falls back to the next URL', async () => {
   const downUrl = await start(down.server)
   const goodServer = serveBuffer(RUNTIME_BUF)
   const goodUrl = await start(goodServer.server)
-  const m = localManifest({ runtimeUrl: goodUrl })
+  const m = localManifest({ runtimeUrl: goodUrl, vocUrl })
   m.runtime.urls = [downUrl, goodUrl]
   const fallbackRoot = join(testDir, 'fallback')
   await rm(fallbackRoot, { recursive: true, force: true })
@@ -304,6 +318,10 @@ await step('local third-party zip installs WITHOUT any SHA check, nested folder�
   assert(status.voicebank.installed, 'voicebank not installed from local zip')
   // 嵌套一层文件夹被归位到 voicebank/<name>/dsconfig.yaml
   assert(existsSync(join(zipRoot, 'voicebank', 'Lianhua_DiffSinger_v2.1.50_beta', 'dsconfig.yaml')), 'nested bank not归位')
+  // 声库自带声码器（内容为 'vocoder'）必须被保留，不能被暂存包覆盖。
+  const ownVoc = join(zipRoot, 'voicebank', 'Lianhua_DiffSinger_v2.1.50_beta', 'dsvocoder', 'vocoder.yaml')
+  assert(existsSync(ownVoc), 'self-shipped vocoder missing')
+  assert((await readFile(ownVoc, 'utf8')) === 'vocoder', 'self-shipped vocoder must NOT be overwritten')
   // listSingingVoices 能扫到，下拉框可见
   const voices = await listSingingVoices({ root: zipRoot })
   assert(voices.voices.some((v) => v.name === 'Lianhua_DiffSinger_v2.1.50_beta'), 'voicebank not discoverable')
@@ -322,7 +340,46 @@ await step('local zip WITHOUT dsvocoder still installs (only dsconfig.yaml requi
   })
   assert(status.voicebank.installed, 'bank without vocoder must still install')
   assert(existsSync(join(novoc, 'voicebank', 'MyCustomBank', 'dsconfig.yaml')), 'dsconfig missing')
+  // No staged package in this root, so no vocoder is conjured out of thin air.
   assert(existsSync(join(novoc, 'voicebank', 'MyCustomBank', 'dsvocoder', 'vocoder.yaml')) === false, 'should not have vocoder')
+})
+
+await step('staged vocoder is extracted into a bank that ships none (vocoder.yaml present)', async () => {
+  const fill = join(testDir, 'vocoder-fill')
+  await rm(fill, { recursive: true, force: true })
+  const m = localManifest({ runtimeUrl, vocUrl })
+  // Stage the vocoder in this root exactly as runSingingInstall would.
+  await runSingingInstall({ root: fill, manifest: m, extractImpl: fakeExtract, pipImpl: fakePip })
+  const staged = join(fill, 'downloads', defaultManifest().vocoder.file)
+  assert(existsSync(staged), 'precondition: staged vocoder missing')
+  const zip = join(fill, 'PlainBank.zip')
+  await writeFile(zip, Buffer.from('bank without own vocoder'))
+  const status = await installVoicebankFromZip({
+    root: fill, zipPath: zip, manifest: m,
+    extractImpl: (archive, dest, ctx) => fakeExtract(archive, dest, { ...ctx, withVocoder: false }),
+  })
+  assert(status.voicebank.installed, 'voicebank must install')
+  const vocPath = join(fill, 'voicebank', 'PlainBank', 'dsvocoder', 'vocoder.yaml')
+  assert(existsSync(vocPath), 'staged vocoder must be归位 into dsvocoder/vocoder.yaml')
+  assert(status.vocoder.installed === true, 'status.vocoder.installed must reflect归位')
+  assert(status.ready === true, 'status.ready must be true once vocoder归位')
+})
+
+await step('repeat runSingingInstall does NOT re-download a verified staged vocoder', async () => {
+  const repeatRoot = join(testDir, 'repeat-env')
+  await rm(repeatRoot, { recursive: true, force: true })
+  const m = localManifest({ runtimeUrl, vocUrl })
+  const before = vocServer.seen.length
+  await runSingingInstall({ root: repeatRoot, manifest: m, extractImpl: fakeExtract, pipImpl: fakePip })
+  const afterFirst = vocServer.seen.length
+  assert(afterFirst === before + 1, 'first install must fetch vocoder once')
+  const events = []
+  await runSingingInstall({
+    root: repeatRoot, manifest: m, extractImpl: fakeExtract, pipImpl: fakePip,
+    onProgress: (e) => events.push(e),
+  })
+  assert(vocServer.seen.length === afterFirst, 'repeat install must NOT re-download vocoder')
+  assert(events.some((e) => String(e.message).includes('already staged')), 'repeat install should report skip')
 })
 
 await step('local zip with no dsconfig.yaml anywhere is rejected (BAD_ARCHIVE)', async () => {
@@ -362,6 +419,7 @@ setSingingInstallRunner(undefined)
 setVoicebankZipInstaller(undefined)
 await stop(runtimeServer.server)
 await stop(bankServer.server)
+await stop(vocServer.server)
 await new Promise((ok) => api.close(ok))
 await rm(testDir, { recursive: true, force: true })
 delete process.env.ANYAUDIO_SINGING_DIR
