@@ -144,6 +144,10 @@ function FontsTab({ state, reload, notify }) {
   }
 
   const fonts = state.fonts
+  // A single-instrument bank (e.g. Electric Guitar Clean) is published only as
+  // a 7z archive, so there is no URL the installer could fetch: point the
+  // button at the release page instead of offering a download that always fails.
+  const libraryDir = fonts.libraryDir || fonts.directories?.[0] || ''
   const percent = job && job.total ? (job.received / job.total) * 100 : 0
   const installing = Boolean(job && job.status === 'running')
   // A recommendation is an offer, not a catalogue: once the bank is installed it
@@ -183,13 +187,18 @@ function FontsTab({ state, reload, notify }) {
                 h('span', { style: S.chip }, installed ? t('已安装') : t('未安装')),
                 font.default ? h('span', { style: S.chip }, t('默认')) : null,
                 h('span', { style: { flex: 1 } }),
-                installed ? null : h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装')),
+                installed ? null : font.url
+                  ? h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装'))
+                  : font.manual
+                    ? h(Btn, { kind: 'primary', onClick: () => window.open(font.manual, '_blank', 'noopener,noreferrer') }, t('下载'))
+                    : null,
                 h(Btn, { onClick: () => toggleDetails(key) }, open ? t('收起') : t('详情')),
               ),
               font.tagline ? h('div', { style: S.desc }, t(font.tagline)) : null,
               open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
                 h('div', { style: S.mono }, t('许可证：{0}', font.license)),
                 font.manual ? h('div', { style: S.mono }, t('手动下载：{0}', font.manual)) : null,
+                font.manual ? h('div', { style: S.mono }, t('安装说明：解压后把 .sf2 放到 {0}，文件名保持 {1}', libraryDir || t('未设置'), font.file)) : null,
                 installed?.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', installed.sha256.slice(0, 24), installed.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
               ) : null,
             )

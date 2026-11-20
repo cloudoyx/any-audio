@@ -63,7 +63,7 @@ export const RECOMMENDED_FONTS = [
     id: 'electric-guitar-clean',
     name: 'Electric Guitar Clean (FSBS)',
     file: 'EGuitarFSBS-clean-bridge-20260807.sf2',
-    manual: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/tag/2026-08-07',
+    manual: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-SF2-20260807.7z',
     bytes: 445922788,
     sha256: 'e66351135ff7c06ca0fee799688e767c917a085988ff29691c02f72c0a4ddabe',
     license: 'CC0 1.0 (FreePats, direct recording of a Fender electric guitar)',

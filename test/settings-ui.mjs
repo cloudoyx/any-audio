@@ -23,7 +23,8 @@ const react = {
 const reactDom = { createPortal: (node, container) => ({ type: 'portal', props: { node, container }, children: [] }) }
 
 let entry
-new Function('window', source)({ __ModuleLoader__: { load: (value) => { entry = value } } })
+const fakeWindow = { __ModuleLoader__: { load: (value) => { entry = value } } }
+new Function('window', source)(fakeWindow)
 const mod = entry.factory((id) => {
   if (id === 'react') return react
   if (id === 'react-dom') return reactDom
@@ -105,6 +106,7 @@ const fontState = {
       tagline: '通用音色，配乐够用',
       default: true,
       suggested: false,
+      url: 'https://example.com/bank.sf2',
     },
   ],
   configured: '',
@@ -157,8 +159,35 @@ step('a missing recommendation is offered with its one-line purpose', () => {
   const body = text(tree)
   assert.ok(body.includes('GeneralUser GS'), 'the recommendation is missing')
   assert.ok(body.includes('通用音色，配乐够用'), 'the one-line purpose is missing')
-  assert.ok(findClickable(tree, '下载安装'), 'the download button is missing')
+  assert.ok(findClickable(tree, '下载安装'), 'the install button is missing for a URL bank')
   assert.ok(!body.includes('许可证'), 'the licence must stay behind Details')
+})
+
+step('a manual-only bank opens its release page and explains where to install', () => {
+  const manual = {
+    id: 'electric-guitar-clean',
+    name: 'Electric Guitar Clean (FSBS)',
+    file: 'EGuitarFSBS-clean-bridge-20260807.sf2',
+    bytes: 445922788,
+    license: 'CC0-1.0',
+    note: '',
+    tagline: '电吉他独奏',
+    manual: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/tag/2026-08-07',
+    default: false,
+    suggested: false,
+  }
+  const partial = { ...fontState, rows: [], available: [manual] }
+  const tree = FontsTab({ state: { fonts: partial }, reload: () => {}, notify: () => {} })
+  const button = findClickable(tree, '下载')
+  assert.ok(button, 'the Download link button is missing')
+  assert.ok(!findClickable(tree, '下载安装'), 'a manual bank must not offer the failing installer')
+  let opened = null
+  const savedOpen = fakeWindow.open
+  fakeWindow.open = (url) => { opened = url }
+  try { button.props.onClick() } finally { fakeWindow.open = savedOpen }
+  assert.equal(opened, manual.manual, 'the button must open the release page')
+
+  assert.ok(findClickable(tree, '详情'), 'the Details toggle is missing')
 })
 
 step('an installed recommendation moves out of the offer list', () => {
