@@ -21,11 +21,11 @@
  * All URLs and checksums below are public release metadata — no personal
  * paths and no credentials belong in this file.
  */
-import { createReadStream, createWriteStream, existsSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
-import { homedir, platform } from 'node:os'
+import { mkdir, mkdtemp, open, readdir, rename, rm, stat } from 'node:fs/promises'
+import { homedir, platform, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 
 const GITHUB = 'https://github.com'
@@ -267,33 +267,48 @@ function urlLabel(url) {
   }
 }
 
-function runProcess(command, args, { signal, onLine, cwd } = {}) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command, args, { windowsHide: true, cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    const onAbort = () => child.kill()
-    signal?.addEventListener?.('abort', onAbort, { once: true })
-    let last = ''
-    const eat = (chunk) => {
-      const text = `${last}${chunk.toString('utf8')}`
-      const lines = text.split(/\r?\n/)
-      last = lines.pop() ?? ''
-      for (const line of lines) {
-        if (line.trim()) onLine?.(line.trim())
-      }
-    }
-    child.stdout?.on('data', eat)
-    child.stderr?.on('data', eat)
-    child.on('error', (err) => {
-      signal?.removeEventListener?.('abort', onAbort)
-      rejectPromise(err)
+async function runProcess(command, args, { signal, onLine, cwd } = {}) {
+  // DSH's sandbox forbids capturing a child's output through pipes (EPERM), and
+  // a bare spawn failure used to surface as only "exited with code 1". Redirect
+  // stdout/stderr to temp files instead: no pipe, and the full output survives
+  // so a failure names its real cause.
+  const scratch = await mkdtemp(join(tmpdir(), 'anyaudio-proc-'))
+  const outPath = join(scratch, 'stdout')
+  const errPath = join(scratch, 'stderr')
+  const out = await open(outPath, 'w')
+  const err = await open(errPath, 'w')
+  try {
+    await new Promise((resolvePromise, rejectPromise) => {
+      const child = spawn(command, args, { windowsHide: true, cwd, stdio: ['ignore', out.fd, err.fd] })
+      const onAbort = () => child.kill()
+      signal?.addEventListener?.('abort', onAbort, { once: true })
+      const cleanup = () => signal?.removeEventListener?.('abort', onAbort)
+      child.on('error', (error) => {
+        cleanup()
+        rejectPromise(error)
+      })
+      child.on('close', (code) => {
+        cleanup()
+        let stdout = ''
+        let stderr = ''
+        try { stdout = readFileSync(outPath, 'utf8') } catch {}
+        try { stderr = readFileSync(errPath, 'utf8') } catch {}
+        for (const line of `${stdout}${stderr}`.split(/\r?\n/)) {
+          if (line.trim()) onLine?.(line.trim())
+        }
+        if (code === 0) {
+          resolvePromise()
+        } else {
+          const detail = `${stdout}${stderr}`.trim()
+          rejectPromise(new Error(`${basename(command)} exited with code ${code}${detail ? `: ${detail}` : ''}`))
+        }
+      })
     })
-    child.on('close', (code) => {
-      signal?.removeEventListener?.('abort', onAbort)
-      if (last.trim()) onLine?.(last.trim())
-      if (code === 0) resolvePromise()
-      else rejectPromise(new Error(`${basename(command)} exited with code ${code}`))
-    })
-  })
+  } finally {
+    await out.close().catch(() => {})
+    await err.close().catch(() => {})
+    await rm(scratch, { recursive: true, force: true })
+  }
 }
 
 /** Extract an archive using the OS tar (Windows 10+ ships bsdtar, handles zip). */
