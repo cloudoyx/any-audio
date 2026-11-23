@@ -233,11 +233,12 @@ export async function planFonts(compiled, { workspaceRoot, fontPath } = {}) {
   }
 
   if (autoPicks.length > 0) {
-    const candidates = catalog.filter((entry) => entry.recommended).length > 0 ? catalog.filter((entry) => entry.recommended) : catalog
+    // 官方推荐字体带实测评分；用户自装的 SF2 没有实测数据，按类先验给兜底分 3。
+    const candidates = catalog
     for (const track of autoPicks) {
       const category = categoryOfProgram(track.program)
       const ranked = rankFonts(
-        candidates.map((entry) => entry.recommended ?? { id: entry.id, name: entry.name, scores: {} }),
+        candidates.map((entry) => entry.recommended ?? { id: entry.id, name: entry.name, scores: { default: 3 } }),
         category,
         track.program,
       )

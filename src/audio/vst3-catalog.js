@@ -106,7 +106,7 @@ export async function mergedCatalog() {
       format: 'vst3',
       instrument: true,
       range: null,
-      families: {},
+      families: { default: 5 },
       articulations: [],
       fxSounds: [],
       notes: '扫描条目：音域与演奏法未实测，只能显式 source 引用。',
@@ -156,13 +156,13 @@ function validateKeyswitchList(list, where) {
   }
 }
 
-/** 乐器族评分：键必须是 scoring.js 的族键，分数 1-10，供 auto 跨类选源使用。 */
+/** 乐器族评分：键是 scoring.js 的族键或 default（兜底分），分数 1-10，供 auto 跨类选源使用。 */
 function validateFamilies(families, where) {
   if (families === undefined) return
   if (!isObject(families)) throw new Vst3CatalogError(`${where} 必须是 { 乐器族: 评分 } 对象`)
   for (const [family, score] of Object.entries(families)) {
-    if (!(family in CATEGORY_LABELS)) {
-      throw new Vst3CatalogError(`${where}.${family} 不是合法的乐器族；可用：${Object.keys(CATEGORY_LABELS).join(', ')}`)
+    if (family !== 'default' && !(family in CATEGORY_LABELS)) {
+      throw new Vst3CatalogError(`${where}.${family} 不是合法的乐器族；可用：${Object.keys(CATEGORY_LABELS).join(', ')}，或 default（兜底分）`)
     }
     if (!Number.isInteger(score) || score < 1 || score > 10) {
       throw new Vst3CatalogError(`${where}.${family} 评分必须是 1-10 的整数，现在是 ${JSON.stringify(score)}`)

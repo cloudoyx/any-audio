@@ -127,14 +127,13 @@ export async function selectSources(compiled, { catalog = null } = {}) {
 
   if (autoTracks.length > 0) {
     const fonts = await loadCatalog()
-    const candidates = fonts.filter((entry) => entry.recommended).length > 0
-      ? fonts.filter((entry) => entry.recommended)
-      : fonts
-    const sf2Fonts = candidates.map((entry) => entry.recommended ?? { id: entry.id, name: entry.name, scores: {} })
+    // 官方推荐字体带实测评分；用户自装的 SF2 没有实测数据，按类先验给兜底分 3。
+    const sf2Fonts = fonts.map((entry) => entry.recommended ?? { id: entry.id, name: entry.name, scores: { default: 3 } })
     for (const track of autoTracks) {
       const category = categoryOfProgram(track.program)
+      // VST3 条目按族评分参与；只有兜底分（default）的条目在所有族都按兜底分参与。
       const vst3Fonts = resolvedCatalog.plugins
-        .filter((entry) => Number.isFinite(entry.families?.[category]))
+        .filter((entry) => Number.isFinite(entry.families?.[category]) || Number.isFinite(entry.families?.default))
         .map((entry) => ({ id: entry.id, name: entry.name, scores: entry.families, vst3: entry }))
       const ranked = rankFonts([...sf2Fonts, ...vst3Fonts], category, track.program)
       const winner = ranked[0]
