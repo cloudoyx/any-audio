@@ -13,6 +13,24 @@ import { BASE_PACK, DownloadLinks, VoicebankDownloadLinks, useVoicebankSources, 
 
 const GITHUB_URL = 'https://github.com/cloudoyx/any-audio'
 
+/** Category badge in front of a source name: VST3 blue, SF2 green. */
+function kindBadge(kind) {
+  const vst3 = kind === 'vst3'
+  return h('span', {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '0 6px',
+      borderRadius: 4,
+      background: vst3 ? C.accent : C.good,
+      color: '#fff',
+      fontSize: 10,
+      fontWeight: 600,
+      lineHeight: '16px',
+    },
+  }, vst3 ? 'VST3' : 'SF2')
+}
+
 function FontsTab({ state, reload, notify }) {
   const [job, setJob] = useState(null)
   const [busy, setBusy] = useState('')
@@ -21,6 +39,12 @@ function FontsTab({ state, reload, notify }) {
   const [customPath, setCustomPath] = useState('')
   const [openDetails, setOpenDetails] = useState({})
   const [showRecommended, setShowRecommended] = useState(false)
+  const [vst3, setVst3] = useState(null)
+  const [vst3Error, setVst3Error] = useState('')
+  const [vst3Path, setVst3Path] = useState('')
+  const [scanDir, setScanDir] = useState('C:\\Program Files\\Common Files\\VST3')
+  const [scan, setScan] = useState(null)
+  const [vst3Preview, setVst3Preview] = useState(null)
   const toggleDetails = (key) => setOpenDetails(current => ({ ...current, [key]: !current[key] }))
 
   // The job lives on the host, not in this component: reopening the settings
@@ -53,6 +77,21 @@ function FontsTab({ state, reload, notify }) {
     }, 700)
     return () => clearInterval(timer)
   }, [job, reload, notify])
+
+  // VST3 entries live in the same list as the SF2 banks: one page, one list,
+  // a badge on each row. The catalog is its own route because it merges the
+  // built-in entries with the plugins the person added.
+  const loadVst3 = useCallback(async () => {
+    try {
+      const data = await api('/vst3/list')
+      setVst3(data)
+      setVst3Error('')
+    } catch (error) {
+      setVst3Error(error.message)
+    }
+  }, [])
+
+  useEffect(() => { loadVst3() }, [loadVst3])
 
   async function install(body) {
     setBusy(`install:${body.id || body.fromPath || 'custom'}`)
@@ -143,6 +182,63 @@ function FontsTab({ state, reload, notify }) {
     void runPreview(picker.path, program)
   }
 
+  // A measured entry previews the middle of its range; a scanned one has no
+  // measured range, so middle C is the only honest guess.
+  async function testVst3(plugin) {
+    const pitch = plugin.range ? Math.round((plugin.range.low + plugin.range.high) / 2) : 60
+    setBusy(`vst3:test:${plugin.id}`)
+    try {
+      const data = await api('/vst3/test', { method: 'POST', body: { plugin: plugin.id, pitch } })
+      setVst3Preview({ ...data, pluginId: plugin.id })
+      notify(t('试听已生成'))
+    } catch (error) {
+      notify(t('试听失败：{0}', error.message), 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function addVst3(path, name, vendor) {
+    setBusy(`vst3:add:${path}`)
+    try {
+      await api('/vst3/add', { method: 'POST', body: { path, name, vendor } })
+      notify(t('已添加 VST3 音源'))
+      await loadVst3()
+    } catch (error) {
+      // Adding the same path twice is refused by the host; the reason has to
+      // reach the person instead of the button looking dead.
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function removeVst3(plugin) {
+    setBusy(`vst3:remove:${plugin.plugin}`)
+    try {
+      await api('/vst3/remove', { method: 'POST', body: { path: plugin.plugin } })
+      notify(t('已移除 VST3 音源'))
+      await loadVst3()
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function scanVst3() {
+    setBusy('vst3:scan')
+    try {
+      const data = await api('/vst3/scan', { method: 'POST', body: { dir: scanDir.trim() || undefined } })
+      setScan(data)
+      notify(t('扫描到 {0} 个 VST3 插件', data.plugins.length))
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
   const fonts = state.fonts
   // A single-instrument bank (e.g. Electric Guitar Clean) is published only as
   // a 7z archive, so there is no URL the installer could fetch: point the
@@ -156,6 +252,65 @@ function FontsTab({ state, reload, notify }) {
   const missingRecommended = fonts.available.filter(font => !fonts.rows.some(row => row.recommendedId === font.id))
   const allRecommendedInstalled = fonts.available.length > 0 && missingRecommended.length === 0
   const recommendedShown = showRecommended ? fonts.available : missingRecommended
+  const vst3Plugins = vst3?.plugins ?? []
+
+  function renderFontRow(row) {
+    const recommended = fonts.available.find(font => font.id === row.recommendedId)
+    const label = recommended?.name ?? row.name
+    const open = Boolean(openDetails[row.path])
+    return h('div', { key: `sf2:${row.path}`, style: S.item },
+      h('div', { style: S.itemHead },
+        kindBadge('sf2'),
+        h('span', { style: { fontWeight: 600 } }, label),
+        h('span', { style: S.mono }, bytes(row.bytes)),
+        isDefault(row) ? h('span', { style: S.chip }, t('当前默认')) : null,
+        row.status === 'ok' ? null : h('span', { style: S.chip }, row.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')),
+        h('span', { style: { flex: 1 } }),
+        h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
+        // No button on the row that already is the default: a control that
+        // does nothing is worse than no control.
+        isDefault(row) ? null : h(Btn, { onClick: () => setDefault(row) }, t('设为默认')),
+        h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', label))) act('remove', { path: row.path, removeFile: true }) } }, t('删除')),
+        h(Btn, { onClick: () => toggleDetails(row.path) }, open ? t('收起') : t('详情')),
+      ),
+      recommended?.tagline ? h('div', { style: S.desc }, t(recommended.tagline)) : null,
+      open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+        h('div', { style: S.mono }, row.path),
+        row.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', row.sha256.slice(0, 24), row.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
+        h('div', { style: S.row }, h(Btn, { onClick: () => act('verify', { path: row.path }) }, t('校验'))),
+      ) : null,
+    )
+  }
+
+  function renderVst3Row(plugin) {
+    const measured = Boolean(plugin.range)
+    const scanned = plugin.kind === 'scanned'
+    const playing = vst3Preview?.pluginId === plugin.id
+    return h('div', { key: `vst3:${plugin.id}`, style: S.item },
+      h('div', { style: S.itemHead },
+        kindBadge('vst3'),
+        h('span', { style: { fontWeight: 600 } }, plugin.name),
+        h('span', { style: S.chip }, plugin.vendor),
+        h('span', { style: S.chip }, measured ? t('音域 MIDI {0}–{1}', plugin.range.low, plugin.range.high) : t('未实测')),
+        h('span', { style: S.chip }, t('演奏法 {0} 个', plugin.articulations.length)),
+        plugin.fxSounds.length > 0 ? h('span', { style: S.chip }, t('效果音 {0} 个', plugin.fxSounds.length)) : null,
+        h('span', { style: { flex: 1 } }),
+        // One render at a time: the sidecar serialises them anyway, and a
+        // second click while the first is warming up would just queue.
+        h(Btn, { kind: 'primary', disabled: Boolean(busy), onClick: () => testVst3(plugin) }, busy === `vst3:test:${plugin.id}` ? t('渲染中…') : t('试听')),
+        scanned ? h(Btn, { disabled: busy === `vst3:remove:${plugin.plugin}`, onClick: () => removeVst3(plugin) }, t('移除')) : null,
+      ),
+      plugin.notes ? h('div', { style: S.desc }, plugin.notes) : null,
+      scanned ? h('div', { style: S.desc }, t('未实测：只能显式指定，不参与自动选源。')) : null,
+      playing ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+        h('div', { style: S.itemHead },
+          h('span', { style: S.label }, t('试听：{0}', vst3Preview.label)),
+          h('span', { style: S.mono }, `${vst3Preview.durationSec}s · ${vst3Preview.peakDb} dBFS`),
+        ),
+        h('audio', { controls: true, autoPlay: true, src: vst3Preview.url, style: S.audio }),
+      ) : null,
+    )
+  }
 
   return h(Fragment, null,
     h(Card, {
@@ -223,40 +378,50 @@ function FontsTab({ state, reload, notify }) {
           : null,
         h('audio', { controls: true, autoPlay: true, src: preview.url, style: S.audio }),
       ) : null,
-      fonts.rows.length === 0
+      vst3Error ? h(Notice, { tone: 'error' }, t('读取音源档案失败：{0}', vst3Error)) : null,
+      !vst3 && !vst3Error ? h('p', { style: S.desc }, t('正在读取音源档案…')) : null,
+      fonts.rows.length === 0 && vst3Plugins.length === 0
         ? h('p', { style: S.desc }, t('还没有安装任何音源。从上面的推荐里挑一套，或在下面按文件安装。'))
-        : h('div', { style: S.list }, fonts.rows.map(row => {
-          const recommended = fonts.available.find(font => font.id === row.recommendedId)
-          const label = recommended?.name ?? row.name
-          const open = Boolean(openDetails[row.path])
-          return h('div', { key: row.path, style: S.item },
-            h('div', { style: S.itemHead },
-              h('span', { style: { fontWeight: 600 } }, label),
-              h('span', { style: S.mono }, bytes(row.bytes)),
-              isDefault(row) ? h('span', { style: S.chip }, t('当前默认')) : null,
-              row.status === 'ok' ? null : h('span', { style: S.chip }, row.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')),
-              h('span', { style: { flex: 1 } }),
-              h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
-              // No button on the row that already is the default: a control that
-              // does nothing is worse than no control.
-              isDefault(row) ? null : h(Btn, { onClick: () => setDefault(row) }, t('设为默认')),
-              h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', label))) act('remove', { path: row.path, removeFile: true }) } }, t('删除')),
-              h(Btn, { onClick: () => toggleDetails(row.path) }, open ? t('收起') : t('详情')),
-            ),
-            recommended?.tagline ? h('div', { style: S.desc }, t(recommended.tagline)) : null,
-            open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-              h('div', { style: S.mono }, row.path),
-              row.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', row.sha256.slice(0, 24), row.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
-              h('div', { style: S.row }, h(Btn, { onClick: () => act('verify', { path: row.path }) }, t('校验'))),
-            ) : null,
-          )
-        })),
+        : h('div', { style: S.list }, [...fonts.rows.map(renderFontRow), ...vst3Plugins.map(renderVst3Row)]),
     ),
-    h(Card, { title: t('安装音源'), desc: t('填一个 .sf2 / .sf3 / .dls 文件的路径。7z / zip 请先解压。') },
-      h('div', { style: S.row },
-        h(TextInput, { value: customPath, onChange: setCustomPath, placeholder: t('粘贴文件路径') }),
-        h(Btn, { disabled: !customPath.trim() || installing || busy.startsWith('install:'), onClick: () => install({ fromPath: customPath.trim() }) }, t('安装')),
+    h(Card, { title: t('安装音源'), desc: t('SF2 填一个 .sf2 / .sf3 / .dls 文件的路径；VST3 填插件路径，或扫描目录后逐条添加。') },
+      h('div', { style: S.grid2 },
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+          h('span', { style: S.label }, 'SF2'),
+          h('div', { style: S.row },
+            h(TextInput, { value: customPath, onChange: setCustomPath, placeholder: t('粘贴文件路径') }),
+            h(Btn, { disabled: !customPath.trim() || installing || busy.startsWith('install:'), onClick: () => install({ fromPath: customPath.trim() }) }, t('安装')),
+          ),
+        ),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+          h('span', { style: S.label }, 'VST3'),
+          h('div', { style: S.row },
+            h(TextInput, { value: vst3Path, onChange: setVst3Path, placeholder: t('粘贴 .vst3 插件路径') }),
+            h(Btn, { disabled: !vst3Path.trim() || busy.startsWith('vst3:add:'), onClick: () => addVst3(vst3Path.trim()) }, t('添加')),
+          ),
+          h('div', { style: S.row },
+            h(TextInput, { value: scanDir, onChange: setScanDir, placeholder: t('扫描目录') }),
+            h(Btn, { disabled: busy === 'vst3:scan', onClick: scanVst3 }, busy === 'vst3:scan' ? t('扫描中…') : t('扫描')),
+          ),
+        ),
       ),
+      scan ? h('div', { style: S.list },
+        h('div', { style: S.desc }, t('扫描到 {0} 个插件（{1}）', scan.plugins.length, scan.dir)),
+        scan.plugins.length === 0 ? h('p', { style: S.desc }, t('这个目录里没有可用的 VST3 插件。')) : null,
+        ...scan.plugins.map(item => {
+          const added = vst3Plugins.some(plugin => plugin.plugin.toLowerCase() === item.path.toLowerCase())
+          return h('div', { key: item.path, style: S.item },
+            h('div', { style: S.itemHead },
+              h('span', { style: { fontWeight: 600 } }, item.name),
+              item.vendor ? h('span', { style: S.chip }, item.vendor) : null,
+              added ? h('span', { style: S.chip }, t('已添加')) : null,
+              h('span', { style: { flex: 1 } }),
+              h(Btn, { disabled: busy === `vst3:add:${item.path}`, onClick: () => addVst3(item.path, item.name, item.vendor) }, t('添加')),
+            ),
+            h('div', { style: S.mono }, item.path),
+          )
+        }),
+      ) : null,
     ),
     h(Card, { title: t('音源目录'), desc: t('整台机器共用这一个音源库；环境变量 ANYAUDIO_FONTS 可以追加目录。') },
       h('div', { style: S.mono }, fonts.directories.join('\n')),
@@ -267,94 +432,6 @@ function FontsTab({ state, reload, notify }) {
         ? t('你选的默认音源：{0}', fonts.configured)
         : t('默认音源：{0}（自动选择）', fonts.defaultPath || t('未安装音源'))),
     ),
-  )
-}
-
-/**
- * VST3 instruments: the built-in catalog from /vst3/list, one card per plugin.
- *
- * The range shown is the measured one, not the manual's claim (AGML says E1–C5
- * but only sounds from MIDI 42), because a note outside it renders silence —
- * which would look like a broken preview. The preview therefore plays the middle
- * of that range, and the first render is slow while the sidecar starts.
- */
-function InstrumentsTab({ notify }) {
-  const [catalog, setCatalog] = useState(null)
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState('')
-  const [preview, setPreview] = useState(null)
-
-  const load = useCallback(async () => {
-    try {
-      const data = await api('/vst3/list')
-      setCatalog(data)
-      setError('')
-    } catch (caught) {
-      setError(caught.message)
-    }
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  async function test(plugin) {
-    const pitch = Math.round((plugin.range.low + plugin.range.high) / 2)
-    setBusy(plugin.id)
-    try {
-      const data = await api('/vst3/test', { method: 'POST', body: { plugin: plugin.id, pitch } })
-      setPreview({ ...data, pluginId: plugin.id })
-      notify(t('试听已生成'))
-    } catch (caught) {
-      notify(t('试听失败：{0}', caught.message), 'error')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  const plugins = catalog?.plugins ?? []
-  return h(Card, {
-    title: t('乐器'),
-    desc: t('VST3 音源。音域是实测值，超出会静音；首次渲染要预热几秒。'),
-    right: h(Btn, { onClick: load }, t('刷新')),
-  },
-    error ? h(Notice, { tone: 'error' }, t('读取音源档案失败：{0}', error))
-      : !catalog ? h('p', { style: S.desc }, t('正在读取音源档案…'))
-      : plugins.length === 0 ? h('p', { style: S.desc }, t('还没有登记任何 VST3 音源。'))
-      : h('div', { style: S.list }, plugins.map(plugin => {
-        const pitch = Math.round((plugin.range.low + plugin.range.high) / 2)
-        const playing = preview?.pluginId === plugin.id
-        return h('div', { key: plugin.id, style: S.item },
-          h('div', { style: S.itemHead },
-            h('span', { style: { fontWeight: 600 } }, plugin.name),
-            h('span', { style: S.chip }, plugin.vendor),
-            h('span', { style: S.chip }, t('音域 MIDI {0}–{1}', plugin.range.low, plugin.range.high)),
-            h('span', { style: { flex: 1 } }),
-            // One render at a time: the sidecar serialises them anyway, and a
-            // second click while the first is warming up would just queue.
-            h(Btn, {
-              kind: 'primary',
-              disabled: Boolean(busy),
-              title: t('试听 MIDI {0}', pitch),
-              onClick: () => test(plugin),
-            }, busy === plugin.id ? t('渲染中…') : t('试听')),
-          ),
-          h('div', { style: S.row },
-            h('span', { style: S.label }, t('演奏法')),
-            ...plugin.articulations.map(item => h('span', { key: item.id, style: S.chip }, `${item.name} · MIDI ${item.keyswitch}`)),
-          ),
-          h('div', { style: S.row },
-            h('span', { style: S.label }, t('效果音')),
-            h('span', { style: S.chip }, t('{0} 个', plugin.fxSounds.length)),
-          ),
-          plugin.notes ? h('div', { style: S.desc }, plugin.notes) : null,
-          playing ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
-            h('div', { style: S.itemHead },
-              h('span', { style: S.label }, t('试听：{0}', preview.label)),
-              h('span', { style: S.mono }, `${preview.durationSec}s · ${preview.peakDb} dBFS`),
-            ),
-            h('audio', { controls: true, autoPlay: true, src: preview.url, style: S.audio }),
-          ) : null,
-        )
-      })),
   )
 }
 
@@ -1132,7 +1209,6 @@ function Page() {
 
   const tabs = useMemo(() => ([
     { id: 'sources', label: t('音源'), render: () => h(FontsTab, { state, reload, notify }) },
-    { id: 'instruments', label: t('乐器'), render: () => h(InstrumentsTab, { notify }) },
     { id: 'fxlib', label: t('音效'), render: () => h(FxLibTab, { state, reload, notify }) },
     { id: 'tts', label: t('配音'), render: () => h(TtsTab, { state, reload, notify }) },
     { id: 'singing', label: t('唱歌'), render: () => h(SingingTab, { state, reload, notify }) },
@@ -1194,4 +1270,4 @@ function Page() {
   )
 }
 
-export { Page, FontsTab, InstrumentsTab, FxLibTab, TtsTab, SingingTab }
+export { Page, FontsTab, FxLibTab, TtsTab, SingingTab }
