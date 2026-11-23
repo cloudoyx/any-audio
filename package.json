@@ -60,7 +60,7 @@
     "test:client": "node test/client-bundle.mjs",
     "test:settings": "node test/settings.mjs",
     "test:ui": "node test/settings-ui.mjs",
-    "test:vst3": "node test/vst3-catalog.mjs && node test/vst3-process.mjs && node test/vst3-mixed.mjs"
+    "test:vst3": "node test/vst3-catalog.mjs && node test/vst3-process.mjs && node test/vst3-mixed.mjs && node test/vst3-scan.mjs"
   },
   "dependencies": {
     "https-proxy-agent": "^7.0.6",
