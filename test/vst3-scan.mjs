@@ -3,14 +3,16 @@
  * VST3 扫描双形态与试听旋律回归测试。
  * Run: node test/vst3-scan.mjs
  *
- * 覆盖 t11/t12 的修复：
+ * 覆盖 t11/t12/t14/t15 的修复：
  *  1. scanVst3Packages 真实扫描本机 VST3 目录：目录包 form='bundle' 且
  *     declaredInstrument=true（ABPL/AGML），单文件 form='single' 且
  *     declaredInstrument=null，FabFilter 与 WaveShell 都在候选里；
+ *     候选的 recognized 建议标签与 vst3-known 规则一致；
  *  2. 单文件加载冒烟：FabFilter Twin 3 经侧车渲染单音。侧车只接受
  *     is_instrument 的插件（非乐器以 kind=load 拒绝），渲染成功即证明；
  *     再用 FabFilter Pro-Q 3 反向验证这道门禁；
- *  3. 试听旋律冒烟：ABPL 按 /vst3/test 同款 8 音琶音渲染，峰值>0.01、时长≈2.8s。
+ *  3. 试听旋律冒烟：ABPL 按 /vst3/test 同款 8 音琶音渲染，峰值>0.01、时长≈2.8s；
+ *  4. 吉他扫弦冒烟：AGML 按 /vst3/test 同款 D/D/G/A 扫弦渲染 20 音，时长≈5.2s。
  *
  * 跳过保护：目录不存在 / 候选为空 / venv 或 Python 依赖缺失 / 插件缺失都 SKIP，
  * 不因机器差异失败。本测试只读机器配置，绝不写 vst3 区块。
@@ -23,6 +25,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { builtInCatalog } from '../src/audio/vst3-catalog.js'
+import { recognizeVst3 } from '../src/audio/vst3-known.js'
 import { scanVst3Packages } from '../src/host/routes.js'
 import { renderVst3Stem } from '../src/tools/instrument.js'
 
@@ -59,6 +62,7 @@ const abplCandidate = candidates.find((candidate) => candidate.form === 'bundle'
 const agmlCandidate = candidates.find((candidate) => candidate.form === 'bundle' && /AGML/i.test(candidate.name))
 const twinCandidate = candidates.find((candidate) => candidate.form === 'single' && /FabFilter Twin 3/i.test(candidate.name))
 const proqCandidate = candidates.find((candidate) => candidate.form === 'single' && /FabFilter Pro-Q 3/i.test(candidate.name))
+const waveCandidate = byNameOrPath(/waveshell/i)[0] ?? null
 
 // ---------------------------------------------------------------------------
 if (!scanDirExists) {
@@ -83,6 +87,10 @@ if (!scanDirExists) {
       } else {
         assert.equal(candidate.declaredInstrument, null, `${candidate.name} 单文件没有 moduleinfo，声明必须是 null`)
       }
+      assert.ok(
+        candidate.recognized === 'instrument' || candidate.recognized === 'effect' || candidate.recognized === null,
+        `${candidate.name} 的 recognized 只能是 instrument/effect/null，实际 ${JSON.stringify(candidate.recognized)}`,
+      )
     }
 
     assert.ok(abplCandidate, 'ABPL 目录包必须在候选里')
@@ -97,6 +105,36 @@ if (!scanDirExists) {
     assert.ok(byNameOrPath(/fabfilter/i).length > 0, 'FabFilter 必须在候选里')
     assert.ok(byNameOrPath(/waveshell/i).length > 0, 'WaveShell 必须在候选里')
   })
+}
+
+const missingLabels = [
+  ['FabFilter Twin 3', twinCandidate],
+  ['FabFilter Pro-Q 3', proqCandidate],
+  ['WaveShell', waveCandidate],
+  ['ABPL', abplCandidate],
+  ['AGML', agmlCandidate],
+].filter(([, candidate]) => !candidate).map(([name]) => name)
+
+if (scanDirExists && candidates.length > 0) {
+  if (missingLabels.length > 0) {
+    console.log(`SKIP 认可标签：候选里缺少 ${missingLabels.join('、')}`)
+  } else {
+    test('认可标签：音源/效果器建议类别', () => {
+      // 规则本身：先具体后一般，首条命中生效。
+      assert.equal(recognizeVst3('FabFilter Twin 3'), 'instrument')
+      assert.equal(recognizeVst3('FabFilter Pro-Q 3'), 'effect')
+      assert.equal(recognizeVst3('WaveShell1-VST3 15.0_x64'), 'effect')
+      assert.equal(recognizeVst3('ABPL'), 'instrument')
+      assert.equal(recognizeVst3('AGML'), 'instrument')
+      assert.equal(recognizeVst3(''), null, '没有名称时不猜')
+      // 扫描候选必须带上同一个标签。
+      assert.equal(twinCandidate.recognized, 'instrument')
+      assert.equal(proqCandidate.recognized, 'effect')
+      assert.equal(waveCandidate.recognized, 'effect')
+      assert.equal(abplCandidate.recognized, 'instrument')
+      assert.equal(agmlCandidate.recognized, 'instrument')
+    })
+  }
 }
 
 if (!twinCandidate) {
@@ -164,6 +202,50 @@ if (!abplCandidate) {
     const result = await renderVst3Stem({ plugin: abplCandidate.path, notes, duration: 2.8, out })
     assert.ok(result.peak > 0.01, `峰值应大于 0.01，实际 ${result.peak}`)
     assert.ok(Math.abs(result.seconds - 2.8) <= 0.3, `时长应约 2.8s，实际 ${result.seconds}`)
+    assert.ok(existsSync(out), '应写出 WAV')
+  })
+}
+
+if (!agmlCandidate) {
+  console.log('SKIP 吉他扫弦冒烟：扫描结果里没有 AGML')
+} else if (!depsReady) {
+  console.log('SKIP 吉他扫弦冒烟：venv 或 pedalboard/numpy/mido 不可用')
+} else {
+  test('吉他扫弦冒烟：AGML 四和弦 20 音（/vst3/test 同款）', async () => {
+    // 与 src/host/routes.js 的 vst3TestRoute 同一套扫弦模式：D/D/G/A 四个和弦，
+    // 每和弦 5 音从低到高错开 0.018s，前三个 0.9s、末个 1.4s，duration 5.2s。
+    const chords = [
+      { start: 0.0, pitches: [50, 57, 62, 66, 69], dur: 0.9, vel: 100 },
+      { start: 1.0, pitches: [50, 57, 62, 66, 69], dur: 0.9, vel: 100 },
+      { start: 2.0, pitches: [55, 59, 62, 67, 71], dur: 0.9, vel: 100 },
+      { start: 3.0, pitches: [45, 52, 57, 61, 64], dur: 1.4, vel: 110 },
+    ]
+    const notes = chords.flatMap((chord) => chord.pitches.map((pitch, index) => ({
+      pitch,
+      start: chord.start + index * 0.018,
+      dur: chord.dur,
+      vel: chord.vel,
+    })))
+    assert.equal(notes.length, 20, '四和弦 × 5 音 = 20 个音')
+    assert.deepEqual(
+      notes.slice(0, 5).map((note) => Number(note.start.toFixed(6))),
+      [0, 0.018, 0.036, 0.054, 0.072],
+      '弦间错开 0.018s',
+    )
+    assert.equal(notes[19].vel, 110, '末和弦力度 110')
+    const range = builtInCatalog().plugins.find((entry) => /AGML/i.test(entry.plugin))?.range ?? null
+    if (range) {
+      for (const note of notes) {
+        assert.ok(
+          note.pitch >= range.low && note.pitch <= range.high,
+          `扫弦音高 ${note.pitch} 超出实测音域 ${range.low}-${range.high}`,
+        )
+      }
+    }
+    const out = join(WORK, 'agml-strum.wav')
+    const result = await renderVst3Stem({ plugin: agmlCandidate.path, notes, duration: 5.2, out })
+    assert.ok(result.peak > 0.01, `峰值应大于 0.01，实际 ${result.peak}`)
+    assert.ok(Math.abs(result.seconds - 5.2) <= 0.3, `时长应约 5.2s，实际 ${result.seconds}`)
     assert.ok(existsSync(out), '应写出 WAV')
   })
 }
