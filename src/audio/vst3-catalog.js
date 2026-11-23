@@ -7,6 +7,7 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { CATEGORY_LABELS } from './scoring.js'
 import { ARTICULATIONS, GUITAR_FX_SOUNDS } from './vst3-techniques.js'
 
 export const CATALOG_VERSION = 1
@@ -43,6 +44,7 @@ export function builtInCatalog() {
         format: 'vst3',
         instrument: true,
         range: { low: 40, high: 72 },
+        families: { bass: 9 },
         articulations: copyArticulations(),
         fxSounds: [],
         notes: '低音区不出声（实测 MIDI 40 以下静音）；52 以上音高可能不准。',
@@ -55,6 +57,7 @@ export function builtInCatalog() {
         format: 'vst3',
         instrument: true,
         range: { low: 42, high: 84 },
+        families: { guitar: 9 },
         articulations: copyArticulations(),
         fxSounds: GUITAR_FX_SOUNDS.map((item) => ({ ...item })),
         notes: '低音 E 弦不出声（实测 MIDI 42 起）；效果音直接当音符弹。',
@@ -98,6 +101,20 @@ function validateKeyswitchList(list, where) {
   }
 }
 
+/** 乐器族评分：键必须是 scoring.js 的族键，分数 1-10，供 auto 跨类选源使用。 */
+function validateFamilies(families, where) {
+  if (families === undefined) return
+  if (!isObject(families)) throw new Vst3CatalogError(`${where} 必须是 { 乐器族: 评分 } 对象`)
+  for (const [family, score] of Object.entries(families)) {
+    if (!(family in CATEGORY_LABELS)) {
+      throw new Vst3CatalogError(`${where}.${family} 不是合法的乐器族；可用：${Object.keys(CATEGORY_LABELS).join(', ')}`)
+    }
+    if (!Number.isInteger(score) || score < 1 || score > 10) {
+      throw new Vst3CatalogError(`${where}.${family} 评分必须是 1-10 的整数，现在是 ${JSON.stringify(score)}`)
+    }
+  }
+}
+
 function validatePlugin(entry, index) {
   const where = `plugins[${index}]`
   if (!isObject(entry)) throw new Vst3CatalogError(`${where} 必须是对象`)
@@ -117,6 +134,7 @@ function validatePlugin(entry, index) {
   if (entry.range.low > entry.range.high) {
     throw new Vst3CatalogError(`${where}.range.low (${entry.range.low}) 不能大于 range.high (${entry.range.high})`)
   }
+  validateFamilies(entry.families, `${where}.families`)
   validateKeyswitchList(entry.articulations, `${where}.articulations`)
   validateKeyswitchList(entry.fxSounds, `${where}.fxSounds`)
   if (typeof entry.notes !== 'string') throw new Vst3CatalogError(`${where}.notes 必须是字符串`)

@@ -123,7 +123,16 @@ function validateTask(task) {
     }
     return { pitch: note.pitch, start, dur, vel }
   })
-  return { plugin: task.plugin, notes, duration, out: task.out }
+  const keyswitches = Array.isArray(task.keyswitches)
+    ? task.keyswitches.filter((pitch) => Number.isInteger(pitch) && pitch >= 0 && pitch <= 127)
+    : []
+  return {
+    plugin: task.plugin,
+    notes,
+    duration,
+    out: task.out,
+    ...(keyswitches.length ? { keyswitches } : {}),
+  }
 }
 
 export function createVst3Process(options = {}) {

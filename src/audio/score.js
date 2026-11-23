@@ -3,6 +3,8 @@
  * friendly) into sample-accurate MIDI events for the SoundFont renderer.
  */
 
+import { builtInCatalog } from './vst3-catalog.js'
+
 const NOTE_BASE = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }
 const ACCIDENTAL = { '#': 1, s: 1, '♯': 1, b: -1, '♭': -1 }
 
@@ -196,14 +198,15 @@ function collectNotes(track, warn, drums = false) {
     return parsePitch(value)
   }
   track.notes.forEach((entry, index) => {
-    let start, duration, pitch, velocity
+    let start, duration, pitch, velocity, art
     if (Array.isArray(entry)) {
-      ;[start, duration, pitch, velocity] = entry
+      ;[start, duration, pitch, velocity, art] = entry
     } else if (entry && typeof entry === 'object') {
       start = entry.t ?? entry.start ?? entry.time
       duration = entry.d ?? entry.dur ?? entry.duration
       pitch = entry.p ?? entry.pitch ?? entry.n ?? entry.note
       velocity = entry.v ?? entry.velocity
+      art = entry.art ?? entry.articulation
     } else {
       throw new Error(`track "${track.name}" note #${index} must be an array or object`)
     }
@@ -211,12 +214,24 @@ function collectNotes(track, warn, drums = false) {
     duration = number(duration, `note #${index} duration`)
     if (start < 0) throw new Error(`track "${track.name}" note #${index} starts before 0`)
     if (duration <= 0) throw new Error(`track "${track.name}" note #${index} duration must be > 0`)
+    if (art !== undefined && art !== null && art !== '') {
+      if (typeof art !== 'string') throw new Error(`track "${track.name}" note #${index} art must be a string`)
+      art = art.trim() || undefined
+    } else {
+      art = undefined
+    }
     const pitches = Array.isArray(pitch) ? pitch : [pitch]
     if (!pitches.length) throw new Error(`track "${track.name}" note #${index} has no pitch`)
     const vel = velocity === undefined ? DEFAULT_VELOCITY : Math.round(number(velocity, `note #${index} velocity`))
     if (vel < 1 || vel > 127) warn(`track "${track.name}" note #${index} velocity clamped to 1..127`)
     for (const p of pitches) {
-      notes.push({ start, duration, midi: parseOne(p), velocity: Math.max(1, Math.min(127, vel)) })
+      notes.push({
+        start,
+        duration,
+        midi: parseOne(p),
+        velocity: Math.max(1, Math.min(127, vel)),
+        ...(art ? { art } : {}),
+      })
     }
   })
   return notes
@@ -297,6 +312,32 @@ function cc7For(gainDb) {
 }
 
 /**
+ * Reject notes a VST3 instrument cannot sound, and articulation ids it does not
+ * have. The sidecar would render an out-of-range note as silence, so catching it
+ * here names the track and the source instead of shipping an empty stem.
+ */
+export function checkVst3Notes(trackName, entry, notes) {
+  const { low, high } = entry.range
+  const outside = notes.filter((note) => note.midi < low || note.midi > high)
+  if (outside.length > 0) {
+    const first = outside[0]
+    throw new ScoreError(
+      `track "${trackName}" uses VST3 source "${entry.id}" (${entry.name}), whose measured range is MIDI ${low}-${high}; `
+      + `note at ${first.start.toFixed(2)}s (pitch ${first.midi}) is outside it and would be silent. `
+      + 'Move the pitch into range or choose another source.',
+    )
+  }
+  const artIds = new Set((entry.articulations ?? []).map((item) => item.id))
+  for (const note of notes) {
+    if (note.art && !artIds.has(note.art)) {
+      throw new ScoreError(
+        `track "${trackName}" note at ${note.start.toFixed(2)}s: art "${note.art}" is not one of ${entry.id}'s articulations (${[...artIds].join(', ')})`,
+      )
+    }
+  }
+}
+
+/**
  * Compile a score object into per-track event lists.
  * Notes use seconds so the musical timeline and the video timeline share one
  * clock; no tempo map is needed.
@@ -336,6 +377,9 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
 
     const instrument = resolveInstrument(track.instrument ?? track.program ?? (drums ? 'drums' : 'piano'))
     const source = typeof track.source === 'string' && track.source.trim() ? track.source.trim() : undefined
+    // A source that names a built-in VST3 instrument is not a SoundFont id: the
+    // renderer sends this track to the sidecar instead of the SF2 synth.
+    const vst3 = source ? builtInCatalog().plugins.find((entry) => entry.id === source) ?? null : null
     const gainDb = Number.isFinite(Number(track.gainDb)) ? Number(track.gainDb) : 0
     const pan = Number.isFinite(Number(track.pan)) ? Math.max(-1, Math.min(1, Number(track.pan))) : 0
     const reverb = Number.isFinite(Number(track.reverb)) ? Math.max(0, Math.min(1, Number(track.reverb))) : 0.35
@@ -343,6 +387,7 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
 
     let notes = collectNotes(track, warn, drums)
     notes = applyHumanize(notes, track.humanize, index * 7919 + (Number(track.humanize?.seed) || 0))
+    if (vst3) checkVst3Notes(name, vst3, notes)
 
     const events = []
     const program = drums ? 0 : instrument.program
@@ -361,7 +406,7 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
     const end = notes.reduce((max, note) => Math.max(max, note.start + note.duration), 0)
     return {
       name, channel, program, bank: instrument.bank, instrument: instrument.label, source,
-      drums, gainDb, pan, reverb, chorus, notes, events, endSec: end,
+      vst3, drums, gainDb, pan, reverb, chorus, notes, events, endSec: end,
     }
   })
 

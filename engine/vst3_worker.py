@@ -115,12 +115,15 @@ def plugin_range(path):
     return None
 
 
-def check_range(path, notes):
+def check_range(path, notes, keyswitches=()):
     bounds = plugin_range(path)
     if not bounds:
         return
     low, high = bounds
-    bad = sorted({note["pitch"] for note in notes if not low <= note["pitch"] <= high})
+    # 演奏法键位音（24/26/28/30）本来就在音域外，它们是控制键，不是音符：
+    # 调用方用 keyswitches 显式列出，才放行；普通音符仍然严格检查。
+    exempt = set(keyswitches)
+    bad = sorted({note["pitch"] for note in notes if not low <= note["pitch"] <= high and note["pitch"] not in exempt})
     if bad:
         raise WorkerError(
             "param",
@@ -266,8 +269,14 @@ def handle_render(cache, msg):
     duration = float(duration)
 
     notes = parse_notes(msg.get("notes"), duration)
+    raw_keyswitches = msg.get("keyswitches")
+    keyswitches = set()
+    if isinstance(raw_keyswitches, list):
+        for pitch in raw_keyswitches:
+            if isinstance(pitch, int) and not isinstance(pitch, bool) and 0 <= pitch <= 127:
+                keyswitches.add(pitch)
     path = resolve_plugin_path(plugin_raw)
-    check_range(path, notes)
+    check_range(path, notes, keyswitches)
     plugin = cache.get(path)
     audio = render_audio(plugin, notes, duration)
     peak = _peak(audio)

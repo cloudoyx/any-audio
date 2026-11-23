@@ -1,17 +1,27 @@
+import { existsSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { rm } from 'node:fs/promises'
-import { planFonts, resolveConfiguredDefault } from '../audio/banks.js'
-import { compileScore } from '../audio/score.js'
+import { loadCatalog, planFonts, resolveConfiguredDefault } from '../audio/banks.js'
+import { accumulateInto, dbToGain, panGains } from '../audio/mix.js'
+import { categoryOfProgram, rankFonts } from '../audio/scoring.js'
+import { checkVst3Notes, compileScore } from '../audio/score.js'
 import { renderCompiled } from '../audio/synth.js'
+import { builtInCatalog } from '../audio/vst3-catalog.js'
+import { createVst3Process } from '../audio/vst3-process.js'
+import { KEYSWITCH_HOLD_SEC, KEYSWITCH_LEAD_SEC } from '../audio/vst3-techniques.js'
+import { conformChannels, padOrTrim, parseWav, peakOf, resample, rmsOf, toDb } from '../audio/wav.js'
 import { readConfig } from '../config.js'
 import { attachMaterialFile } from '../project/attach.js'
 import { projectDir } from '../project/paths.js'
+import { renderVst3Stem } from './instrument.js'
 import { deliverCopy, deliveryPath, finalizeTool, nowStamp, readJsonParam, relativeToWorkspace, requireProjectId, scratchPath, seconds as clampSeconds, textRenderer, workspaceRootOf, writeWavFile } from './shared.js'
 
 function describeTracks(tracks) {
   return tracks
     .map((track) => {
-      const source = track.source ? ` [source: ${track.source}]` : ''
+      const kind = track.sourceKind === 'vst3' ? ' (vst3)' : ''
+      const fallback = track.fallback ? ', fallback' : ''
+      const source = track.source ? ` [source: ${track.source}${kind}${fallback}]` : ''
       const level = Number.isFinite(track.rmsDb) ? `, ${track.rmsDb.toFixed(1)} dBFS RMS` : ''
       return `- ${track.name}: ${track.instrument}${track.drums ? ' (drum kit)' : ''}${source}, ${track.notes} notes, ${track.endSec.toFixed(2)}s${level}`
     })
@@ -55,16 +65,198 @@ export async function eachTrackStem(compiled, { renderOne, gain = 1, onStem = nu
   return { levels, rendered }
 }
 
+/** Notes for the VST3 sidecar: the target notes plus a short keyswitch note
+ *  before each note that names an articulation. The keyswitch pitches are
+ *  returned too, so the sidecar's range check can exempt them. */
+function vst3NoteEvents(track) {
+  const keyswitches = new Map((track.vst3?.articulations ?? []).map((item) => [item.id, item.keyswitch]))
+  const notes = []
+  const usedKeyswitches = new Set()
+  for (const note of track.notes) {
+    const keyswitch = note.art ? keyswitches.get(note.art) : undefined
+    if (keyswitch !== undefined) {
+      usedKeyswitches.add(keyswitch)
+      notes.push({
+        pitch: keyswitch,
+        start: Math.max(0, note.start - KEYSWITCH_LEAD_SEC),
+        dur: KEYSWITCH_HOLD_SEC,
+        vel: 100,
+      })
+    }
+    notes.push({ pitch: note.midi, start: note.start, dur: note.duration, vel: note.velocity })
+  }
+  return { notes, keyswitches: [...usedKeyswitches] }
+}
+
+/**
+ * Resolve every track to either a VST3 instrument or the SoundFont planner.
+ *
+ * An explicit VST3 id comes from the built-in catalog. `auto`/missing sources
+ * are ranked across both classes with the same fontScore/rankFonts mechanism the
+ * SF2 planner uses; ties keep SF2 first (conservative). A VST3 entry whose
+ * plugin file is missing never wins: the track falls back to SF2 and the plan
+ * says so.
+ *
+ * Exported so the fallback can be tested without uninstalling a real plugin.
+ */
+export async function selectSources(compiled, { catalog = builtInCatalog() } = {}) {
+  const vst3ById = new Map(catalog.plugins.map((entry) => [entry.id, entry]))
+  const warnings = []
+  const autoTracks = []
+
+  for (const track of compiled.tracks) {
+    const source = typeof track.source === 'string' ? track.source.trim() : ''
+    const explicit = source && source !== 'auto' ? vst3ById.get(source) : null
+    if (explicit) {
+      if (existsSync(explicit.plugin)) {
+        track.vst3 = explicit
+      } else {
+        track.vst3 = null
+        track.vst3Fallback = true
+        track.source = 'auto'
+        warnings.push(
+          `track "${track.name}": VST3 source "${explicit.id}" is not installed (${explicit.plugin}); `
+          + 'rendered with the SoundFont fallback instead',
+        )
+      }
+      continue
+    }
+    if ((!source || source === 'auto') && !track.drums) autoTracks.push(track)
+  }
+
+  if (autoTracks.length > 0) {
+    const fonts = await loadCatalog()
+    const candidates = fonts.filter((entry) => entry.recommended).length > 0
+      ? fonts.filter((entry) => entry.recommended)
+      : fonts
+    const sf2Fonts = candidates.map((entry) => entry.recommended ?? { id: entry.id, name: entry.name, scores: {} })
+    for (const track of autoTracks) {
+      const category = categoryOfProgram(track.program)
+      const vst3Fonts = catalog.plugins
+        .filter((entry) => Number.isFinite(entry.families?.[category]))
+        .map((entry) => ({ id: entry.id, name: entry.name, scores: entry.families, vst3: entry }))
+      const ranked = rankFonts([...sf2Fonts, ...vst3Fonts], category, track.program)
+      const winner = ranked[0]
+      if (!winner?.vst3) continue
+      if (existsSync(winner.vst3.plugin)) {
+        checkVst3Notes(track.name, winner.vst3, track.notes)
+        track.vst3 = winner.vst3
+        warnings.push(`track "${track.name}": auto-picked VST3 ${winner.vst3.name} for ${category} (score ${winner.score}/10)`)
+      } else {
+        warnings.push(
+          `track "${track.name}": auto would have picked VST3 ${winner.vst3.name} for ${category} (score ${winner.score}/10), `
+          + `but its plugin is not installed (${winner.vst3.plugin}); used the SoundFont fallback instead`,
+        )
+      }
+    }
+  }
+
+  return {
+    sf2Compiled: { ...compiled, tracks: compiled.tracks.filter((track) => !track.vst3) },
+    vst3Tracks: compiled.tracks.filter((track) => track.vst3),
+    warnings,
+  }
+}
+
+/** Render one VST3 track to a stem at the mix's sample rate and length. */
+async function renderVst3TrackStem(track, { manager, sampleRate, durationSec, workspaceRoot, stamp, index }) {
+  const out = scratchPath(workspaceRoot, `vst3-${stamp}-${index}.wav`)
+  const events = vst3NoteEvents(track)
+  const result = await renderVst3Stem({
+    plugin: track.vst3.plugin,
+    notes: events.notes,
+    keyswitches: events.keyswitches,
+    duration: durationSec,
+    out,
+    manager,
+  })
+  let channels
+  try {
+    const wav = parseWav(await readFile(out))
+    channels = conformChannels(wav.channels, 2)
+    if (wav.sampleRate !== sampleRate) channels = resample(channels, wav.sampleRate, sampleRate)
+  } finally {
+    await rm(out, { force: true })
+  }
+  channels = padOrTrim(channels, Math.ceil(durationSec * sampleRate))
+  return {
+    channels,
+    peakDb: toDb(peakOf(channels)),
+    rmsDb: toDb(rmsOf(channels)),
+    seconds: result.seconds,
+  }
+}
+
+/**
+ * Render a score that mixes SoundFont tracks and VST3 tracks.
+ *
+ * The SF2 half is rendered exactly as before, only without its master
+ * normalisation; the VST3 stems are added with their own gainDb/pan, and one
+ * master normalisation is applied to the combined mix. The VST3 stems are kept
+ * so the per-track stem pass does not render them a second time.
+ */
+async function renderMixedScore({ compiled, sf2Compiled, plan, vst3Tracks, sampleRate, durationSec, peakDb, normalize, workspaceRoot }) {
+  const frames = Math.ceil(durationSec * sampleRate)
+  const sf2 = sf2Compiled.tracks.length > 0
+    ? await renderCompiled(sf2Compiled, {
+      banks: plan.banks, layout: plan.layout, sampleRate, durationSec, normalize: false,
+    })
+    : { channels: [new Float32Array(frames), new Float32Array(frames)], brokenSamples: 0, voices: 0 }
+  const acc = [new Float32Array(frames), new Float32Array(frames)]
+  accumulateInto(acc, sf2.channels, 0, 1, 1)
+
+  const stamp = nowStamp()
+  const manager = createVst3Process()
+  const stems = new Map()
+  try {
+    for (const [index, track] of vst3Tracks.entries()) {
+      if (!track.notes?.length) continue
+      const stem = await renderVst3TrackStem(track, { manager, sampleRate, durationSec, workspaceRoot, stamp, index })
+      stems.set(track.name, stem)
+      const gain = dbToGain(track.gainDb)
+      const [left, right] = panGains(track.pan)
+      accumulateInto(acc, stem.channels, 0, gain * left, gain * right)
+    }
+  } finally {
+    await manager.shutdown().catch(() => {})
+  }
+
+  const peakBefore = peakOf(acc)
+  let appliedGain = 1
+  if (normalize && peakBefore > 0 && Number.isFinite(peakDb)) {
+    appliedGain = Math.pow(10, peakDb / 20) / peakBefore
+    for (let i = 0; i < frames; i++) {
+      acc[0][i] *= appliedGain
+      acc[1][i] *= appliedGain
+    }
+  }
+  return {
+    channels: acc,
+    sampleRate,
+    durationSec: frames / sampleRate,
+    frames,
+    appliedGain,
+    peakBeforeDb: toDb(peakBefore),
+    peakDb: toDb(peakOf(acc)),
+    rmsDb: toDb(rmsOf(acc)),
+    brokenSamples: sf2.brokenSamples,
+    notes: compiled.tracks.reduce((sum, track) => sum + track.notes.length, 0),
+    voices: sf2.voices,
+    stems,
+  }
+}
+
 export const musicToolDefinition = finalizeTool({
   name: 'anyaudio_music',
   description:
-    'Render a note score to a WAV file with real SoundFont instruments (MIDI-style notes, per-track gain/pan/reverb, optional automation). ' +
+    'Render a note score to a WAV file with real SoundFont instruments and VST3 instruments (MIDI-style notes, per-track gain/pan/reverb, optional automation). ' +
     'The rendered music goes into a clip bay project: pass projectId, and it is added as material and placed on its own track (one track per score track when stems:true), so the person can open, hear and adjust it. ' +
     'Call it whenever you are making or editing a video that should have a soundtrack, and prefer it over hand-writing numpy synthesis: acoustic timbres, several instruments, humanised timing. ' +
-    'Each track may name a "source" (font id from anyaudio_sources, a .sf2 path, or "auto" to pick the best-scored installed font for that instrument). ' +
-    'Different tracks in one score may use different fonts; they are loaded into one synth and kept on non-overlapping bank offsets. ' +
-    'Drum kits always come from the default font (the first loaded bank) — pass another kit as "font" if you need it. ' +
-    'Score format (seconds on the video timeline): {title, tracks:[{name, instrument, source, gainDb, pan, reverb, drums, humanize:{timingMs,velocity}, notes:[[startSec, durSec, pitch|pitches, velocity]]}], automation:[{track, controller, points:[[sec,value]]}]}. ' +
+    'Each track may name a "source": a VST3 instrument id ("ample-bass-p-lite" for Ample Bass P Lite, MIDI 40-72; "ample-guitar-m-lite" for Ample Guitar M Lite, MIDI 42-84), a SoundFont id from anyaudio_sources, a .sf2 path, or "auto" to pick the best-scored source across both classes for that instrument. ' +
+    'Different tracks in one score may use different sources; SoundFonts are loaded into one synth and kept on non-overlapping bank offsets, while VST3 tracks are rendered by a local sidecar. ' +
+    'Drum kits always come from the default SoundFont (the first loaded bank) — pass another kit as "font" if you need it. ' +
+    'Score format (seconds on the video timeline): {title, tracks:[{name, instrument, source, gainDb, pan, reverb, drums, humanize:{timingMs,velocity}, notes:[[startSec, durSec, pitch|pitches, velocity, art?]]}], automation:[{track, controller, points:[[sec,value]]}]}. ' +
+    'The optional fifth note element "art" is a VST3 articulation id — "sus" (sustain), "pm" (palm mute), "ls" (legato slide), "hp" (hammer-on/pull-off); the sidecar sends the matching keyswitch just before the note. SoundFont tracks ignore it. ' +
     'Pitch accepts MIDI numbers or names (D3, F#4, Bb2); instruments accept GM names (piano, cello, strings, koto, shakuhachi, erhu, guzheng) or GM program numbers. ' +
     'Each track\'s gainDb is the level its stem is rendered at. That is a fact about the file, measured and recorded when the stem lands — it is not a mixing knob. To rebalance later, change the clip gain; do not render again. Positive values lift a track above the loudest one (the whole score is shifted instead of clipping). Per-track levels come back on every call (this tool measures them as part of rendering, one synthesis per track), so there is nothing to ask for; a part sitting more than 12 dB under the loudest one gets a warning. ' +
     'Read the anyaudio-scoring skill for arrangement technique and mixing workflow.',
@@ -76,7 +268,7 @@ export const musicToolDefinition = finalizeTool({
       trackName: { type: 'string', description: 'Name of the track to create for this music, default the score title. Ignored with stems:true, where each score track gets its own project track named after it.' },
       startSec: { type: 'number', description: 'Where the music starts on the project timeline, default 0.' },
       output: { type: 'string', description: "Optional extra copy of the rendered WAV at this path. Relative paths resolve against the user's project. The project's own copy is always written under the project folder." },
-      font: { type: 'string', description: 'Default SoundFont path or id (.sf2/.sf3/.dls). Tracks without "source" use it; drum kits always come from it. Defaults to the installed font.' },
+      font: { type: 'string', description: 'Default SoundFont path or id (.sf2/.sf3/.dls). Used for tracks that resolve to a SoundFont; drum kits always come from it. Defaults to the installed font.' },
       sampleRate: { type: 'number', description: 'Sample rate, default 48000.' },
       durationSec: { type: 'number', description: 'Exact output length. Defaults to last note end + tailSec.' },
       tailSec: { type: 'number', description: 'Extra seconds after the last note for release and reverb, default 2.' },
@@ -105,6 +297,7 @@ export const musicToolDefinition = finalizeTool({
         rmsDb: { type: 'number' },
         font: { type: 'string' },
         fonts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        vst3: { type: 'array', items: { type: 'object', additionalProperties: true } },
         tracks: { type: 'array', items: { type: 'object', additionalProperties: true } },
         stems: { type: 'array', items: { type: 'string' } },
         warnings: { type: 'array', items: { type: 'string' } },
@@ -112,10 +305,11 @@ export const musicToolDefinition = finalizeTool({
     },
     render: textRenderer((args, value) => {
       const fonts = value.fonts?.length ? value.fonts.map((font) => `${font.id}@+${font.offset} (${font.file})`).join(', ') : basename(value.font ?? '')
+      const vst3 = value.vst3?.length ? value.vst3.map((entry) => `${entry.id} (${entry.name})`).join(', ') : ''
       const lines = [
         `Rendered ${value.durationSec.toFixed(2)}s @ ${value.sampleRate} Hz → ${value.file}`,
         `peak ${value.peakDb.toFixed(1)} dBFS, RMS ${value.rmsDb.toFixed(1)} dBFS`,
-        `Fonts: ${fonts}`,
+        `Fonts: ${fonts}${vst3 ? `; VST3: ${vst3}` : ''}`,
         'Tracks:',
         describeTracks(value.tracks ?? []),
       ]
@@ -141,6 +335,13 @@ export const musicToolDefinition = finalizeTool({
     const score = await readJsonParam(args.score, 'score', { workspaceRoot })
     const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.music.sampleRate, config.music.sampleRate)) || config.music.sampleRate
     const compiled = compileScore(score, { sampleRate })
+    // VST3 tracks leave the SoundFont planner: the sidecar renders them, and the
+    // SF2 synth must never see their events. `auto` is settled here, across both
+    // classes, before the SF2 plan is built.
+    const selection = await selectSources(compiled)
+    const sf2Compiled = selection.sf2Compiled
+    const vst3Tracks = selection.vst3Tracks
+    const mixed = vst3Tracks.length > 0
     const tailSec = clampSeconds(args.tailSec ?? config.music.tailSec, config.music.tailSec)
     const durationSec = clampSeconds(args.durationSec, compiled.durationSec + tailSec)
     const explicitFont = typeof args.font === 'string' && args.font.trim() ? args.font.trim() : ''
@@ -155,7 +356,7 @@ export const musicToolDefinition = finalizeTool({
         defaultNote = `the saved default sound source "${resolved.configured}" is no longer installed; used ${basename(resolved.path)} instead — pick another default with anyaudio_sources action "use"`
       }
     }
-    const plan = await planFonts(compiled, { workspaceRoot, fontPath })
+    const plan = await planFonts(mixed ? sf2Compiled : compiled, { workspaceRoot, fontPath })
     const peakSetting = args.peakDb === undefined ? config.music.peakDb : args.peakDb
     const peakDb = peakSetting === null ? undefined : Number(peakSetting)
     const normalize = peakSetting !== null
@@ -169,7 +370,9 @@ export const musicToolDefinition = finalizeTool({
     // for (improvement plan 04; measured: 9.5 MB of a 49.6s score sat in `out/`
     // with nothing in the project referencing it).
     const target = scratchPath(workspaceRoot, `score-${nowStamp()}.wav`)
-    const rendered = await renderCompiled(compiled, { banks: plan.banks, layout: plan.layout, sampleRate, durationSec, peakDb, normalize })
+    const rendered = mixed
+      ? await renderMixedScore({ compiled, sf2Compiled, plan, vst3Tracks, sampleRate, durationSec, peakDb, normalize, workspaceRoot })
+      : await renderCompiled(compiled, { banks: plan.banks, layout: plan.layout, sampleRate, durationSec, peakDb, normalize })
     const written = await writeWavFile(target, rendered.channels, sampleRate)
     // Replace or append, decided before anything is written.
     //
@@ -226,9 +429,23 @@ export const musicToolDefinition = finalizeTool({
     const projectRel = relativeToWorkspace(workspaceRoot, projectDir(workspaceRoot, projectId))
     const { levels } = await eachTrackStem(compiled, {
       gain,
-      renderOne: (track) => renderCompiled(compiled, {
-        banks: plan.banks, layout: plan.layout, sampleRate, durationSec, normalize: false, onlyTrack: track.name,
-      }),
+      renderOne: (track) => {
+        if (track.vst3) {
+          // The mix pass already rendered this stem; reuse it instead of paying
+          // for a second VST3 render just to measure it.
+          const stem = rendered.stems.get(track.name)
+          const trackGain = dbToGain(track.gainDb)
+          const [left, right] = panGains(track.pan)
+          const channels = [
+            Float32Array.from(stem.channels[0], (sample) => sample * trackGain * left),
+            Float32Array.from(stem.channels[1], (sample) => sample * trackGain * right),
+          ]
+          return { channels, peakDb: toDb(peakOf(channels)), rmsDb: toDb(rmsOf(channels)) }
+        }
+        return renderCompiled(mixed ? sf2Compiled : compiled, {
+          banks: plan.banks, layout: plan.layout, sampleRate, durationSec, normalize: false, onlyTrack: track.name,
+        })
+      },
       onStem: args.stems === true
         ? async (track, channels, level) => {
           // `\w` is ASCII-only, so every Chinese track name collapsed to the same
@@ -303,11 +520,14 @@ export const musicToolDefinition = finalizeTool({
     const tracks = compiled.tracks.map((track) => {
       const assignment = plan.layout.get(track.name)
       const level = levels.get(track.name)
+      const vst3 = track.vst3
       return {
         name: track.name,
         instrument: track.instrument,
-        program: assignment?.program ?? track.program,
-        source: assignment?.source,
+        program: vst3 ? null : assignment?.program ?? track.program,
+        source: vst3 ? vst3.id : assignment?.source,
+        sourceKind: vst3 ? 'vst3' : 'sf2',
+        fallback: track.vst3Fallback === true,
         gainDb: track.gainDb,
         notes: track.notes.length,
         endSec: Number(track.endSec.toFixed(2)),
@@ -319,7 +539,7 @@ export const musicToolDefinition = finalizeTool({
           : {}),
       }
     })
-    const warnings = [...compiled.warnings, ...plan.warnings, ...layoutNotes]
+    const warnings = [...compiled.warnings, ...plan.warnings, ...selection.warnings, ...layoutNotes]
     if (defaultNote) warnings.push(defaultNote)
     if (args.durationSec !== undefined && compiled.durationSec > durationSec + 0.001) {
       warnings.push(`score runs to ${compiled.durationSec.toFixed(2)}s but durationSec is ${durationSec.toFixed(2)}s — notes past the end are cut; add tail or end the music earlier`)
@@ -368,6 +588,7 @@ export const musicToolDefinition = finalizeTool({
       rmsDb: Number(rendered.rmsDb.toFixed(2)),
       font: plan.banks[0]?.path,
       fonts: plan.fonts,
+      vst3: vst3Tracks.map((track) => ({ id: track.vst3.id, name: track.vst3.name, plugin: track.vst3.plugin, track: track.name })),
       tracks,
       stems,
       stemsNormalized: false,
