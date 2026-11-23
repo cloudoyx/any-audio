@@ -1,0 +1,176 @@
+/**
+ * VST3 音色档案：内置条目、校验与磁盘读写。
+ *
+ * 一条档案描述一个音源插件：装在哪、实测能弹多高多低、四个演奏法键位在哪、
+ * 有哪些效果音。音域必须与 engine/vst3_worker.py 的 PLUGIN_RANGES 一致——
+ * 侧车按插件文件名里的 abpl / agml 匹配音域，超出直接拒绝渲染。
+ */
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { ARTICULATIONS, GUITAR_FX_SOUNDS } from './vst3-techniques.js'
+
+export const CATALOG_VERSION = 1
+
+export class Vst3CatalogError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'Vst3CatalogError'
+  }
+}
+
+/** Windows 的 .vst3 是目录包；内层 DLL 由侧车自己找。 */
+const VST3_DIR = 'C:\\Program Files\\Common Files\\VST3'
+
+function copyArticulations() {
+  return ARTICULATIONS.map((item) => ({ ...item }))
+}
+
+/**
+ * 内置档案。每次调用都返回新对象，调用方改了也不会污染下一次。
+ *
+ * 音域是实测值，不是说明书标注：AGML 说明书 E1–C5（40–84），实测 42 起
+ * 才有声；ABPL 说明书 B0–F4（23–65），实测 40–72。
+ */
+export function builtInCatalog() {
+  return {
+    version: CATALOG_VERSION,
+    plugins: [
+      {
+        id: 'ample-bass-p-lite',
+        name: 'Ample Bass P Lite 4 (ABPL)',
+        vendor: 'Ample Sound',
+        plugin: `${VST3_DIR}\\ABPL.vst3`,
+        format: 'vst3',
+        instrument: true,
+        range: { low: 40, high: 72 },
+        articulations: copyArticulations(),
+        fxSounds: [],
+        notes: '低音区不出声（实测 MIDI 40 以下静音）；52 以上音高可能不准。',
+      },
+      {
+        id: 'ample-guitar-m-lite',
+        name: 'Ample Guitar M Lite (AGML)',
+        vendor: 'Ample Sound',
+        plugin: `${VST3_DIR}\\AGML.vst3`,
+        format: 'vst3',
+        instrument: true,
+        range: { low: 42, high: 84 },
+        articulations: copyArticulations(),
+        fxSounds: GUITAR_FX_SOUNDS.map((item) => ({ ...item })),
+        notes: '低音 E 弦不出声（实测 MIDI 42 起）；效果音直接当音符弹。',
+      },
+    ],
+  }
+}
+
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function requireString(value, where) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Vst3CatalogError(`${where} 必须是非空字符串`)
+  }
+  return value
+}
+
+function requireMidi(value, where) {
+  if (!Number.isInteger(value) || value < 0 || value > 127) {
+    throw new Vst3CatalogError(`${where} 必须是 0-127 的整数（MIDI 编号），现在是 ${JSON.stringify(value)}`)
+  }
+  return value
+}
+
+/** 演奏法和效果音共用一套形状：{ id, keyswitch, name }。 */
+function validateKeyswitchList(list, where) {
+  if (!Array.isArray(list)) throw new Vst3CatalogError(`${where} 必须是数组`)
+  const seen = new Set()
+  for (const [index, item] of list.entries()) {
+    const at = `${where}[${index}]`
+    if (!isObject(item)) throw new Vst3CatalogError(`${at} 必须是对象`)
+    requireString(item.id, `${at}.id`)
+    requireString(item.name, `${at}.name`)
+    requireMidi(item.keyswitch, `${at}.keyswitch`)
+    if (seen.has(item.keyswitch)) {
+      throw new Vst3CatalogError(`${at}.keyswitch ${item.keyswitch} 与同一列表里的其他键位重复`)
+    }
+    seen.add(item.keyswitch)
+  }
+}
+
+function validatePlugin(entry, index) {
+  const where = `plugins[${index}]`
+  if (!isObject(entry)) throw new Vst3CatalogError(`${where} 必须是对象`)
+  requireString(entry.id, `${where}.id`)
+  requireString(entry.name, `${where}.name`)
+  requireString(entry.vendor, `${where}.vendor`)
+  requireString(entry.plugin, `${where}.plugin`)
+  if (entry.format !== 'vst3') {
+    throw new Vst3CatalogError(`${where}.format 必须是 "vst3"，现在是 ${JSON.stringify(entry.format)}`)
+  }
+  if (entry.instrument !== true) {
+    throw new Vst3CatalogError(`${where}.instrument 必须是 true（音色档案只收乐器插件）`)
+  }
+  if (!isObject(entry.range)) throw new Vst3CatalogError(`${where}.range 必须是 { low, high } 对象`)
+  requireMidi(entry.range.low, `${where}.range.low`)
+  requireMidi(entry.range.high, `${where}.range.high`)
+  if (entry.range.low > entry.range.high) {
+    throw new Vst3CatalogError(`${where}.range.low (${entry.range.low}) 不能大于 range.high (${entry.range.high})`)
+  }
+  validateKeyswitchList(entry.articulations, `${where}.articulations`)
+  validateKeyswitchList(entry.fxSounds, `${where}.fxSounds`)
+  if (typeof entry.notes !== 'string') throw new Vst3CatalogError(`${where}.notes 必须是字符串`)
+}
+
+/**
+ * 校验一份音色档案。通过时原样返回 data，失败抛 Vst3CatalogError（中文）。
+ *
+ * 只校验必需字段和类型，未知字段保留——档案是给人手改的 JSON，多写一个
+ * 备注字段不该让整份档案读不进来。
+ */
+export function validateCatalog(data) {
+  if (!isObject(data)) throw new Vst3CatalogError('音色档案必须是一个对象')
+  if (data.version !== undefined && (!Number.isInteger(data.version) || data.version < 1)) {
+    throw new Vst3CatalogError(`version 必须是正整数，现在是 ${JSON.stringify(data.version)}`)
+  }
+  if (!Array.isArray(data.plugins)) throw new Vst3CatalogError('音色档案缺少 plugins 数组')
+  if (data.plugins.length === 0) throw new Vst3CatalogError('plugins 不能是空数组：档案里至少要有一个音源')
+  const seen = new Set()
+  for (const [index, entry] of data.plugins.entries()) {
+    validatePlugin(entry, index)
+    if (seen.has(entry.id)) {
+      throw new Vst3CatalogError(`plugins[${index}].id "${entry.id}" 与前面的条目重复`)
+    }
+    seen.add(entry.id)
+  }
+  return data
+}
+
+/** 从磁盘读一份档案并校验；读不到、不是 JSON、校验不过都抛中文错误。 */
+export async function loadCatalog(path) {
+  const target = String(path ?? '').trim()
+  if (!target) throw new Vst3CatalogError('读取音色档案需要文件路径')
+  let text
+  try {
+    text = await readFile(target, 'utf8')
+  } catch (error) {
+    throw new Vst3CatalogError(`读取音色档案失败：${target}（${error.message}）`)
+  }
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch (error) {
+    throw new Vst3CatalogError(`音色档案不是合法 JSON：${target}（${error.message}）`)
+  }
+  return validateCatalog(data)
+}
+
+/** 校验后写出档案（UTF-8、两空格缩进、结尾换行）；目录不存在会先建。 */
+export async function saveCatalog(path, data) {
+  const target = String(path ?? '').trim()
+  if (!target) throw new Vst3CatalogError('保存音色档案需要文件路径')
+  validateCatalog(data)
+  await mkdir(dirname(target), { recursive: true })
+  await writeFile(target, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
+  return target
+}
