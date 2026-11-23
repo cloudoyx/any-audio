@@ -270,6 +270,94 @@ function FontsTab({ state, reload, notify }) {
   )
 }
 
+/**
+ * VST3 instruments: the built-in catalog from /vst3/list, one card per plugin.
+ *
+ * The range shown is the measured one, not the manual's claim (AGML says E1–C5
+ * but only sounds from MIDI 42), because a note outside it renders silence —
+ * which would look like a broken preview. The preview therefore plays the middle
+ * of that range, and the first render is slow while the sidecar starts.
+ */
+function InstrumentsTab({ notify }) {
+  const [catalog, setCatalog] = useState(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState('')
+  const [preview, setPreview] = useState(null)
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api('/vst3/list')
+      setCatalog(data)
+      setError('')
+    } catch (caught) {
+      setError(caught.message)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function test(plugin) {
+    const pitch = Math.round((plugin.range.low + plugin.range.high) / 2)
+    setBusy(plugin.id)
+    try {
+      const data = await api('/vst3/test', { method: 'POST', body: { plugin: plugin.id, pitch } })
+      setPreview({ ...data, pluginId: plugin.id })
+      notify(t('试听已生成'))
+    } catch (caught) {
+      notify(t('试听失败：{0}', caught.message), 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const plugins = catalog?.plugins ?? []
+  return h(Card, {
+    title: t('乐器'),
+    desc: t('VST3 音源。音域是实测值，超出会静音；首次渲染要预热几秒。'),
+    right: h(Btn, { onClick: load }, t('刷新')),
+  },
+    error ? h(Notice, { tone: 'error' }, t('读取音源档案失败：{0}', error))
+      : !catalog ? h('p', { style: S.desc }, t('正在读取音源档案…'))
+      : plugins.length === 0 ? h('p', { style: S.desc }, t('还没有登记任何 VST3 音源。'))
+      : h('div', { style: S.list }, plugins.map(plugin => {
+        const pitch = Math.round((plugin.range.low + plugin.range.high) / 2)
+        const playing = preview?.pluginId === plugin.id
+        return h('div', { key: plugin.id, style: S.item },
+          h('div', { style: S.itemHead },
+            h('span', { style: { fontWeight: 600 } }, plugin.name),
+            h('span', { style: S.chip }, plugin.vendor),
+            h('span', { style: S.chip }, t('音域 MIDI {0}–{1}', plugin.range.low, plugin.range.high)),
+            h('span', { style: { flex: 1 } }),
+            // One render at a time: the sidecar serialises them anyway, and a
+            // second click while the first is warming up would just queue.
+            h(Btn, {
+              kind: 'primary',
+              disabled: Boolean(busy),
+              title: t('试听 MIDI {0}', pitch),
+              onClick: () => test(plugin),
+            }, busy === plugin.id ? t('渲染中…') : t('试听')),
+          ),
+          h('div', { style: S.row },
+            h('span', { style: S.label }, t('演奏法')),
+            ...plugin.articulations.map(item => h('span', { key: item.id, style: S.chip }, `${item.name} · MIDI ${item.keyswitch}`)),
+          ),
+          h('div', { style: S.row },
+            h('span', { style: S.label }, t('效果音')),
+            h('span', { style: S.chip }, t('{0} 个', plugin.fxSounds.length)),
+          ),
+          plugin.notes ? h('div', { style: S.desc }, plugin.notes) : null,
+          playing ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+            h('div', { style: S.itemHead },
+              h('span', { style: S.label }, t('试听：{0}', preview.label)),
+              h('span', { style: S.mono }, `${preview.durationSec}s · ${preview.peakDb} dBFS`),
+            ),
+            h('audio', { controls: true, autoPlay: true, src: preview.url, style: S.audio }),
+          ) : null,
+        )
+      })),
+  )
+}
+
 function TtsTab({ state, reload, notify }) {
   const [form, setForm] = useState(() => (state?.config?.tts ? JSON.parse(JSON.stringify(state.config.tts)) : null))
   const [keyInput, setKeyInput] = useState('')
@@ -1044,6 +1132,7 @@ function Page() {
 
   const tabs = useMemo(() => ([
     { id: 'sources', label: t('音源'), render: () => h(FontsTab, { state, reload, notify }) },
+    { id: 'instruments', label: t('乐器'), render: () => h(InstrumentsTab, { notify }) },
     { id: 'fxlib', label: t('音效'), render: () => h(FxLibTab, { state, reload, notify }) },
     { id: 'tts', label: t('配音'), render: () => h(TtsTab, { state, reload, notify }) },
     { id: 'singing', label: t('唱歌'), render: () => h(SingingTab, { state, reload, notify }) },
@@ -1105,4 +1194,4 @@ function Page() {
   )
 }
 
-export { Page, FontsTab, FxLibTab, TtsTab, SingingTab }
+export { Page, FontsTab, InstrumentsTab, FxLibTab, TtsTab, SingingTab }
