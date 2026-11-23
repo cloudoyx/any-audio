@@ -17,7 +17,7 @@
 
 ```
 worker → 调用方  {"type":"ready","sampleRate":48000}
-调用方 → worker  {"op":"render","id":1,"plugin":"...","notes":[{"pitch":60,"start":0.0,"dur":0.5,"vel":100}],"duration":4.0,"out":"...wav"}
+调用方 → worker  {"op":"render","id":1,"plugin":"...","notes":[{"pitch":60,"start":0.0,"dur":0.5,"vel":100}],"duration":4.0,"out":"...wav","preset":"...state"}
 worker → 调用方  {"type":"result","id":1,"ok":true,"peak":0.79,"seconds":4.0}
 worker → 调用方  {"type":"result","id":1,"ok":false,"kind":"param|load|render","error":"..."}
 调用方 → worker  {"op":"shutdown"}
@@ -25,6 +25,11 @@ worker → 调用方  {"type":"result","id":1,"ok":false,"kind":"param|load|rend
 
 - `plugin` 可以传 Windows 的 `.vst3` 目录包，也可以传内层 DLL；目录包会自动找
   `Contents/x86_64-win/*.vst3`（pedalboard 只认内层 DLL）。
+- `preset` 可选：厂商预设状态文件的路径。给了就先把插件切到那份状态再渲染，不给就用
+  插件默认状态（上一次渲染用过的预设会被撤掉）。预设文件是状态内容，不是插件状态
+  容器，所以由 `vst3_preset.py` 做容器手术装进去：外层 VST3 预设文件的块索引、内层
+  VST2 FXB 的 `CcnK`/状态块长度、状态块里描述文档长度的字段，全部按新长度重算。
+  装不进去（文件不存在、不是 XML、根元素对不上、结构认不出）按 `load` 报错，进程不崩。
 - 采样器是流式加载，刚加载就渲染会静音：每个插件先预热到峰值 > 0.001 再正式渲染，
   之后每次调用都用 `reset=False`。
 - 实测音域：Ample Bass（ABPL）MIDI 40–72，Ample Guitar（AGML）42–84。超出音域的音

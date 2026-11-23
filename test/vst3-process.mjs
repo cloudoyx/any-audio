@@ -230,6 +230,32 @@ test('参数错误在启动进程前拦下（kind=param）', async () => {
   }
 })
 
+test('preset 透传：给了就原样送到 worker，不给就不带这个字段', async () => {
+  const mgr = createVst3Process(fakeOptions())
+  try {
+    const preset = join(WORK, '音色.state')
+    const withPreset = await mgr.render(task({ preset }))
+    assert.equal(withPreset.preset, preset, 'worker 收到的 preset 必须与输入逐字节一致')
+    const without = await mgr.render(task())
+    assert.equal(without.preset, undefined, '没给 preset 时不能凭空带上这个字段')
+  } finally {
+    await mgr.shutdown()
+  }
+})
+
+test('preset 不是字符串按 kind=param 拦下', async () => {
+  const mgr = createVst3Process(fakeOptions())
+  try {
+    await assert.rejects(
+      mgr.render(task({ preset: 42 })),
+      (err) => err.code === 'BAD_PRESET' && err.kind === 'param',
+    )
+    assert.equal(mgr.getState().starts, 0, '参数校验不能启动进程')
+  } finally {
+    await mgr.shutdown()
+  }
+})
+
 test('中文输出路径经管道往返不乱码（UTF-8 字节，无 BOM）', async () => {
   const mgr = createVst3Process(fakeOptions())
   try {

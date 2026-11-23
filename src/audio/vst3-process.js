@@ -4,8 +4,13 @@
 //   worker -> us  {"type":"ready","sampleRate":48000}
 //   worker -> us  {"type":"result","id":N,"ok":true,"peak":0.79,"seconds":4.0}
 //   worker -> us  {"type":"result","id":N,"ok":false,"kind":"param|load|render","error":"..."}
-//   us -> worker  {"op":"render","id":N,"plugin":"...","notes":[...],"duration":4.0,"out":"..."}
+//   us -> worker  {"op":"render","id":N,"plugin":"...","notes":[...],"duration":4.0,"out":"...","preset":"..."}
 //   us -> worker  {"op":"shutdown"}
+//
+// `preset` is optional: the path of a vendor preset state file. The worker swaps
+// that state into the plugin's own state container before rendering; without it
+// the plugin renders at its default state (a preset used by an earlier render is
+// undone). A preset that cannot be loaded is a `kind:"load"` error, never a crash.
 //
 // Hard rules (same as singing-process.js):
 //  - Start on demand, exit after idleSec (60s default) with nothing pending.
@@ -126,12 +131,19 @@ function validateTask(task) {
   const keyswitches = Array.isArray(task.keyswitches)
     ? task.keyswitches.filter((pitch) => Number.isInteger(pitch) && pitch >= 0 && pitch <= 127)
     : []
+  if (task.preset !== undefined && task.preset !== null && typeof task.preset !== 'string') {
+    throw new Vst3ProcessError('preset must be a path to a preset state file', {
+      code: 'BAD_PRESET', kind: 'param',
+    })
+  }
+  const preset = typeof task.preset === 'string' ? task.preset.trim() : ''
   return {
     plugin: task.plugin,
     notes,
     duration,
     out: task.out,
     ...(keyswitches.length ? { keyswitches } : {}),
+    ...(preset ? { preset } : {}),
   }
 }
 

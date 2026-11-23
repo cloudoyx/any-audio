@@ -41,6 +41,11 @@ process.stdin.on('data', (chunk) => {
     }
     // Echo `out` back so the test proves UTF-8 bytes survived the pipe.
     if (msg.out) writeFileSync(msg.out, 'FAKEWAV', 'utf8')
-    write({ type: 'result', id: msg.id, ok: true, peak: 0.79, seconds: msg.duration, out: msg.out })
+    write({
+      type: 'result', id: msg.id, ok: true, peak: 0.79, seconds: msg.duration, out: msg.out,
+      // Echo `preset` too: the manager must forward it verbatim and must not
+      // invent the field when the caller did not pass one.
+      ...(msg.preset === undefined ? {} : { preset: msg.preset }),
+    })
   }
 })

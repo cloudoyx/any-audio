@@ -10,10 +10,13 @@
     worker → 调用方  {"type":"ready","sampleRate":48000}
     调用方 → worker  {"op":"render","id":N,"plugin":"...","notes":[
                         {"pitch":60,"start":0.0,"dur":0.5,"vel":100},...],
-                      "duration":4.0,"out":"...wav"}
+                      "duration":4.0,"out":"...wav","preset":"...state"}
     worker → 调用方  {"type":"result","id":N,"ok":true,"peak":0.79,"seconds":4.0}
     worker → 调用方  {"type":"result","id":N,"ok":false,"kind":"param|load|render","error":"..."}
     调用方 → worker  {"op":"shutdown"}
+
+preset 可选：厂商预设状态文件的路径。给了就先把插件切到那份状态再渲染，不给就用
+插件默认状态（上一次渲染用过的预设会被撤掉）。预设装不进状态容器按 load 报错。
 
 Windows 的 .vst3 是目录包，pedalboard 只认内层 DLL；传目录或 DLL 都行，这里自己找。
 Ample 系列采样器是流式加载，刚加载就渲染会静音：先预热到有声，再正式渲染。
@@ -42,6 +45,8 @@ try:
 except ImportError as _mido_error:  # 缺依赖时按 load 错误上报，不让进程直接崩
     Message = None
     _MIDO_ERROR = _mido_error
+
+from vst3_preset import PresetError, apply_preset
 
 SAMPLE_RATE = 48000
 BUFFER_SIZE = 8192
@@ -105,6 +110,17 @@ def resolve_plugin_path(raw):
             return candidates[0]
         raise WorkerError("load", f"VST3 目录包里找不到 x86_64-win 插件：{path}")
     raise WorkerError("load", f"插件路径不存在：{path}")
+
+
+def read_preset_file(raw):
+    """读预设状态文件。路径不存在、读不了都按 load 报错，不往下走。"""
+    path = Path(raw)
+    try:
+        if not path.is_file():
+            raise WorkerError("load", f"预设文件不存在：{path}")
+        return path.read_bytes()
+    except OSError as exc:
+        raise WorkerError("load", f"预设文件读不了：{exc}")
 
 
 def plugin_range(path):
@@ -177,18 +193,52 @@ def write_wav(path, audio):
 
 
 class PluginCache:
-    """按路径缓存已加载并预热过的插件实例。"""
+    """按路径缓存已加载并预热过的插件实例，并按需切换预设状态。
+
+    一个实例只留一份"插件默认状态"（刚加载、还没被任何预设改过的那份），每次要
+    预设都从它出发做容器手术，所以连续换预设不会层层叠加；不给预设就切回默认。
+    """
 
     def __init__(self):
         self._plugins = {}
 
-    def get(self, path):
+    def get(self, path, preset=None):
         key = str(path).lower()
-        plugin = self._plugins.get(key)
-        if plugin is None:
-            plugin = self._load(path)
-            self._plugins[key] = plugin
-        return plugin
+        entry = self._plugins.get(key)
+        if entry is None:
+            entry = {"plugin": self._load(path), "defaultState": None, "preset": None}
+            self._plugins[key] = entry
+        self._select_state(entry, preset)
+        return entry["plugin"]
+
+    def _select_state(self, entry, preset):
+        """把实例切到 preset 指定的状态；preset 为空就回到插件默认状态。"""
+        if preset == entry["preset"]:
+            return
+        if preset is None:
+            if entry["preset"] is not None:
+                self._set_state(entry, entry["defaultState"])
+                entry["preset"] = None
+            return
+        if entry["defaultState"] is None:
+            try:
+                entry["defaultState"] = bytes(entry["plugin"].preset_data)
+            except Exception as exc:
+                raise WorkerError("load", f"读不到插件默认状态：{exc}")
+        state = read_preset_file(preset)
+        try:
+            merged = apply_preset(entry["defaultState"], state)
+        except PresetError as exc:
+            raise WorkerError("load", f"预设装不进插件状态：{exc}")
+        self._set_state(entry, merged)
+        entry["preset"] = preset
+
+    @staticmethod
+    def _set_state(entry, state):
+        try:
+            entry["plugin"].preset_data = state
+        except Exception as exc:
+            raise WorkerError("load", f"插件拒绝加载状态：{exc}")
 
     def _load(self, path):
         if Message is None:
@@ -275,9 +325,15 @@ def handle_render(cache, msg):
         for pitch in raw_keyswitches:
             if isinstance(pitch, int) and not isinstance(pitch, bool) and 0 <= pitch <= 127:
                 keyswitches.add(pitch)
+    raw_preset = msg.get("preset")
+    preset = None
+    if raw_preset is not None:
+        if not isinstance(raw_preset, str) or not raw_preset.strip():
+            raise WorkerError("param", "preset 必须是非空字符串：预设状态文件路径")
+        preset = os.path.abspath(raw_preset.strip())
     path = resolve_plugin_path(plugin_raw)
     check_range(path, notes, keyswitches)
-    plugin = cache.get(path)
+    plugin = cache.get(path, preset)
     audio = render_audio(plugin, notes, duration)
     peak = _peak(audio)
     if not np.isfinite(peak) or peak < SILENCE_PEAK:
