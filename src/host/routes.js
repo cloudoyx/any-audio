@@ -605,19 +605,51 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
 
   const VST3_SCAN_DIR = 'C:\\Program Files\\Common Files\\VST3'
 
-  /** Read Name/Vendor from a VST3 package's moduleinfo.json; empty on failure. */
-  async function readVst3ModuleInfo(packagePath) {
+  /**
+   * Parse a bundle's moduleinfo.json, or null when there is none.
+   *
+   * The VST3 SDK writes this file with trailing commas (it is JSON5-ish), which
+   * JSON.parse rejects. Dropping a comma that sits right before } or ] is enough
+   * to read the real metadata instead of silently falling back to the folder
+   * name for every Ample plugin.
+   */
+  async function readVst3ModuleJson(packagePath) {
     try {
-      const data = JSON.parse(await readFile(join(packagePath, 'Contents', 'Resources', 'moduleinfo.json'), 'utf8'))
-      const name = typeof data?.Name === 'string' ? data.Name.trim() : ''
-      const vendor = typeof data?.['Factory Info']?.Vendor === 'string' ? data['Factory Info'].Vendor.trim() : ''
-      return { name, vendor }
+      const text = await readFile(join(packagePath, 'Contents', 'Resources', 'moduleinfo.json'), 'utf8')
+      return JSON.parse(text.replace(/,\s*([}\]])/g, '$1'))
     } catch {
-      return { name: '', vendor: '' }
+      return null
     }
   }
 
-  /** Recursively find .vst3 directory packages that have an x86_64-win inner DLL. */
+  /** Read Name/Vendor from a VST3 package's moduleinfo.json; empty on failure. */
+  async function readVst3ModuleInfo(packagePath) {
+    const data = await readVst3ModuleJson(packagePath)
+    if (!data) return { name: '', vendor: '' }
+    const name = typeof data.Name === 'string' ? data.Name.trim() : ''
+    const vendor = typeof data['Factory Info']?.Vendor === 'string' ? data['Factory Info'].Vendor.trim() : ''
+    return { name, vendor }
+  }
+
+  /**
+   * Does a bundle's moduleinfo.json declare an Instrument class?
+   * `true` / `false` when the metadata was read, `null` when there is none
+   * (single-file plugins have no Contents/Resources/moduleinfo.json).
+   */
+  async function readVst3DeclaredInstrument(packagePath) {
+    const data = await readVst3ModuleJson(packagePath)
+    if (!data) return null
+    const classes = Array.isArray(data.Classes) ? data.Classes : []
+    return classes.some((entry) => Array.isArray(entry?.['Sub Categories']) && entry['Sub Categories'].includes('Instrument'))
+  }
+
+  /**
+   * Recursively find .vst3 plugins in both Windows forms: a directory bundle
+   * (Contents/x86_64-win/<name>.vst3) and a single-file .vst3, which is itself a
+   * loadable DLL. Bundles without the inner DLL are skipped; a single file needs
+   * no inner check. Every candidate says which form it is (`form`) and whether
+   * its metadata declares an Instrument (`declaredInstrument`).
+   */
   async function scanVst3Packages(root) {
     const found = []
     const seen = new Set()
@@ -629,30 +661,49 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
         return
       }
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue
         const full = join(dir, entry.name)
-        if (entry.name.toLowerCase().endsWith('.vst3')) {
-          const key = full.toLowerCase()
-          if (seen.has(key)) continue
-          seen.add(key)
-          let hasInnerDll = false
-          try {
-            const inner = await readdir(join(full, 'Contents', 'x86_64-win'), { withFileTypes: true })
-            hasInnerDll = inner.some((item) => item.isFile() && item.name.toLowerCase().endsWith('.vst3'))
-          } catch {
-            hasInnerDll = false
+        const isVst3 = entry.name.toLowerCase().endsWith('.vst3')
+        if (entry.isDirectory()) {
+          if (isVst3) {
+            const key = full.toLowerCase()
+            if (seen.has(key)) continue
+            seen.add(key)
+            let hasInnerDll = false
+            try {
+              const inner = await readdir(join(full, 'Contents', 'x86_64-win'), { withFileTypes: true })
+              hasInnerDll = inner.some((item) => item.isFile() && item.name.toLowerCase().endsWith('.vst3'))
+            } catch {
+              hasInnerDll = false
+            }
+            if (!hasInnerDll) continue
+            const meta = await readVst3ModuleInfo(full)
+            found.push({
+              path: full,
+              name: meta.name || entry.name.replace(/\.vst3$/i, ''),
+              vendor: meta.vendor,
+              hasInnerDll: true,
+              form: 'bundle',
+              declaredInstrument: await readVst3DeclaredInstrument(full),
+            })
+            continue
           }
-          if (!hasInnerDll) continue
-          const meta = await readVst3ModuleInfo(full)
-          found.push({
-            path: full,
-            name: meta.name || entry.name.replace(/\.vst3$/i, ''),
-            vendor: meta.vendor,
-            hasInnerDll: true,
-          })
+          await walk(full)
           continue
         }
-        await walk(full)
+        if (!entry.isFile() || !isVst3) continue
+        const key = full.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        // A single-file .vst3 is the DLL itself: no moduleinfo to read, no inner
+        // DLL to check. The file name is the only name available.
+        found.push({
+          path: full,
+          name: entry.name.replace(/\.vst3$/i, ''),
+          vendor: '',
+          hasInnerDll: false,
+          form: 'single',
+          declaredInstrument: null,
+        })
       }
     }
     await walk(root)
@@ -724,30 +775,35 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     const pluginPath = entry?.plugin ?? requested
     if (!pluginPath) throw new Error('vst3/test needs a plugin id or path')
     if (!existsSync(pluginPath)) throw new Error(`音源插件不存在：${pluginPath}`)
-    const pitch = body.pitch === undefined ? 45 : Number(body.pitch) // A2
-    if (!Number.isInteger(pitch) || pitch < 0 || pitch > 127) {
-      throw new Error(`pitch 必须是 0-127 的整数（MIDI 编号），现在是 ${JSON.stringify(body.pitch)}`)
-    }
-    const noteSeconds = Math.min(4, Math.max(0.1, Number(body.seconds) || 0.5))
-    const duration = Math.min(8, Math.max(noteSeconds + 0.2, Number(body.duration) || noteSeconds + 0.7))
+    // A short arpeggio instead of one note: it tells a bass from a pad far
+    // better. The root sits 4 semitones above the measured low end and 12 below
+    // the high end so the octave jump stays in range; an unmeasured plugin gets
+    // MIDI 55, a safe centre.
+    const range = entry?.range
+    const root = range
+      ? Math.min(Math.max(55, range.low + 4), range.high - 12)
+      : 55
+    const intervals = [0, 4, 7, 12, 7, 4, 0, 7]
+    const notes = intervals.map((interval, index) => ({
+      pitch: root + interval,
+      start: index * 0.25,
+      dur: 0.22,
+      vel: index === intervals.length - 1 ? 110 : 100,
+    }))
+    const duration = 2.8
     const out = scratchPath(workspaceRoot, `vst3-preview-${randomUUID()}.wav`)
     await mkdir(dirname(out), { recursive: true })
     let result
     let buffer
     try {
-      result = await getVst3Process().render({
-        plugin: pluginPath,
-        notes: [{ pitch, start: 0, dur: noteSeconds, vel: 100 }],
-        duration,
-        out,
-      })
+      result = await getVst3Process().render({ plugin: pluginPath, notes, duration, out })
       buffer = await readFile(out)
     } finally {
       await rm(out, { force: true })
     }
     return rememberAudio(buffer, {
       kind: 'vst3',
-      label: `${entry?.name ?? basename(pluginPath)} · MIDI ${pitch}`,
+      label: `${entry?.name ?? basename(pluginPath)} · 试听`,
       durationSec: result.seconds,
       peakDb: Number(toDb(result.peak).toFixed(1)),
     })
