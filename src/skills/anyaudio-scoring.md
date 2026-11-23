@@ -56,7 +56,7 @@
 - 民族/古风：`guzheng`(古筝)、`guqin`(古琴)、`pipa`(琵琶)、`erhu`(二胡)、`dizi`(笛)、`xiao`(箫)、`sheng`(笙)、`suona`(唢呐)、`bianzhong`(编钟)、`yangqin`(扬琴)、`taiko`(太鼓)。它们映射到最接近的 GM 音色，不是真采样，但比正弦合成有质感。
 - 管弦：`strings`/`slow-strings`、`cello`、`violin`、`viola`、`harp`、`timpani`、`horn`、`trumpet`、`oboe`、`clarinet`、`flute`、`pizzicato`。
 - 氛围：`choir`、`warm-pad`、`choir-pad`、`soundtrack`、`crystal`、`atmosphere`。
-- 不确定就调 `anyaudio_sources`（action `instruments` 或 `presets`）先看有哪些音色。要更特别的音色先看已接入的音源列表；不够再装新音源（装法见下文"装新音源"与设置页音源区）。
+- 不确定就调 `anyaudio_sources`（默认的 `list` 动作）看**全部已接入音源**（SF2 与 VST3 混排，带评分与实测音域）；要看某音源的音色再调 `instruments` 或 `presets`。需要新音源时先告诉用户去设置页装，或征得用户明确同意后再装——**不得自行下载音源**（下载是大流量动作，必须用户同意）。
 - 音源可以换，换音源不用改 score；机器上接了哪些音源以设置页音源区为准。
 - 没有 DSH 也能渲染：`node scripts/anyaudio-cli.mjs render <score.json> <out.wav>`（可加 `--font`、`--duration`、`--peak`、`--rate`），等价于只调 `anyaudio_music` 的离线路径。适合先离线把谱子调好再进视频流程。
 
@@ -65,7 +65,7 @@
 - 同一个 score 里，不同轨道可以用不同音源：在轨道上写 `source`（音源 id 或文件路径）。**默认不写**——工具会在全部已接入的音源里按乐器族自动挑最合适的：它掌握每个音源的实测音域与质量评分，这些数据你看不到，选源是工具的职责。只有用户点名要某个音源时才写 `source`，原样传给工具。
 - **不要凭先验断言某类乐器的音色上限**——以工具实际接入的音源为准；不确定就看音源列表的评分，或渲染后看逐轨报告（每轨会报告用了哪个音源、是否回退）。
 - **鼓组永远来自默认音源**（第一套加载的库）：其它库的鼓组不会被使用。要换鼓就把带鼓的库作为 `font` 传进来；默认库没有鼓时鼓轨不会响。
-- 装新音源：SF2 用 `anyaudio_sources` 的 `install`（按 id 下载）或 `fromPath`（本地文件）；VST3 在设置页音源区扫描添加。音源装进整台机器共用的位置，所有项目与 Agent 会话共用，不用每个项目重装。想让某个库成为鼓组来源，用 `action: "use"`（会写入 `music.font` 配置）。许可证不允许再分发的音源由用户自备，不要下载来源不明的文件。
+- 装新音源：SF2 用 `anyaudio_sources` 的 `install`（按 id 下载）或 `fromPath`（本地文件）；VST3 在设置页音源区扫描添加。**装之前必须征得用户同意，不得自行下载。**音源装进整台机器共用的位置，所有项目与 Agent 会话共用，不用每个项目重装。想让某个库成为鼓组来源，用 `action: "use"`（会写入 `music.font` 配置）。许可证不允许再分发的音源由用户自备，不要下载来源不明的文件。
 
 ## 旁白（anyaudio_tts）
 

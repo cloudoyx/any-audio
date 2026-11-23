@@ -65,7 +65,7 @@ export const sourcesToolDefinition = finalizeTool({
   parameters: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'catalog', 'install', 'instruments', 'presets', 'use', 'kinds'], description: 'What to do; defaults to "list". Use "catalog" to see every connected source (SF2 and VST3) with ids and scores — that is where a named source request resolves to an id.' },
+      action: { type: 'string', enum: ['list', 'install', 'instruments', 'presets', 'use', 'kinds'], description: 'What to do; defaults to "list" — the full source list (SF2 and VST3, with scores and measured ranges).' },
       id: { type: 'string', description: 'Recommended source/bank id for install, default "generaluser".' },
       url: { type: 'string', description: 'Direct URL of a custom SoundFont to install.' },
       fromPath: { type: 'string', description: 'Local SoundFont path to install (useful when downloads are blocked).' },
@@ -111,29 +111,22 @@ export const sourcesToolDefinition = finalizeTool({
       if (value.action === 'kinds') {
         return value.kinds.map((kind) => `- ${kind.id} (${kind.status}) — ${kind.label}: ${kind.description}`).join('\n')
       }
-      if (value.action === 'catalog') {
-        return [
-          '已接入的全部音源（SF2 与 VST3 混排）。用户点名音源时从这里查 id 与分数；谱里写 source 用 id，不写则工具自动选：',
-          ...value.sources.map((source) => {
-            const kind = source.kind === 'vst3' ? 'VST3' : 'SF2'
-            const scores = source.scores
-              ? Object.entries(source.scores).map(([family, score]) => `${family} ${score}`).join(', ')
-              : '未评分'
-            const range = source.range ? `，实测音域 MIDI ${source.range.low}-${source.range.high}` : ''
-            const vendor = source.vendor ? `（${source.vendor}）` : ''
-            return `- [${kind}] ${source.id} — ${source.name}${vendor} → 评分: ${scores}${range}`
-          }),
-        ].join('\n')
-      }
       if (value.action === 'list') {
         const withScores = (font) => {
-          if (!font.scores) return `${font.id} (unscored)`
-          return `${font.id}: ${Object.entries(font.scores).filter(([category]) => category !== 'default').map(([category, score]) => `${category} ${score}`).join(', ')}`
+          if (!font.scores) return `${font.id ?? font.name} (unscored)`
+          return `${font.id ?? font.name}: ${Object.entries(font.scores).filter(([category]) => category !== 'default').map(([category, score]) => `${category} ${score}`).join(', ')}`
         }
         return [
-          value.fonts.length ? 'Installed SoundFont banks:' : 'No SoundFont installed yet — run anyaudio_sources with action "install".',
-          ...value.fonts.map((font) => `- ${font.name} (${font.source}, ${formatBytes(font.bytes)})${font.default ? ' [fallback]' : font.recommended ? ' [recommended]' : ''} → ${font.path}`),
-          `Scores (1-10 by family): ${value.fonts.map(withScores).join(' | ') || 'none'}`,
+          '已接入的全部音源（SF2 与 VST3 混排）。谱里写 source 用 id；不写则工具按乐器族评分自动选：',
+          ...value.fonts.map((font) => `- [SF2] ${withScores(font)} — ${font.name} (${formatBytes(font.bytes)})${font.default ? ' [fallback]' : font.recommended ? ' [recommended]' : ''} → ${font.path}`),
+          ...value.vst3.map((entry) => {
+            const scores = entry.scores
+              ? Object.entries(entry.scores).map(([family, score]) => `${family === 'default' ? `${family} ${score}（兜底）` : `${family} ${score}`}`).join(', ')
+              : '未评分'
+            const range = entry.range ? `，实测音域 MIDI ${entry.range.low}-${entry.range.high}` : ''
+            const vendor = entry.vendor ? `（${entry.vendor}）` : ''
+            return `- [VST3] ${entry.id}: ${scores} — ${entry.name}${vendor}${range} → ${entry.path}`
+          }),
           `Families: ${Object.keys(CATEGORY_LABELS).join(', ')}`,
           // Two different things answer to "default": the bank the person chose
           // with action "use" (music.font), and the bank used when they chose
@@ -141,8 +134,8 @@ export const sourcesToolDefinition = finalizeTool({
           // had configured one, while the tool kept saying "not set"
           // (improvement plan 04).
           value.defaultSource
-            ? `Configured default source: ${value.defaultSource}`
-            : `Configured default source: not set — renders fall back to ${value.fonts.find((font) => font.default)?.name ?? 'the installed default bank'}`,
+            ? `Configured default source (drum kits): ${value.defaultSource}`
+            : `Configured default source (drum kits): not set — renders fall back to ${value.fonts.find((font) => font.default)?.name ?? 'the installed default bank'}`,
           `Search directories: ${value.directories.join(' | ')}`,
           ...(value.legacy?.length
             ? [
@@ -151,7 +144,6 @@ export const sourcesToolDefinition = finalizeTool({
               ]
             : []),
           `Source kinds: ${value.kinds.map((kind) => `${kind.id}:${kind.status}`).join(', ')}`,
-          `Recommended: ${RECOMMENDED_FONTS.filter((font) => !font.hidden).map((font) => `${font.id} (${formatBytes(font.bytes)}, ${font.license})${font.suggested ? ' [suggested]' : ''}${font.default ? ' [fallback]' : ''}`).join('; ')}`,
         ].join('\n')
       }
       return value.message ?? 'done'
@@ -205,40 +197,6 @@ export const sourcesToolDefinition = finalizeTool({
         message: `Default sound source set to ${fontPath}; anyaudio_music now uses it for tracks without a "source" (persisted as "${config.music.font}" in ${configPath}).`,
       }
     }
-    if (action === 'catalog') {
-      // 全部已接入音源（SF2 与 VST3 混排，带评分与实测音域）：用户点名音源时，agent 从这里查 id 与分数
-      const fonts = await listFonts()
-      const vst3 = await mergedCatalog()
-      const table = new Map(scoreTable(RECOMMENDED_FONTS).map((entry) => [entry.id, entry.scores]))
-      return {
-        ok: true,
-        action,
-        sources: [
-          ...fonts.map((font) => {
-            const recommended = findRecommendedByFile(font.name)
-            return {
-              id: recommended?.id ?? font.name,
-              name: font.name,
-              kind: 'sf2',
-              path: font.path,
-              scores: recommended ? table.get(recommended.id) : { default: 3 },
-              recommended: Boolean(recommended),
-            }
-          }),
-          ...vst3.plugins.map((entry) => ({
-            id: entry.id,
-            name: entry.name,
-            kind: 'vst3',
-            vendor: entry.vendor,
-            path: entry.plugin,
-            scores: entry.families ?? null,
-            range: entry.range ?? null,
-            articulations: entry.articulations?.length ?? 0,
-            notes: entry.notes ?? '',
-          })),
-        ],
-      }
-    }
     const fonts = await listFonts()
     const { config } = await readConfig()
     const table = new Map(scoreTable(RECOMMENDED_FONTS.map((font) => font)).map((entry) => [entry.id, entry.scores]))
@@ -260,6 +218,17 @@ export const sourcesToolDefinition = finalizeTool({
           scores: recommended ? table.get(recommended.id) : null,
         }
       }),
+      vst3: (await mergedCatalog()).plugins.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        vendor: entry.vendor,
+        kind: entry.kind,
+        path: entry.plugin,
+        scores: entry.families ?? null,
+        range: entry.range ?? null,
+        articulations: entry.articulations?.length ?? 0,
+        notes: entry.notes ?? '',
+      })),
       // Declared as `string` in the output schema: omit the key when unset
       // instead of sending null, or the host rejects the whole result.
       ...(config.music.font ? { defaultSource: config.music.font } : {}),
