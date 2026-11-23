@@ -167,7 +167,7 @@ function FontsTab({ state, reload, notify }) {
     setBusy(`default:${font.path}`)
     try {
       await api('/config', { method: 'POST', body: { patch: { music: { font: value } } } })
-      notify(t('已设为默认音源'))
+      notify(t('已设为鼓组音源'))
       await reload()
     } catch (error) {
       notify(error.message, 'error')
@@ -329,13 +329,13 @@ function FontsTab({ state, reload, notify }) {
       h('div', { style: S.itemHead },
         kindBadge('sf2'),
         h('span', { style: { fontWeight: 600 } }, label),
-        isDefault(row) ? h('span', { style: S.chip }, t('当前默认')) : null,
+        isDefault(row) ? h('span', { style: S.chip }, t('鼓组音源')) : null,
         row.status === 'ok' ? null : h('span', { style: S.chip }, row.status === 'modified' ? t('文件被修改') : t('已安装（未登记）')),
         h('span', { style: { flex: 1 } }),
         h(Btn, { onClick: () => openPreview(row.path) }, t('试听')),
         // No button on the row that already is the default: a control that
         // does nothing is worse than no control.
-        isDefault(row) ? null : h(Btn, { onClick: () => setDefault(row) }, t('设为默认')),
+        isDefault(row) ? null : h(Btn, { onClick: () => setDefault(row) }, t('设为鼓组音源')),
         h(Btn, { onClick: () => { if (window.confirm(t('删除 {0} 的文件？\n\n之后需要重新下载才能使用。', label))) act('remove', { path: row.path, removeFile: true }) } }, t('删除')),
         h(Btn, { onClick: () => toggleDetails(row.path) }, open ? t('收起') : t('详情')),
       ),
