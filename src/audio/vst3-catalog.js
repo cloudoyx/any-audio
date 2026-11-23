@@ -10,6 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { readConfig } from '../config.js'
 import { CATEGORY_LABELS } from './scoring.js'
+import { recognizeVst3 } from './vst3-known.js'
 import { ARTICULATIONS, GUITAR_FX_SOUNDS } from './vst3-techniques.js'
 
 export const CATALOG_VERSION = 1
@@ -96,9 +97,10 @@ export async function mergedCatalog() {
     const path = String(plugin.path ?? '').trim()
     if (!path || seen.has(path.toLowerCase())) continue
     seen.add(path.toLowerCase())
+    const name = plugin.name || basename(path).replace(/\.vst3$/i, '') || path
     scanned.push({
       id: scannedId(path),
-      name: plugin.name || basename(path).replace(/\.vst3$/i, '') || path,
+      name,
       vendor: plugin.vendor || '未知',
       plugin: path,
       format: 'vst3',
@@ -109,6 +111,9 @@ export async function mergedCatalog() {
       fxSounds: [],
       notes: '扫描条目：音域与演奏法未实测，只能显式 source 引用。',
       kind: 'scanned',
+      // A suggestion only: the official metadata often says nothing about the
+      // class, and a single-file plugin has no metadata at all.
+      recognized: recognizeVst3(name),
     })
   }
   return {

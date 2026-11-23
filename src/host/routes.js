@@ -29,6 +29,7 @@ import {
 import { gpuStatus, installGpuRuntime } from '../audio/singing-gpu.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { mergedCatalog } from '../audio/vst3-catalog.js'
+import { recognizeVst3 } from '../audio/vst3-known.js'
 import { createVst3Process } from '../audio/vst3-process.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg, scratchPath } from '../tools/shared.js'
@@ -163,13 +164,15 @@ export async function scanVst3Packages(root) {
           }
           if (!hasInnerDll) continue
           const meta = await readVst3ModuleInfo(full)
+          const name = meta.name || entry.name.replace(/\.vst3$/i, '')
           found.push({
             path: full,
-            name: meta.name || entry.name.replace(/\.vst3$/i, ''),
+            name,
             vendor: meta.vendor,
             hasInnerDll: true,
             form: 'bundle',
             declaredInstrument: await readVst3DeclaredInstrument(full),
+            recognized: recognizeVst3(name),
           })
           continue
         }
@@ -182,13 +185,15 @@ export async function scanVst3Packages(root) {
       seen.add(key)
       // A single-file .vst3 is the DLL itself: no moduleinfo to read, no inner
       // DLL to check. The file name is the only name available.
+      const name = entry.name.replace(/\.vst3$/i, '')
       found.push({
         path: full,
-        name: entry.name.replace(/\.vst3$/i, ''),
+        name,
         vendor: '',
         hasInnerDll: false,
         form: 'single',
         declaredInstrument: null,
+        recognized: recognizeVst3(name),
       })
     }
   }
@@ -775,22 +780,41 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     const pluginPath = entry?.plugin ?? requested
     if (!pluginPath) throw new Error('vst3/test needs a plugin id or path')
     if (!existsSync(pluginPath)) throw new Error(`音源插件不存在：${pluginPath}`)
-    // A short arpeggio instead of one note: it tells a bass from a pad far
-    // better. The root sits 4 semitones above the measured low end and 12 below
-    // the high end so the octave jump stays in range; an unmeasured plugin gets
-    // MIDI 55, a safe centre.
-    const range = entry?.range
-    const root = range
-      ? Math.min(Math.max(55, range.low + 4), range.high - 12)
-      : 55
-    const intervals = [0, 4, 7, 12, 7, 4, 0, 7]
-    const notes = intervals.map((interval, index) => ({
-      pitch: root + interval,
-      start: index * 0.25,
-      dur: 0.22,
-      vel: index === intervals.length - 1 ? 110 : 100,
-    }))
-    const duration = 2.8
+    // The preview follows the instrument family: a guitar gets a downstroke
+    // across the open D/G/A shapes, everything else keeps the arpeggio. The
+    // arpeggio root sits 4 semitones above the measured low end and 12 below the
+    // high end so the octave jump stays in range; an unmeasured plugin gets MIDI
+    // 55, a safe centre.
+    let notes
+    let duration
+    if (entry?.families?.guitar) {
+      const chords = [
+        { start: 0.0, pitches: [50, 57, 62, 66, 69], dur: 0.9, vel: 100 },
+        { start: 1.0, pitches: [50, 57, 62, 66, 69], dur: 0.9, vel: 100 },
+        { start: 2.0, pitches: [55, 59, 62, 67, 71], dur: 0.9, vel: 100 },
+        { start: 3.0, pitches: [45, 52, 57, 61, 64], dur: 1.4, vel: 110 },
+      ]
+      notes = chords.flatMap((chord) => chord.pitches.map((pitch, index) => ({
+        pitch,
+        start: chord.start + index * 0.018,
+        dur: chord.dur,
+        vel: chord.vel,
+      })))
+      duration = 5.2
+    } else {
+      const range = entry?.range
+      const root = range
+        ? Math.min(Math.max(55, range.low + 4), range.high - 12)
+        : 55
+      const intervals = [0, 4, 7, 12, 7, 4, 0, 7]
+      notes = intervals.map((interval, index) => ({
+        pitch: root + interval,
+        start: index * 0.25,
+        dur: 0.22,
+        vel: index === intervals.length - 1 ? 110 : 100,
+      }))
+      duration = 2.8
+    }
     const out = scratchPath(workspaceRoot, `vst3-preview-${randomUUID()}.wav`)
     await mkdir(dirname(out), { recursive: true })
     let result
