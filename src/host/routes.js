@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import {
@@ -28,7 +28,7 @@ import {
 } from '../audio/singing-install.js'
 import { gpuStatus, installGpuRuntime } from '../audio/singing-gpu.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
-import { builtInCatalog } from '../audio/vst3-catalog.js'
+import { mergedCatalog } from '../audio/vst3-catalog.js'
 import { createVst3Process } from '../audio/vst3-process.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
 import { findFfmpeg, resolveOutputPath, runFfmpeg, scratchPath } from '../tools/shared.js'
@@ -603,9 +603,108 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     })
   }
 
-  /** Built-in VST3 instrument catalog for the settings page. */
-  function vst3ListRoute() {
-    return { ok: true, ...builtInCatalog() }
+  const VST3_SCAN_DIR = 'C:\\Program Files\\Common Files\\VST3'
+
+  /** Read Name/Vendor from a VST3 package's moduleinfo.json; empty on failure. */
+  async function readVst3ModuleInfo(packagePath) {
+    try {
+      const data = JSON.parse(await readFile(join(packagePath, 'Contents', 'Resources', 'moduleinfo.json'), 'utf8'))
+      const name = typeof data?.Name === 'string' ? data.Name.trim() : ''
+      const vendor = typeof data?.['Factory Info']?.Vendor === 'string' ? data['Factory Info'].Vendor.trim() : ''
+      return { name, vendor }
+    } catch {
+      return { name: '', vendor: '' }
+    }
+  }
+
+  /** Recursively find .vst3 directory packages that have an x86_64-win inner DLL. */
+  async function scanVst3Packages(root) {
+    const found = []
+    const seen = new Set()
+    async function walk(dir) {
+      let entries
+      try {
+        entries = await readdir(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const full = join(dir, entry.name)
+        if (entry.name.toLowerCase().endsWith('.vst3')) {
+          const key = full.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          let hasInnerDll = false
+          try {
+            const inner = await readdir(join(full, 'Contents', 'x86_64-win'), { withFileTypes: true })
+            hasInnerDll = inner.some((item) => item.isFile() && item.name.toLowerCase().endsWith('.vst3'))
+          } catch {
+            hasInnerDll = false
+          }
+          if (!hasInnerDll) continue
+          const meta = await readVst3ModuleInfo(full)
+          found.push({
+            path: full,
+            name: meta.name || entry.name.replace(/\.vst3$/i, ''),
+            vendor: meta.vendor,
+            hasInnerDll: true,
+          })
+          continue
+        }
+        await walk(full)
+      }
+    }
+    await walk(root)
+    return found
+  }
+
+  async function vst3ScanRoute(body) {
+    const requested = typeof body.dir === 'string' && body.dir.trim() ? body.dir.trim() : VST3_SCAN_DIR
+    let info
+    try {
+      info = await stat(requested)
+    } catch {
+      throw new Error(`VST3 目录不存在：${requested}`)
+    }
+    if (!info.isDirectory()) throw new Error(`不是目录：${requested}`)
+    const plugins = await scanVst3Packages(requested)
+    return { ok: true, dir: requested, plugins }
+  }
+
+  async function vst3AddRoute(body) {
+    const path = typeof body.path === 'string' ? body.path.trim() : ''
+    if (!path) throw new Error('path is required')
+    if (!existsSync(path)) throw new Error(`VST3 插件不存在：${path}`)
+    const { config } = await readConfig()
+    const existing = (config.vst3?.plugins ?? []).find((entry) => entry.path.toLowerCase() === path.toLowerCase())
+    if (existing) throw new Error(`VST3 插件已存在：${path}`)
+    const meta = await readVst3ModuleInfo(path)
+    const name = typeof body.name === 'string' && body.name.trim()
+      ? body.name.trim()
+      : (meta.name || basename(path).replace(/\.vst3$/i, '') || path)
+    const vendor = typeof body.vendor === 'string' && body.vendor.trim()
+      ? body.vendor.trim()
+      : meta.vendor
+    const plugins = [...(config.vst3?.plugins ?? []), { path, name, vendor }]
+    const updated = await updateConfig({ vst3: { plugins } })
+    return { ok: true, plugin: { path, name, vendor }, config: updated.config }
+  }
+
+  async function vst3RemoveRoute(body) {
+    const path = typeof body.path === 'string' ? body.path.trim() : ''
+    if (!path) throw new Error('path is required')
+    const { config } = await readConfig()
+    const plugins = config.vst3?.plugins ?? []
+    const next = plugins.filter((entry) => entry.path.toLowerCase() !== path.toLowerCase())
+    if (next.length === plugins.length) return { ok: false, error: `VST3 插件不在配置里：${path}` }
+    const updated = await updateConfig({ vst3: { plugins: next } })
+    return { ok: true, removed: true, config: updated.config }
+  }
+
+  /** Built-in + scanned VST3 instrument catalog for the settings page. */
+  async function vst3ListRoute() {
+    return { ok: true, ...(await mergedCatalog()) }
   }
 
   /**
@@ -614,7 +713,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
    * through the existing /audio route.
    */
   async function vst3TestRoute(body) {
-    const catalog = builtInCatalog()
+    const catalog = await mergedCatalog()
     const requested = typeof body.plugin === 'string' ? body.plugin.trim() : ''
     const entry = requested
       ? catalog.plugins.find((item) => item.id === requested)
@@ -949,7 +1048,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     }
     if (method === 'GET' && path === `${PREFIX}/vst3/list`) {
       try {
-        return json(res, 200, vst3ListRoute())
+        return json(res, 200, await vst3ListRoute())
       } catch (error) {
         return json(res, 500, { ok: false, error: describeError(error) })
       }
@@ -987,6 +1086,9 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       if (path === `${PREFIX}/sources/verify`) return json(res, 200, await verifySource(body))
       if (path === `${PREFIX}/sources/remove`) return json(res, 200, await removeSource(body))
       if (path === `${PREFIX}/sources/preview`) return json(res, 200, await previewSource(body))
+      if (path === `${PREFIX}/vst3/scan`) return json(res, 200, await vst3ScanRoute(body))
+      if (path === `${PREFIX}/vst3/add`) return json(res, 200, await vst3AddRoute(body))
+      if (path === `${PREFIX}/vst3/remove`) return json(res, 200, await vst3RemoveRoute(body))
       if (path === `${PREFIX}/vst3/test`) return json(res, 200, await vst3TestRoute(body))
       if (path === `${PREFIX}/tts/preview`) return json(res, 200, await previewTts(body))
       if (path === `${PREFIX}/tts/cancel`) {

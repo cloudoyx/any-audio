@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 /**
  * One config file per machine, shared by every DSH profile. DSH's own settings
@@ -52,6 +52,11 @@ export const DEFAULTS = {
     peakDb: -3,
     sampleRate: 48000,
     tailSec: 2,
+  },
+  vst3: {
+    // Plugins the person added through the settings page. `path` is the unique
+    // key; the built-in catalog is separate and always available.
+    plugins: [],
   },
   sfx: {
     sampleRate: 48000,
@@ -168,6 +173,44 @@ export function normalizeConfig(input) {
     tailSec: clampNumber(musicRaw.tailSec, 0, 60, DEFAULTS.music.tailSec),
   }
 
+  // Scanned VST3 plugins. `path` is the identity: a duplicate path is dropped
+  // rather than stored twice, and a missing name falls back to the folder name
+  // so the settings page never shows a blank row.
+  const vst3Raw = isPlainObject(raw.vst3) ? raw.vst3 : {}
+  const vst3Plugins = []
+  const seenVst3Paths = new Set()
+  if (Array.isArray(vst3Raw.plugins)) {
+    for (const [index, entry] of vst3Raw.plugins.entries()) {
+      if (!isPlainObject(entry)) {
+        issues.push(`vst3.plugins[${index}] is not an object; it was ignored`)
+        continue
+      }
+      const path = typeof entry.path === 'string' ? entry.path.trim() : ''
+      if (!path) {
+        issues.push(`vst3.plugins[${index}].path must be a non-empty string; it was ignored`)
+        continue
+      }
+      const key = path.toLowerCase()
+      if (seenVst3Paths.has(key)) {
+        issues.push(`vst3.plugins[${index}].path "${path}" is a duplicate; it was ignored`)
+        continue
+      }
+      seenVst3Paths.add(key)
+      const fallbackName = basename(path).replace(/\.vst3$/i, '') || path
+      const name = typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : fallbackName
+      if (typeof entry.name !== 'string' || !entry.name.trim()) {
+        issues.push(`vst3.plugins[${index}].name is empty; using "${name}"`)
+      }
+      const vendor = typeof entry.vendor === 'string' ? entry.vendor.trim() : ''
+      if (entry.vendor !== undefined && typeof entry.vendor !== 'string') {
+        issues.push(`vst3.plugins[${index}].vendor must be a string; using ""`)
+      }
+      vst3Plugins.push({ path, name, vendor })
+    }
+  } else if (vst3Raw.plugins !== undefined) {
+    issues.push('vst3.plugins must be an array; it was ignored')
+  }
+
   const sfxRaw = isPlainObject(raw.sfx) ? raw.sfx : {}
   const outputRaw = isPlainObject(raw.output) ? raw.output : {}
   const sourcesRaw = isPlainObject(raw.sources) ? raw.sources : {}
@@ -227,6 +270,7 @@ export function normalizeConfig(input) {
         idleSec: Math.round(clampNumber(singingRaw.idleSec, 0, 3600, DEFAULTS.singing.idleSec)),
       },
       music,
+      vst3: { plugins: vst3Plugins },
       sfx: {
         sampleRate: Math.round(clampNumber(sfxRaw.sampleRate, 8000, 192000, DEFAULTS.sfx.sampleRate)),
         packs: normalizePackPriorities(sfxRaw.packs, issues),

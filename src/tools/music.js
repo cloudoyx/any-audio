@@ -6,7 +6,7 @@ import { accumulateInto, dbToGain, panGains } from '../audio/mix.js'
 import { categoryOfProgram, rankFonts } from '../audio/scoring.js'
 import { checkVst3Notes, compileScore } from '../audio/score.js'
 import { renderCompiled } from '../audio/synth.js'
-import { builtInCatalog } from '../audio/vst3-catalog.js'
+import { mergedCatalog } from '../audio/vst3-catalog.js'
 import { createVst3Process } from '../audio/vst3-process.js'
 import { KEYSWITCH_HOLD_SEC, KEYSWITCH_LEAD_SEC } from '../audio/vst3-techniques.js'
 import { conformChannels, padOrTrim, parseWav, peakOf, resample, rmsOf, toDb } from '../audio/wav.js'
@@ -99,8 +99,9 @@ function vst3NoteEvents(track) {
  *
  * Exported so the fallback can be tested without uninstalling a real plugin.
  */
-export async function selectSources(compiled, { catalog = builtInCatalog() } = {}) {
-  const vst3ById = new Map(catalog.plugins.map((entry) => [entry.id, entry]))
+export async function selectSources(compiled, { catalog = null } = {}) {
+  const resolvedCatalog = catalog ?? await mergedCatalog()
+  const vst3ById = new Map(resolvedCatalog.plugins.map((entry) => [entry.id, entry]))
   const warnings = []
   const autoTracks = []
 
@@ -132,7 +133,7 @@ export async function selectSources(compiled, { catalog = builtInCatalog() } = {
     const sf2Fonts = candidates.map((entry) => entry.recommended ?? { id: entry.id, name: entry.name, scores: {} })
     for (const track of autoTracks) {
       const category = categoryOfProgram(track.program)
-      const vst3Fonts = catalog.plugins
+      const vst3Fonts = resolvedCatalog.plugins
         .filter((entry) => Number.isFinite(entry.families?.[category]))
         .map((entry) => ({ id: entry.id, name: entry.name, scores: entry.families, vst3: entry }))
       const ranked = rankFonts([...sf2Fonts, ...vst3Fonts], category, track.program)

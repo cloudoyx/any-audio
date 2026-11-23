@@ -5,8 +5,10 @@
  * 有哪些效果音。音域必须与 engine/vst3_worker.py 的 PLUGIN_RANGES 一致——
  * 侧车按插件文件名里的 abpl / agml 匹配音域，超出直接拒绝渲染。
  */
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
+import { readConfig } from '../config.js'
 import { CATEGORY_LABELS } from './scoring.js'
 import { ARTICULATIONS, GUITAR_FX_SOUNDS } from './vst3-techniques.js'
 
@@ -70,6 +72,54 @@ function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+/** Stable id for a scanned plugin: the path is the identity, the hash keeps the
+ *  id short and cannot collide with a built-in id. */
+export function scannedId(path) {
+  return `scanned-${createHash('sha1').update(String(path).toLowerCase()).digest('hex').slice(0, 10)}`
+}
+
+/**
+ * Built-in entries plus the plugins the person added through /vst3/add.
+ *
+ * A scanned entry has no measured range, no family scores and no articulations:
+ * it can only be used by naming its id explicitly, never by `auto`, and the
+ * renderer skips the compile-time range check for it. A scanned path that is
+ * already a built-in plugin is dropped — the built-in entry has the measured
+ * data and must win.
+ */
+export async function mergedCatalog() {
+  const builtIn = builtInCatalog()
+  const { config } = await readConfig()
+  const seen = new Set(builtIn.plugins.map((entry) => entry.plugin.toLowerCase()))
+  const scanned = []
+  for (const plugin of config.vst3?.plugins ?? []) {
+    const path = String(plugin.path ?? '').trim()
+    if (!path || seen.has(path.toLowerCase())) continue
+    seen.add(path.toLowerCase())
+    scanned.push({
+      id: scannedId(path),
+      name: plugin.name || basename(path).replace(/\.vst3$/i, '') || path,
+      vendor: plugin.vendor || '未知',
+      plugin: path,
+      format: 'vst3',
+      instrument: true,
+      range: null,
+      families: {},
+      articulations: [],
+      fxSounds: [],
+      notes: '扫描条目：音域与演奏法未实测，只能显式 source 引用。',
+      kind: 'scanned',
+    })
+  }
+  return {
+    version: builtIn.version,
+    plugins: [
+      ...builtIn.plugins.map((entry) => ({ ...entry, kind: 'builtin' })),
+      ...scanned,
+    ],
+  }
+}
+
 function requireString(value, where) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Vst3CatalogError(`${where} 必须是非空字符串`)
@@ -128,14 +178,25 @@ function validatePlugin(entry, index) {
   if (entry.instrument !== true) {
     throw new Vst3CatalogError(`${where}.instrument 必须是 true（音色档案只收乐器插件）`)
   }
-  if (!isObject(entry.range)) throw new Vst3CatalogError(`${where}.range 必须是 { low, high } 对象`)
-  requireMidi(entry.range.low, `${where}.range.low`)
-  requireMidi(entry.range.high, `${where}.range.high`)
-  if (entry.range.low > entry.range.high) {
-    throw new Vst3CatalogError(`${where}.range.low (${entry.range.low}) 不能大于 range.high (${entry.range.high})`)
+  // A scanned entry has not been measured yet: its range and articulations may
+  // be absent. Built-in entries (no `kind`, or kind "builtin") still need both.
+  const scanned = entry.kind === 'scanned'
+  if (entry.range === undefined || entry.range === null) {
+    if (!scanned) throw new Vst3CatalogError(`${where}.range 必须是 { low, high } 对象`)
+  } else {
+    if (!isObject(entry.range)) throw new Vst3CatalogError(`${where}.range 必须是 { low, high } 对象`)
+    requireMidi(entry.range.low, `${where}.range.low`)
+    requireMidi(entry.range.high, `${where}.range.high`)
+    if (entry.range.low > entry.range.high) {
+      throw new Vst3CatalogError(`${where}.range.low (${entry.range.low}) 不能大于 range.high (${entry.range.high})`)
+    }
   }
   validateFamilies(entry.families, `${where}.families`)
-  validateKeyswitchList(entry.articulations, `${where}.articulations`)
+  if (entry.articulations === undefined) {
+    if (!scanned) throw new Vst3CatalogError(`${where}.articulations 必须是数组`)
+  } else {
+    validateKeyswitchList(entry.articulations, `${where}.articulations`)
+  }
   validateKeyswitchList(entry.fxSounds, `${where}.fxSounds`)
   if (typeof entry.notes !== 'string') throw new Vst3CatalogError(`${where}.notes 必须是字符串`)
 }
