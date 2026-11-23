@@ -57,6 +57,9 @@ export const DEFAULTS = {
     // Plugins the person added through the settings page. `path` is the unique
     // key; the built-in catalog is separate and always available.
     plugins: [],
+    // 厂商预设扫描结果，按插件路径分组：[{ path, timbres: [{ id, name, category, type, statePath }] }]。
+    // 由 audio/vst3-presets.js 写入；数组整体替换，重复扫描不会累积。
+    timbres: [],
   },
   sfx: {
     sampleRate: 48000,
@@ -210,6 +213,7 @@ export function normalizeConfig(input) {
   } else if (vst3Raw.plugins !== undefined) {
     issues.push('vst3.plugins must be an array; it was ignored')
   }
+  const vst3Timbres = normalizeVst3Timbres(vst3Raw.timbres, issues)
 
   const sfxRaw = isPlainObject(raw.sfx) ? raw.sfx : {}
   const outputRaw = isPlainObject(raw.output) ? raw.output : {}
@@ -270,7 +274,7 @@ export function normalizeConfig(input) {
         idleSec: Math.round(clampNumber(singingRaw.idleSec, 0, 3600, DEFAULTS.singing.idleSec)),
       },
       music,
-      vst3: { plugins: vst3Plugins },
+      vst3: { plugins: vst3Plugins, timbres: vst3Timbres },
       sfx: {
         sampleRate: Math.round(clampNumber(sfxRaw.sampleRate, 8000, 192000, DEFAULTS.sfx.sampleRate)),
         packs: normalizePackPriorities(sfxRaw.packs, issues),
@@ -281,6 +285,53 @@ export function normalizeConfig(input) {
       sources: { extraDirs, scores },
     },
   }
+}
+
+/**
+ * 音色表：按插件路径分组，路径是唯一键。扫描结果由 audio/vst3-presets.js 写入；
+ * 这里只做形状校验，坏条目丢掉而不是让整份配置读不进来。
+ */
+function normalizeVst3Timbres(value, issues) {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    issues.push('vst3.timbres must be an array; it was ignored')
+    return []
+  }
+  const out = []
+  const seen = new Set()
+  for (const [index, entry] of value.entries()) {
+    if (!isPlainObject(entry)) {
+      issues.push(`vst3.timbres[${index}] is not an object; it was ignored`)
+      continue
+    }
+    const path = typeof entry.path === 'string' ? entry.path.trim() : ''
+    if (!path) {
+      issues.push(`vst3.timbres[${index}].path must be a non-empty string; it was ignored`)
+      continue
+    }
+    const key = path.toLowerCase()
+    if (seen.has(key)) {
+      issues.push(`vst3.timbres[${index}].path "${path}" is a duplicate; it was ignored`)
+      continue
+    }
+    seen.add(key)
+    const timbres = []
+    for (const item of Array.isArray(entry.timbres) ? entry.timbres : []) {
+      if (!isPlainObject(item)) continue
+      const id = typeof item.id === 'string' ? item.id.trim() : ''
+      const name = typeof item.name === 'string' ? item.name.trim() : ''
+      if (!id || !name) continue
+      timbres.push({
+        id,
+        name,
+        category: typeof item.category === 'string' ? item.category.trim() : '',
+        type: typeof item.type === 'string' ? item.type.trim() : '',
+        statePath: typeof item.statePath === 'string' ? item.statePath.trim() : '',
+      })
+    }
+    out.push({ path, timbres })
+  }
+  return out
 }
 
 function normalizePercentText(value, fallback) {

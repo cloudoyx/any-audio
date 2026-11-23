@@ -50,6 +50,9 @@ export function builtInCatalog() {
         families: { bass: 9 },
         articulations: copyArticulations(),
         fxSounds: [],
+        // 厂商预设由 vst3-presets.js 扫描后写进机器配置，mergedCatalog 再挂上来；
+        // 内置档案本身不带音色，所以这里是空数组。
+        timbres: [],
         notes: '低音区不出声（实测 MIDI 40 以下静音）；52 以上音高可能不准。',
       },
       {
@@ -63,6 +66,7 @@ export function builtInCatalog() {
         families: { guitar: 9 },
         articulations: copyArticulations(),
         fxSounds: GUITAR_FX_SOUNDS.map((item) => ({ ...item })),
+        timbres: [],
         notes: '低音 E 弦不出声（实测 MIDI 42 起）；效果音直接当音符弹。',
       },
     ],
@@ -79,6 +83,15 @@ export function scannedId(path) {
   return `scanned-${createHash('sha1').update(String(path).toLowerCase()).digest('hex').slice(0, 10)}`
 }
 
+/** 机器配置里按插件路径存的音色表；路径大小写不敏感（Windows）。 */
+function timbresByPath(config) {
+  const map = new Map()
+  for (const entry of config.vst3?.timbres ?? []) {
+    map.set(entry.path.toLowerCase(), entry.timbres)
+  }
+  return map
+}
+
 /**
  * Built-in entries plus the plugins the person added through /vst3/add.
  *
@@ -91,6 +104,7 @@ export function scannedId(path) {
 export async function mergedCatalog() {
   const builtIn = builtInCatalog()
   const { config } = await readConfig()
+  const timbres = timbresByPath(config)
   const seen = new Set(builtIn.plugins.map((entry) => entry.plugin.toLowerCase()))
   const scanned = []
   for (const plugin of config.vst3?.plugins ?? []) {
@@ -109,6 +123,7 @@ export async function mergedCatalog() {
       families: { default: 5 },
       articulations: [],
       fxSounds: [],
+      timbres: timbres.get(path.toLowerCase()) ?? [],
       notes: '扫描条目：音域与演奏法未实测，只能显式 source 引用。',
       kind: 'scanned',
       // A suggestion only: the official metadata often says nothing about the
@@ -119,7 +134,11 @@ export async function mergedCatalog() {
   return {
     version: builtIn.version,
     plugins: [
-      ...builtIn.plugins.map((entry) => ({ ...entry, kind: 'builtin' })),
+      ...builtIn.plugins.map((entry) => ({
+        ...entry,
+        kind: 'builtin',
+        timbres: timbres.get(entry.plugin.toLowerCase()) ?? [],
+      })),
       ...scanned,
     ],
   }
@@ -153,6 +172,25 @@ function validateKeyswitchList(list, where) {
       throw new Vst3CatalogError(`${at}.keyswitch ${item.keyswitch} 与同一列表里的其他键位重复`)
     }
     seen.add(item.keyswitch)
+  }
+}
+
+/** 音色条目：{ id, name, category, type, statePath }，全部字符串，id 在同一音源内唯一。 */
+function validateTimbres(list, where) {
+  if (!Array.isArray(list)) throw new Vst3CatalogError(`${where} 必须是数组`)
+  const seen = new Set()
+  for (const [index, item] of list.entries()) {
+    const at = `${where}[${index}]`
+    if (!isObject(item)) throw new Vst3CatalogError(`${at} 必须是对象`)
+    requireString(item.id, `${at}.id`)
+    requireString(item.name, `${at}.name`)
+    for (const field of ['category', 'type', 'statePath']) {
+      if (typeof item[field] !== 'string') throw new Vst3CatalogError(`${at}.${field} 必须是字符串`)
+    }
+    if (seen.has(item.id)) {
+      throw new Vst3CatalogError(`${at}.id "${item.id}" 与同一音源的其他音色重复`)
+    }
+    seen.add(item.id)
   }
 }
 
@@ -203,6 +241,7 @@ function validatePlugin(entry, index) {
     validateKeyswitchList(entry.articulations, `${where}.articulations`)
   }
   validateKeyswitchList(entry.fxSounds, `${where}.fxSounds`)
+  if (entry.timbres !== undefined) validateTimbres(entry.timbres, `${where}.timbres`)
   if (typeof entry.notes !== 'string') throw new Vst3CatalogError(`${where}.notes 必须是字符串`)
 }
 
