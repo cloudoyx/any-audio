@@ -295,6 +295,7 @@ await test('per-track gainDb is the real relative level of each track', async ()
           tracks: gains.map((gainDb, index) => ({
             name: `t${index}`,
             instrument: 'strings',
+            source: font.id,
             gainDb,
             reverb: 0,
             notes: [[0.2, 0.8, 'C4', 100], [0.2, 0.9, 'G4', 100]],
@@ -389,8 +390,16 @@ await test('sources action "use" really persists the default bank', async () => 
     assert(used.ok === true, 'use must succeed')
     const after = (await readConfig()).config.music.font
     assert(after && after !== before, `config.music.font must change, was "${before}", now "${after}"`)
+    // Drum kits are the one thing that still comes from the configured default
+    // bank (every melodic track names its own source), so a drum track is what
+    // proves "use" reached the renderer.
     const rendered = await tools.get('anyaudio_music').execute(
-      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument: 'strings', notes: [[0, 0.6, 'C4', 90]] }] }, durationSec: 1, output: '.anyaudio/test-tmp/use-default.wav' },
+      {
+        projectId: await freshAttach(),
+        score: { tracks: [{ name: 'a', instrument: 'drums', drums: true, source: general.id, notes: [[0, 0.3, 'kick'], [0.4, 0.3, 'snare']] }] },
+        durationSec: 1,
+        output: '.anyaudio/test-tmp/use-default.wav',
+      },
       exec,
     )
     assert(rendered.font && rendered.font.toLowerCase().endsWith(general.name.toLowerCase()), `the render must use the new default, got ${rendered.font}`)
@@ -404,7 +413,7 @@ await test('render produces audio with the requested exact duration', async () =
   const result = await tools.get('anyaudio_music').execute(
     {
       projectId: await freshAttach(),
-      score: { tracks: [{ name: 'lead', instrument: 'koto', notes: [[0, 1, 'D4', 80], [1, 1, 'A4', 90]] }] },
+      score: { tracks: [{ name: 'lead', instrument: 'koto', source: font.id, notes: [[0, 1, 'D4', 80], [1, 1, 'A4', 90]] }] },
       durationSec: 2,
       output: '.anyaudio/test-tmp/render-exact.wav',
     },
@@ -420,7 +429,7 @@ await test('render produces audio with the requested exact duration', async () =
 await test('different instruments produce audibly different spectra', async () => {
   const render = async (instrument, file) => {
     const result = await tools.get('anyaudio_music').execute(
-      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument, notes: [[0, 1.2, 'D4', 90]] }] }, durationSec: 1.5, output: file },
+      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument, source: font.id, notes: [[0, 1.2, 'D4', 90]] }] }, durationSec: 1.5, output: file },
       exec,
     )
     return parseWav(await readFile(result.absolutePath))
@@ -442,7 +451,7 @@ await test('different instruments produce audibly different spectra', async () =
 await test('velocity controls loudness (dynamic response)', async () => {
   const render = async (velocity, file) => {
     const result = await tools.get('anyaudio_music').execute(
-      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument: 'piano', notes: [[0, 1, 'C4', velocity]] }] }, durationSec: 1.2, peakDb: null, output: file },
+      { projectId: await freshAttach(), score: { tracks: [{ name: 'a', instrument: 'piano', source: font.id, notes: [[0, 1, 'C4', velocity]] }] }, durationSec: 1.2, peakDb: null, output: file },
       exec,
     )
     return parseWav(await readFile(result.absolutePath))
@@ -536,7 +545,7 @@ await test('every tool return value matches its declared output schema', async (
   assertMatchesOutputSchema(tools.get('anyaudio_sources'), await tools.get('anyaudio_sources').execute({ action: 'presets', query: 'koto', limit: 5 }, exec))
 
   const scorePath = join(tmpDir, 'schema-score.json')
-  await writeFile(scorePath, JSON.stringify({ tracks: [{ name: 'lead', instrument: 'koto', notes: [[0, 0.4, 'D4', 80]] }] }))
+  await writeFile(scorePath, JSON.stringify({ tracks: [{ name: 'lead', instrument: 'koto', source: font.id, notes: [[0, 0.4, 'D4', 80]] }] }))
   const music = await tools.get('anyaudio_music').execute({ projectId: await freshAttach(), score: scorePath, output: '.anyaudio/test-tmp/schema-music.wav', tailSec: 0.2 }, exec)
   assertMatchesOutputSchema(tools.get('anyaudio_music'), music)
   assert(music.ok === true, 'a score given as a file path should render')
@@ -605,34 +614,40 @@ await test('a single-instrument bank plays its own program; ambiguous banks refu
   assert(pickProgram(exact, 56) === null, 'no matching program in a multi-preset bank means refuse')
 })
 
-await test('score tracks carry an optional source and unknown sources fail clearly', async () => {
+await test('score tracks carry a source, and a missing or unknown one fails clearly', async () => {
   const compiled = compileScore({ tracks: [{ name: 'g', instrument: 'guitar', source: 'generaluser', notes: [[0, 0.5, 'E3', 80]] }] })
   assert(compiled.tracks[0].source === 'generaluser', 'compileScore should pass source through')
-  let message = ''
-  try {
-    await tools.get('anyaudio_music').execute(
-      {
-        projectId: await freshAttach(),
-        score: { tracks: [{ name: 'g', instrument: 'guitar', source: 'no-such-font', notes: [[0, 0.5, 'E3', 80]] }] },
-        durationSec: 0.6,
-        output: '.anyaudio/test-tmp/bad-source.wav',
-      },
-      exec,
-    )
-  } catch (error) {
-    message = error.message
+
+  const render = async (track) => {
+    try {
+      await tools.get('anyaudio_music').execute(
+        { projectId: await freshAttach(), score: { tracks: [track] }, durationSec: 0.6, output: '.anyaudio/test-tmp/bad-source.wav' },
+        exec,
+      )
+      return ''
+    } catch (error) {
+      return error.message
+    }
   }
-  assert(/not installed|unknown sound source/.test(message), `expected an actionable source error, got "${message}"`)
+
+  const unknown = await render({ name: 'g', instrument: 'guitar', source: 'no-such-font', notes: [[0, 0.5, 'E3', 80]] })
+  assert(/not installed|unknown sound source/.test(unknown), `expected an actionable source error, got "${unknown}"`)
+
+  // No source is no longer "use the default bank": the caller picks from the
+  // list, and the error has to carry that list so the next call can succeed.
+  const missing = await render({ name: 'g', instrument: 'guitar', notes: [[0, 0.5, 'E3', 80]] })
+  assert(/names no source/.test(missing), `a track without a source must fail, got "${missing}"`)
+  assert(/Available sources:/.test(missing) && missing.includes('generaluser'), `the error must carry the list, got "${missing}"`)
 })
 
-await test('per-track source and auto both render and report the plan', async () => {
+await test('per-track source is reported for every track', async () => {
   const result = await tools.get('anyaudio_music').execute(
     {
       projectId: await freshAttach(),
       score: {
         tracks: [
-          { name: 'explicit', instrument: 'koto', source: 'generaluser', notes: [[0, 1, 'D4', 80]] },
-          { name: 'auto', instrument: 'flute', source: 'auto', notes: [[0, 1, 'A4', 70]] },
+          { name: 'lead', instrument: 'koto', source: 'generaluser', notes: [[0, 1, 'D4', 80]] },
+          { name: 'pad', instrument: 'flute', source: 'generaluser', notes: [[0, 1, 'A4', 70]] },
         ],
       },
       durationSec: 1.2,
@@ -642,14 +657,8 @@ await test('per-track source and auto both render and report the plan', async ()
   )
   assert(result.fonts.length >= 1, `explicit source should load at least its bank, got ${result.fonts.length}`)
   assert(result.fonts.some((font) => font.id === 'generaluser'), 'generaluser should be in the plan')
-  assert(result.tracks.find((track) => track.name === 'explicit').source === 'generaluser', 'explicit source should be reported')
-  const auto = result.tracks.find((track) => track.name === 'auto')
-  assert(auto?.source, 'auto should resolve to an installed source')
-  if (auto.source !== 'generaluser') {
-    assert(
-      result.warnings.some((line) => line.includes('auto-picked')),
-      `auto should explain a non-default pick, warnings: ${result.warnings.join(' | ')}`,
-    )
+  for (const track of result.tracks) {
+    assert(track.source === 'generaluser', `track "${track.name}" must report the source it named, got "${track.source}"`)
   }
 })
 
@@ -660,8 +669,8 @@ await test('stems keep the authored balance instead of being re-normalised', asy
       score: {
         title: 'balance',
         tracks: [
-          { name: 'lead', instrument: 'koto', gainDb: -3, notes: [[0, 1, 'D5', 110], [1, 1, 'A5', 110]] },
-          { name: 'pad', instrument: 'slow-strings', gainDb: -24, notes: [[0, 2.4, ['D4', 'A4'], 70]] },
+          { name: 'lead', instrument: 'koto', source: font.id, gainDb: -3, notes: [[0, 1, 'D5', 110], [1, 1, 'A5', 110]] },
+          { name: 'pad', instrument: 'slow-strings', source: font.id, gainDb: -24, notes: [[0, 2.4, ['D4', 'A4'], 70]] },
         ],
       },
       durationSec: 2.5,
@@ -705,9 +714,9 @@ await test('stems with Chinese track names get distinct files', async () => {
       score: {
         title: 'chinese-stems',
         tracks: [
-          { name: '卡林巴旋律', instrument: 'kalimba', gainDb: -4, notes: [[0, 0.6, 76, 90]] },
-          { name: '贝斯', instrument: 'finger-bass', gainDb: -6, notes: [[0, 0.6, 40, 90]] },
-          { name: '暖垫和声', instrument: 'warm-pad', gainDb: -10, notes: [[0, 0.8, [60, 64], 70]] },
+          { name: '卡林巴旋律', instrument: 'kalimba', source: font.id, gainDb: -4, notes: [[0, 0.6, 76, 90]] },
+          { name: '贝斯', instrument: 'finger-bass', source: font.id, gainDb: -6, notes: [[0, 0.6, 40, 90]] },
+          { name: '暖垫和声', instrument: 'warm-pad', source: font.id, gainDb: -10, notes: [[0, 0.8, [60, 64], 70]] },
         ],
       },
       durationSec: 1,
@@ -745,8 +754,8 @@ await test('a stem that renders to silence is reported as silent, not as quiet',
       score: {
         title: 'silent-pad',
         tracks: [
-          { name: 'lead', instrument: 'koto', gainDb: 0, notes: [[0, 1.6, 'D5', 110]] },
-          { name: 'pad', instrument: 'choir', gainDb: -4, notes: [[0, 1.6, 60, 80]] },
+          { name: 'lead', instrument: 'koto', source: font.id, gainDb: 0, notes: [[0, 1.6, 'D5', 110]] },
+          { name: 'pad', instrument: 'choir', source: font.id, gainDb: -4, notes: [[0, 1.6, 60, 80]] },
         ],
         automation: [{ track: 'pad', controller: 'volume', points: [[0, -26], [1.6, -20]] }],
       },

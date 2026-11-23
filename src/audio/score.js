@@ -324,7 +324,7 @@ export function checkVst3Notes(trackName, entry, notes) {
     throw new ScoreError(
       `track "${trackName}" uses VST3 source "${entry.id}" (${entry.name}), whose measured range is MIDI ${low}-${high}; `
       + `note at ${first.start.toFixed(2)}s (pitch ${first.midi}) is outside it and would be silent. `
-      + 'Move the pitch into range or choose another source.',
+      + 'Move the pitch into range.',
     )
   }
   const artIds = new Set((entry.articulations ?? []).map((item) => item.id))
@@ -377,6 +377,19 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
 
     const instrument = resolveInstrument(track.instrument ?? track.program ?? (drums ? 'drums' : 'piano'))
     const source = typeof track.source === 'string' && track.source.trim() ? track.source.trim() : undefined
+    // `preset` is a VST3 timbre: it names one of the presets the source offers.
+    // A SoundFont track picks its timbre with `instrument` instead, so a preset
+    // without a source has nothing to apply to and is a mistake worth naming.
+    const preset = typeof track.preset === 'string' && track.preset.trim() ? track.preset.trim() : undefined
+    if (track.preset !== undefined && track.preset !== null && track.preset !== '' && !preset) {
+      throw new ScoreError(`track "${name}": preset must be a non-empty string (the timbre name anyaudio_sources lists for that source)`)
+    }
+    if (preset && !source) {
+      throw new ScoreError(
+        `track "${name}": preset "${preset}" needs a source — preset only applies to a VST3 source, `
+        + 'so write source as well (anyaudio_sources action "list" gives both).',
+      )
+    }
     // A source that names a built-in VST3 instrument is not a SoundFont id: the
     // renderer sends this track to the sidecar instead of the SF2 synth.
     const vst3 = source ? builtInCatalog().plugins.find((entry) => entry.id === source) ?? null : null
@@ -387,7 +400,10 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
 
     let notes = collectNotes(track, warn, drums)
     notes = applyHumanize(notes, track.humanize, index * 7919 + (Number(track.humanize?.seed) || 0))
-    if (vst3) checkVst3Notes(name, vst3, notes)
+    // A drum track's pitches are GM drum-map keys, not a melodic range, so the
+    // measured range does not apply to it. Whether a drum track may name a VST3
+    // source at all is settled where the source is resolved.
+    if (vst3 && !drums) checkVst3Notes(name, vst3, notes)
 
     const events = []
     const program = drums ? 0 : instrument.program
@@ -406,7 +422,7 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
     const end = notes.reduce((max, note) => Math.max(max, note.start + note.duration), 0)
     return {
       name, channel, program, bank: instrument.bank, instrument: instrument.label, source,
-      vst3, drums, gainDb, pan, reverb, chorus, notes, events, endSec: end,
+      preset, vst3, drums, gainDb, pan, reverb, chorus, notes, events, endSec: end,
     }
   })
 

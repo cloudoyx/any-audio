@@ -35,8 +35,11 @@ export async function resolvePlugin(raw) {
  * Pass `manager` to reuse one process across a whole score (the plugin cache
  * then survives between tracks); without it a private process is started and
  * shut down around this render.
+ *
+ * `preset` is the state file of the timbre to load (the caller resolves a
+ * timbre name to its file); without it the plugin renders its default state.
  */
-export async function renderVst3Stem({ plugin, notes, duration, out, manager, keyswitches }) {
+export async function renderVst3Stem({ plugin, notes, duration, out, manager, keyswitches, preset }) {
   const resolved = await resolvePlugin(plugin)
   const own = manager ?? createVst3Process()
   try {
@@ -46,6 +49,7 @@ export async function renderVst3Stem({ plugin, notes, duration, out, manager, ke
       duration,
       out,
       ...(keyswitches?.length ? { keyswitches } : {}),
+      ...(preset ? { preset } : {}),
     })
   } finally {
     if (!manager) await own.shutdown().catch(() => {})

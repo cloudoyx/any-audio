@@ -1,13 +1,13 @@
 import { existsSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { loadCatalog, planFonts, resolveConfiguredDefault } from '../audio/banks.js'
+import { loadCatalog, planFonts, resolveConfiguredDefault, resolveFontSource } from '../audio/banks.js'
 import { accumulateInto, dbToGain, panGains } from '../audio/mix.js'
-import { categoryOfProgram, rankFonts } from '../audio/scoring.js'
-import { checkVst3Notes, compileScore } from '../audio/score.js'
+import { ScoreError, compileScore } from '../audio/score.js'
 import { renderCompiled } from '../audio/synth.js'
 import { mergedCatalog } from '../audio/vst3-catalog.js'
 import { createVst3Process } from '../audio/vst3-process.js'
+import { scanPluginTimbres } from '../audio/vst3-presets.js'
 import { KEYSWITCH_HOLD_SEC, KEYSWITCH_LEAD_SEC } from '../audio/vst3-techniques.js'
 import { conformChannels, padOrTrim, parseWav, peakOf, resample, rmsOf, toDb } from '../audio/wav.js'
 import { readConfig } from '../config.js'
@@ -20,8 +20,9 @@ function describeTracks(tracks) {
   return tracks
     .map((track) => {
       const kind = track.sourceKind === 'vst3' ? ' (vst3)' : ''
+      const preset = track.preset ? `, preset: ${track.preset}` : ''
       const fallback = track.fallback ? ', fallback' : ''
-      const source = track.source ? ` [source: ${track.source}${kind}${fallback}]` : ''
+      const source = track.source ? ` [source: ${track.source}${kind}${preset}${fallback}]` : ''
       const level = Number.isFinite(track.rmsDb) ? `, ${track.rmsDb.toFixed(1)} dBFS RMS` : ''
       return `- ${track.name}: ${track.instrument}${track.drums ? ' (drum kit)' : ''}${source}, ${track.notes} notes, ${track.endSec.toFixed(2)}s${level}`
     })
@@ -89,29 +90,79 @@ function vst3NoteEvents(track) {
 }
 
 /**
- * Resolve every track to either a VST3 instrument or the SoundFont planner.
- *
- * An explicit VST3 id comes from the built-in catalog. `auto`/missing sources
- * are ranked across both classes with the same fontScore/rankFonts mechanism the
- * SF2 planner uses; ties keep SF2 first (conservative). A VST3 entry whose
- * plugin file is missing never wins: the track falls back to SF2 and the plan
- * says so.
- *
- * Exported so the fallback can be tested without uninstalling a real plugin.
+ * One line per source for the "name a source" error: the ids to choose from, and
+ * for a VST3 source the timbre names its `preset` field takes. A source whose
+ * presets were never scanned is scanned here, so the error is enough on its own.
  */
-export async function selectSources(compiled, { catalog = null } = {}) {
+async function describeSources(fonts, plugins, timbresOf) {
+  const lines = []
+  for (const font of fonts) lines.push(`- [SF2] ${font.id} — ${font.name}`)
+  for (const entry of plugins) {
+    const names = (await timbresOf(entry)).map((timbre) => timbre.name)
+    lines.push(
+      `- [VST3] ${entry.id} — ${entry.name}`
+      + (names.length > 0 ? `; preset: ${names.join(', ')}` : '; no presets found (omit preset)'),
+    )
+  }
+  return lines.length > 0 ? lines.join('\n') : '(no source is installed)'
+}
+
+/**
+ * The timbres a VST3 source offers: the list the settings page scanned into the
+ * config, or a fresh scan when nothing was stored yet. Cached per plugin path so
+ * one render scans each source at most once.
+ */
+function timbreLookup() {
+  const cache = new Map()
+  return async (entry) => {
+    const key = String(entry.plugin).toLowerCase()
+    if (cache.has(key)) return cache.get(key)
+    const stored = entry.timbres ?? []
+    const timbres = stored.length > 0 ? stored : await scanPluginTimbres(entry.plugin)
+    cache.set(key, timbres)
+    return timbres
+  }
+}
+
+/**
+ * Resolve every track's `source` to a VST3 instrument or an installed SoundFont,
+ * and a VST3 track's `preset` to the state file the sidecar loads.
+ *
+ * Nothing is picked automatically: a program cannot know which of the installed
+ * instruments a name means, so the caller chooses from the real list
+ * (anyaudio_sources action "list"). A track with no source, with a source that
+ * is neither a catalog VST3 id nor an installed font, or with a preset its
+ * source does not offer, fails here and the error carries the list to choose
+ * from.
+ *
+ * Exported so the failure can be tested without uninstalling a real plugin.
+ */
+export async function selectSources(compiled, { catalog = null, fonts = null, workspaceRoot } = {}) {
   const resolvedCatalog = catalog ?? await mergedCatalog()
   const vst3ById = new Map(resolvedCatalog.plugins.map((entry) => [entry.id, entry]))
+  const fontCatalog = fonts ?? await loadCatalog()
+  const timbresOf = timbreLookup()
   const warnings = []
-  const autoTracks = []
+  const problems = []
 
   for (const track of compiled.tracks) {
     const source = typeof track.source === 'string' ? track.source.trim() : ''
-    const explicit = source && source !== 'auto' ? vst3ById.get(source) : null
+    if (!source) {
+      problems.push(`track "${track.name}" names no source`)
+      continue
+    }
+    const explicit = vst3ById.get(source)
     if (explicit) {
-      if (existsSync(explicit.plugin)) {
-        track.vst3 = explicit
-      } else {
+      // Drum kits are GM programs on the SoundFont side; a VST3 instrument has
+      // no drum map, so a drum track naming one would render pitches, not hits.
+      if (track.drums) {
+        problems.push(
+          `track "${track.name}" is a drum track, and drum kits always come from the default SoundFont; `
+          + `"${source}" is a VST3 instrument — name an SF2 source instead`,
+        )
+        continue
+      }
+      if (!existsSync(explicit.plugin)) {
         track.vst3 = null
         track.vst3Fallback = true
         track.source = 'auto'
@@ -119,36 +170,48 @@ export async function selectSources(compiled, { catalog = null } = {}) {
           `track "${track.name}": VST3 source "${explicit.id}" is not installed (${explicit.plugin}); `
           + 'rendered with the SoundFont fallback instead',
         )
+        continue
+      }
+      track.vst3 = explicit
+      if (track.preset) {
+        const timbres = await timbresOf(explicit)
+        const match = timbres.find((timbre) => timbre.name === track.preset)
+          ?? timbres.find((timbre) => timbre.id === track.preset)
+        if (!match) {
+          problems.push(
+            `track "${track.name}": source "${explicit.id}" has no preset "${track.preset}". `
+            + (timbres.length > 0
+              ? `Its presets: ${timbres.map((timbre) => timbre.name).join(', ')}`
+              : 'It offers no presets — omit preset to use its default timbre'),
+          )
+          continue
+        }
+        track.presetPath = match.statePath
       }
       continue
     }
-    if ((!source || source === 'auto') && !track.drums) autoTracks.push(track)
+    try {
+      await resolveFontSource(source, { workspaceRoot, catalog: fontCatalog })
+    } catch (error) {
+      problems.push(`track "${track.name}": ${error.message}`)
+      continue
+    }
+    // `preset` is a VST3 timbre; a SoundFont track picks its timbre with
+    // `instrument`, so a preset here would be silently dropped otherwise.
+    if (track.preset) {
+      warnings.push(
+        `track "${track.name}": preset "${track.preset}" only applies to a VST3 source; `
+        + `"${source}" is a SoundFont, so it was ignored — use instrument for its timbre`,
+      )
+    }
   }
 
-  if (autoTracks.length > 0) {
-    const fonts = await loadCatalog()
-    // 官方推荐字体带实测评分；用户自装的 SF2 没有实测数据，按类先验给兜底分 3。
-    const sf2Fonts = fonts.map((entry) => entry.recommended ?? { id: entry.id, name: entry.name, scores: { default: 3 } })
-    for (const track of autoTracks) {
-      const category = categoryOfProgram(track.program)
-      // VST3 条目按族评分参与；只有兜底分（default）的条目在所有族都按兜底分参与。
-      const vst3Fonts = resolvedCatalog.plugins
-        .filter((entry) => Number.isFinite(entry.families?.[category]) || Number.isFinite(entry.families?.default))
-        .map((entry) => ({ id: entry.id, name: entry.name, scores: entry.families, vst3: entry }))
-      const ranked = rankFonts([...sf2Fonts, ...vst3Fonts], category, track.program)
-      const winner = ranked[0]
-      if (!winner?.vst3) continue
-      if (existsSync(winner.vst3.plugin)) {
-        checkVst3Notes(track.name, winner.vst3, track.notes)
-        track.vst3 = winner.vst3
-        warnings.push(`track "${track.name}": auto-picked VST3 ${winner.vst3.name} for ${category} (score ${winner.score}/10)`)
-      } else {
-        warnings.push(
-          `track "${track.name}": auto would have picked VST3 ${winner.vst3.name} for ${category} (score ${winner.score}/10), `
-          + `but its plugin is not installed (${winner.vst3.plugin}); used the SoundFont fallback instead`,
-        )
-      }
-    }
+  if (problems.length > 0) {
+    throw new ScoreError(
+      `${problems.join('\n')}\n`
+      + 'Every track must name a source from anyaudio_sources action "list". Available sources:\n'
+      + await describeSources(fontCatalog, resolvedCatalog.plugins, timbresOf),
+    )
   }
 
   return {
@@ -166,6 +229,9 @@ async function renderVst3TrackStem(track, { manager, sampleRate, durationSec, wo
     plugin: track.vst3.plugin,
     notes: events.notes,
     keyswitches: events.keyswitches,
+    // The state file the score's preset name resolved to; without one the
+    // sidecar renders the instrument's own default state.
+    preset: track.presetPath,
     duration: durationSec,
     out,
     manager,
@@ -252,10 +318,10 @@ export const musicToolDefinition = finalizeTool({
     'Render a note score to a WAV file with real SoundFont instruments and VST3 instruments (MIDI-style notes, per-track gain/pan/reverb, optional automation). ' +
     'The rendered music goes into a clip bay project: pass projectId, and it is added as material and placed on its own track (one track per score track when stems:true), so the person can open, hear and adjust it. ' +
     'Call it whenever you are making or editing a video that should have a soundtrack, and prefer it over hand-writing numpy synthesis: acoustic timbres, several instruments, humanised timing. ' +
-    'Each track may name a "source": a VST3 instrument id ("ample-bass-p-lite" for Ample Bass P Lite, MIDI 40-72; "ample-guitar-m-lite" for Ample Guitar M Lite, MIDI 42-84), a SoundFont id from anyaudio_sources, a .sf2 path, or "auto" to pick the best-scored source across both classes for that instrument. ' +
+    'Every track must name a "source": an id from anyaudio_sources action "list", which lists the connected SoundFont banks and VST3 instruments together with the exact score fields to write for each. A VST3 track also names its "preset" — the timbre name from the same list; omit it to use that instrument\'s default timbre. A track with no source, or with a source or preset the list does not offer, fails and the error carries the available sources. ' +
     'Different tracks in one score may use different sources; SoundFonts are loaded into one synth and kept on non-overlapping bank offsets, while VST3 tracks are rendered by a local sidecar. ' +
     'Drum kits always come from the default SoundFont (the first loaded bank) — pass another kit as "font" if you need it. ' +
-    'Score format (seconds on the video timeline): {title, tracks:[{name, instrument, source, gainDb, pan, reverb, drums, humanize:{timingMs,velocity}, notes:[[startSec, durSec, pitch|pitches, velocity, art?]]}], automation:[{track, controller, points:[[sec,value]]}]}. ' +
+    'Score format (seconds on the video timeline): {title, tracks:[{name, instrument, source, preset, gainDb, pan, reverb, drums, humanize:{timingMs,velocity}, notes:[[startSec, durSec, pitch|pitches, velocity, art?]]}], automation:[{track, controller, points:[[sec,value]]}]}. ' +
     'The optional fifth note element "art" is a VST3 articulation id — "sus" (sustain), "pm" (palm mute), "ls" (legato slide), "hp" (hammer-on/pull-off); the sidecar sends the matching keyswitch just before the note. SoundFont tracks ignore it. ' +
     'Pitch accepts MIDI numbers or names (D3, F#4, Bb2); instruments accept GM names (piano, cello, strings, koto, shakuhachi, erhu, guzheng) or GM program numbers. ' +
     'Each track\'s gainDb is the level its stem is rendered at. That is a fact about the file, measured and recorded when the stem lands — it is not a mixing knob. To rebalance later, change the clip gain; do not render again. Positive values lift a track above the loudest one (the whole score is shifted instead of clipping). Per-track levels come back on every call (this tool measures them as part of rendering, one synthesis per track), so there is nothing to ask for; a part sitting more than 12 dB under the loudest one gets a warning. ' +
@@ -336,9 +402,9 @@ export const musicToolDefinition = finalizeTool({
     const sampleRate = Math.round(clampSeconds(args.sampleRate ?? config.music.sampleRate, config.music.sampleRate)) || config.music.sampleRate
     const compiled = compileScore(score, { sampleRate })
     // VST3 tracks leave the SoundFont planner: the sidecar renders them, and the
-    // SF2 synth must never see their events. `auto` is settled here, across both
-    // classes, before the SF2 plan is built.
-    const selection = await selectSources(compiled)
+    // SF2 synth must never see their events. Every source is resolved here,
+    // before any bank is loaded, so a bad one fails without rendering anything.
+    const selection = await selectSources(compiled, { workspaceRoot })
     const sf2Compiled = selection.sf2Compiled
     const vst3Tracks = selection.vst3Tracks
     const mixed = vst3Tracks.length > 0
@@ -527,6 +593,9 @@ export const musicToolDefinition = finalizeTool({
         program: vst3 ? null : assignment?.program ?? track.program,
         source: vst3 ? vst3.id : assignment?.source,
         sourceKind: vst3 ? 'vst3' : 'sf2',
+        // The timbre the score named, echoed back so the reply says which one
+        // was rendered; a VST3 track without one used the instrument default.
+        ...(vst3 && track.preset ? { preset: track.preset } : {}),
         fallback: track.vst3Fallback === true,
         gainDb: track.gainDb,
         notes: track.notes.length,
@@ -588,7 +657,13 @@ export const musicToolDefinition = finalizeTool({
       rmsDb: Number(rendered.rmsDb.toFixed(2)),
       font: plan.banks[0]?.path,
       fonts: plan.fonts,
-      vst3: vst3Tracks.map((track) => ({ id: track.vst3.id, name: track.vst3.name, plugin: track.vst3.plugin, track: track.name })),
+      vst3: vst3Tracks.map((track) => ({
+        id: track.vst3.id,
+        name: track.vst3.name,
+        plugin: track.vst3.plugin,
+        track: track.name,
+        ...(track.preset ? { preset: track.preset } : {}),
+      })),
       tracks,
       stems,
       stemsNormalized: false,

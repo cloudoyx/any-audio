@@ -6,10 +6,10 @@
  * 覆盖 t7 的渲染器合并：
  *  1. SF2 鼓 + VST3 贝斯（notes 第 5 元素 art 'pm'）+ SF2 钢琴走真实链路渲染，
  *     断言逐轨 sourceKind、stems 产出、mix 峰值与贝斯 stem 不是静音；
- *  2. auto 跨类选源：不写 source 的贝斯轨自动选中 VST3（计划/警告里可见）；
+ *  2. source 必填：不写 source 报错并附可用清单，写了 VST3 id 就交给侧车；
  *  3. 编译期音域校验：pitch 20 + VST3 source 在 compileScore 报错并点名音轨；
- *  4. 插件缺失回退：可注入假档案（内置条目指向不存在的路径），auto 落回 SF2，
- *     显式 source 标记 fallback=true——不需要真卸载插件。
+ *  4. 插件缺失回退：可注入假档案（内置条目指向不存在的路径），显式 source
+ *     标记 fallback=true——不需要真卸载插件。
  *
  * 真实渲染需要 插件 / venv / Python 依赖 / SoundFont 四样齐全，缺任何一样都
  * SKIP 而不是失败：测试不能因机器差异变红。
@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { loadCatalog } from '../src/audio/banks.js'
 import { listFonts } from '../src/audio/fonts.js'
 import { compileScore } from '../src/audio/score.js'
 import { parseWav, peakOf } from '../src/audio/wav.js'
@@ -69,7 +70,7 @@ async function freshProject() {
 }
 
 // ---------------------------------------------------------------------------
-test('auto 跨类选源：不写 source 的贝斯轨自动选中 VST3（计划/警告可见）', async () => {
+test('source 必填：不写 source 报错并附可用清单，写了 VST3 id 就交给侧车', async () => {
   // 假档案的插件路径真实存在，选源结果就与机器上装没装 ABPL 无关。
   const fakePlugin = join(WORK, 'FakeBass.vst3')
   await writeFile(fakePlugin, 'fake vst3 package')
@@ -81,29 +82,24 @@ test('auto 跨类选源：不写 source 的贝斯轨自动选中 VST3（计划/�
       families: { bass: 10 }, articulations: [], fxSounds: [], notes: '',
     }],
   }
-  const compiled = compileScore({ tracks: [{ name: '贝斯', instrument: 'bass', notes: [[0, 0.5, 40, 100]] }] })
-  const selection = await selectSources(compiled, { catalog })
-  assert.equal(selection.vst3Tracks.length, 1, 'auto 应把贝斯轨交给 VST3')
-  assert.equal(selection.vst3Tracks[0].vst3.id, 'fake-bass')
-  assert.equal(selection.sf2Compiled.tracks.length, 0, '选中 VST3 的轨不能同时留在 SF2 计划里')
-  assert.ok(
-    selection.warnings.some((warning) => /track "贝斯": auto-picked VST3 Fake Bass for bass \(score 10\/10\)/.test(warning)),
-    `auto 选源必须在警告里可见，实际：${JSON.stringify(selection.warnings)}`,
+
+  // 不写 source：不再自动挑，直接报错并把可用音源列出来。
+  const missing = compileScore({ tracks: [{ name: '贝斯', instrument: 'bass', notes: [[0, 0.5, 40, 100]] }] })
+  await assert.rejects(
+    selectSources(missing, { catalog }),
+    (err) => /track "贝斯" names no source/.test(err.message)
+      && /Available sources:/.test(err.message)
+      && /\[VST3\] fake-bass/.test(err.message),
+    '不写 source 必须报错并附清单',
   )
 
-  // 真档案路径：本机装了 ABPL 时，同一条 auto 规则必须选中它。
-  if (existsSync(REAL_PLUGIN)) {
-    const realCompiled = compileScore({ tracks: [{ name: '贝斯', instrument: 'bass', notes: [[0, 0.5, 40, 100]] }] })
-    const real = await selectSources(realCompiled)
-    assert.equal(real.vst3Tracks.length, 1, '真档案下 auto 也应选中 VST3')
-    assert.equal(real.vst3Tracks[0].vst3.id, 'ample-bass-p-lite')
-    assert.ok(
-      real.warnings.some((warning) => /track "贝斯": auto-picked VST3 .*ABPL.* for bass/.test(warning)),
-      `真档案 auto 警告缺失：${JSON.stringify(real.warnings)}`,
-    )
-  } else {
-    console.log('SKIP 真档案 auto 断言：未安装', REAL_PLUGIN)
-  }
+  // 写了 VST3 id：交给侧车，SF2 计划里不再有这条轨。
+  const explicit = compileScore({ tracks: [{ name: '贝斯', instrument: 'bass', source: 'fake-bass', notes: [[0, 0.5, 40, 100]] }] })
+  const selection = await selectSources(explicit, { catalog })
+  assert.equal(selection.vst3Tracks.length, 1, '显式 VST3 source 应交给侧车')
+  assert.equal(selection.vst3Tracks[0].vst3.id, 'fake-bass')
+  assert.equal(selection.sf2Compiled.tracks.length, 0, '选中 VST3 的轨不能同时留在 SF2 计划里')
+  assert.equal(selection.warnings.length, 0, `显式 source 不该产生警告，实际：${JSON.stringify(selection.warnings)}`)
 })
 
 test('编译期音域校验：VST3 轨超实测音域报错并点名音轨', async () => {
@@ -138,16 +134,6 @@ test('回退：VST3 插件文件缺失时落回 SF2（可注入假档案，不�
     }],
   }
 
-  // auto：不写 source，插件缺失时不能选 VST3，必须落回 SF2 并说明原因。
-  const autoCompiled = compileScore({ tracks: [{ name: '贝斯', instrument: 'bass', notes: [[0, 0.5, 40, 100]] }] })
-  const auto = await selectSources(autoCompiled, { catalog })
-  assert.equal(auto.vst3Tracks.length, 0, '插件缺失时 auto 不能选 VST3')
-  assert.equal(auto.sf2Compiled.tracks.length, 1, 'auto 应落回 SF2')
-  assert.ok(
-    auto.warnings.some((warning) => /auto would have picked VST3 .* but its plugin is not installed .* SoundFont fallback/.test(warning)),
-    `auto 回退警告缺失：${JSON.stringify(auto.warnings)}`,
-  )
-
   // 显式 source：标记 fallback=true，并把 source 改回 auto 交给 SF2 计划。
   const explicitCompiled = compileScore({
     tracks: [{ name: '贝斯', instrument: 'bass', source: 'ample-bass-p-lite', notes: [[0, 0.5, 40, 100]] }],
@@ -175,6 +161,9 @@ if (!existsSync(REAL_PYTHON)) {
 }
 const fonts = await listFonts()
 if (fonts.length === 0) skipReasons.push('没有安装 SoundFont（node scripts/fetch-font.mjs）')
+// Every track names its own source now, so the SF2 tracks need the installed
+// bank's catalog id (the same id anyaudio_sources lists).
+const defaultSource = fonts.length > 0 ? (await loadCatalog())[0]?.id ?? '' : ''
 
 if (skipReasons.length > 0) {
   console.log(`SKIP 混合编制真实渲染：${skipReasons.join('；')}`)
@@ -187,7 +176,7 @@ if (skipReasons.length > 0) {
         title: '混合编制回归',
         tracks: [
           {
-            name: '鼓', drums: true,
+            name: '鼓', drums: true, source: defaultSource,
             notes: [[0, 0.25, 36, 110], [0.5, 0.25, 38, 100], [1, 0.25, 42, 100], [1.5, 0.25, 36, 110]],
           },
           {
@@ -195,7 +184,7 @@ if (skipReasons.length > 0) {
             notes: [[0, 0.9, 40, 100, 'pm'], [1, 0.9, 43, 100, 'pm'], [2, 0.9, 45, 100, 'sus']],
           },
           {
-            name: '钢琴', instrument: 'piano',
+            name: '钢琴', instrument: 'piano', source: defaultSource,
             notes: [[0, 1.2, 60, 90], [1, 1.2, 64, 90], [2, 1.2, 67, 90]],
           },
         ],

@@ -159,6 +159,16 @@ async function resolveSource(value, catalog, workspaceRoot) {
 }
 
 /**
+ * Resolve a score's `source` to an installed font, or throw the same message
+ * planFonts would. Exported so the source check in the music tool reports a bad
+ * SoundFont source in exactly one wording, before any bank is loaded.
+ */
+export async function resolveFontSource(value, { workspaceRoot, catalog } = {}) {
+  const fonts = catalog ?? await loadCatalog()
+  return resolveSource(String(value ?? '').trim(), fonts, workspaceRoot)
+}
+
+/**
  * Decide banks + per-track assignments for a compiled score.
  * Returns { banks, layout, warnings } where `banks` is ready for the renderer
  * and `layout` is keyed by track name.
