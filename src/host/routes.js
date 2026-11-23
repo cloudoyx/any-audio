@@ -91,6 +91,111 @@ export async function shutdownVst3Process() {
   if (current) await current.shutdown().catch(() => {})
 }
 
+/**
+ * Parse a bundle's moduleinfo.json, or null when there is none.
+ *
+ * The VST3 SDK writes this file with trailing commas (it is JSON5-ish), which
+ * JSON.parse rejects. Dropping a comma that sits right before } or ] is enough
+ * to read the real metadata instead of silently falling back to the folder
+ * name for every Ample plugin.
+ */
+async function readVst3ModuleJson(packagePath) {
+  try {
+    const text = await readFile(join(packagePath, 'Contents', 'Resources', 'moduleinfo.json'), 'utf8')
+    return JSON.parse(text.replace(/,\s*([}\]])/g, '$1'))
+  } catch {
+    return null
+  }
+}
+
+/** Read Name/Vendor from a VST3 package's moduleinfo.json; empty on failure. */
+async function readVst3ModuleInfo(packagePath) {
+  const data = await readVst3ModuleJson(packagePath)
+  if (!data) return { name: '', vendor: '' }
+  const name = typeof data.Name === 'string' ? data.Name.trim() : ''
+  const vendor = typeof data['Factory Info']?.Vendor === 'string' ? data['Factory Info'].Vendor.trim() : ''
+  return { name, vendor }
+}
+
+/**
+ * Does a bundle's moduleinfo.json declare an Instrument class?
+ * `true` / `false` when the metadata was read, `null` when there is none
+ * (single-file plugins have no Contents/Resources/moduleinfo.json).
+ */
+async function readVst3DeclaredInstrument(packagePath) {
+  const data = await readVst3ModuleJson(packagePath)
+  if (!data) return null
+  const classes = Array.isArray(data.Classes) ? data.Classes : []
+  return classes.some((entry) => Array.isArray(entry?.['Sub Categories']) && entry['Sub Categories'].includes('Instrument'))
+}
+
+/**
+ * Recursively find .vst3 plugins in both Windows forms: a directory bundle
+ * (Contents/x86_64-win/<name>.vst3) and a single-file .vst3, which is itself a
+ * loadable DLL. Bundles without the inner DLL are skipped; a single file needs
+ * no inner check. Every candidate says which form it is (`form`) and whether
+ * its metadata declares an Instrument (`declaredInstrument`).
+ */
+export async function scanVst3Packages(root) {
+  const found = []
+  const seen = new Set()
+  async function walk(dir) {
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name)
+      const isVst3 = entry.name.toLowerCase().endsWith('.vst3')
+      if (entry.isDirectory()) {
+        if (isVst3) {
+          const key = full.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          let hasInnerDll = false
+          try {
+            const inner = await readdir(join(full, 'Contents', 'x86_64-win'), { withFileTypes: true })
+            hasInnerDll = inner.some((item) => item.isFile() && item.name.toLowerCase().endsWith('.vst3'))
+          } catch {
+            hasInnerDll = false
+          }
+          if (!hasInnerDll) continue
+          const meta = await readVst3ModuleInfo(full)
+          found.push({
+            path: full,
+            name: meta.name || entry.name.replace(/\.vst3$/i, ''),
+            vendor: meta.vendor,
+            hasInnerDll: true,
+            form: 'bundle',
+            declaredInstrument: await readVst3DeclaredInstrument(full),
+          })
+          continue
+        }
+        await walk(full)
+        continue
+      }
+      if (!entry.isFile() || !isVst3) continue
+      const key = full.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      // A single-file .vst3 is the DLL itself: no moduleinfo to read, no inner
+      // DLL to check. The file name is the only name available.
+      found.push({
+        path: full,
+        name: entry.name.replace(/\.vst3$/i, ''),
+        vendor: '',
+        hasInnerDll: false,
+        form: 'single',
+        declaredInstrument: null,
+      })
+    }
+  }
+  await walk(root)
+  return found
+}
+
 function publicJob(job) {
   return {
     id: job.id,
@@ -604,111 +709,6 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
   }
 
   const VST3_SCAN_DIR = 'C:\\Program Files\\Common Files\\VST3'
-
-  /**
-   * Parse a bundle's moduleinfo.json, or null when there is none.
-   *
-   * The VST3 SDK writes this file with trailing commas (it is JSON5-ish), which
-   * JSON.parse rejects. Dropping a comma that sits right before } or ] is enough
-   * to read the real metadata instead of silently falling back to the folder
-   * name for every Ample plugin.
-   */
-  async function readVst3ModuleJson(packagePath) {
-    try {
-      const text = await readFile(join(packagePath, 'Contents', 'Resources', 'moduleinfo.json'), 'utf8')
-      return JSON.parse(text.replace(/,\s*([}\]])/g, '$1'))
-    } catch {
-      return null
-    }
-  }
-
-  /** Read Name/Vendor from a VST3 package's moduleinfo.json; empty on failure. */
-  async function readVst3ModuleInfo(packagePath) {
-    const data = await readVst3ModuleJson(packagePath)
-    if (!data) return { name: '', vendor: '' }
-    const name = typeof data.Name === 'string' ? data.Name.trim() : ''
-    const vendor = typeof data['Factory Info']?.Vendor === 'string' ? data['Factory Info'].Vendor.trim() : ''
-    return { name, vendor }
-  }
-
-  /**
-   * Does a bundle's moduleinfo.json declare an Instrument class?
-   * `true` / `false` when the metadata was read, `null` when there is none
-   * (single-file plugins have no Contents/Resources/moduleinfo.json).
-   */
-  async function readVst3DeclaredInstrument(packagePath) {
-    const data = await readVst3ModuleJson(packagePath)
-    if (!data) return null
-    const classes = Array.isArray(data.Classes) ? data.Classes : []
-    return classes.some((entry) => Array.isArray(entry?.['Sub Categories']) && entry['Sub Categories'].includes('Instrument'))
-  }
-
-  /**
-   * Recursively find .vst3 plugins in both Windows forms: a directory bundle
-   * (Contents/x86_64-win/<name>.vst3) and a single-file .vst3, which is itself a
-   * loadable DLL. Bundles without the inner DLL are skipped; a single file needs
-   * no inner check. Every candidate says which form it is (`form`) and whether
-   * its metadata declares an Instrument (`declaredInstrument`).
-   */
-  async function scanVst3Packages(root) {
-    const found = []
-    const seen = new Set()
-    async function walk(dir) {
-      let entries
-      try {
-        entries = await readdir(dir, { withFileTypes: true })
-      } catch {
-        return
-      }
-      for (const entry of entries) {
-        const full = join(dir, entry.name)
-        const isVst3 = entry.name.toLowerCase().endsWith('.vst3')
-        if (entry.isDirectory()) {
-          if (isVst3) {
-            const key = full.toLowerCase()
-            if (seen.has(key)) continue
-            seen.add(key)
-            let hasInnerDll = false
-            try {
-              const inner = await readdir(join(full, 'Contents', 'x86_64-win'), { withFileTypes: true })
-              hasInnerDll = inner.some((item) => item.isFile() && item.name.toLowerCase().endsWith('.vst3'))
-            } catch {
-              hasInnerDll = false
-            }
-            if (!hasInnerDll) continue
-            const meta = await readVst3ModuleInfo(full)
-            found.push({
-              path: full,
-              name: meta.name || entry.name.replace(/\.vst3$/i, ''),
-              vendor: meta.vendor,
-              hasInnerDll: true,
-              form: 'bundle',
-              declaredInstrument: await readVst3DeclaredInstrument(full),
-            })
-            continue
-          }
-          await walk(full)
-          continue
-        }
-        if (!entry.isFile() || !isVst3) continue
-        const key = full.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        // A single-file .vst3 is the DLL itself: no moduleinfo to read, no inner
-        // DLL to check. The file name is the only name available.
-        found.push({
-          path: full,
-          name: entry.name.replace(/\.vst3$/i, ''),
-          vendor: '',
-          hasInnerDll: false,
-          form: 'single',
-          declaredInstrument: null,
-        })
-      }
-    }
-    await walk(root)
-    return found
-  }
 
   async function vst3ScanRoute(body) {
     const requested = typeof body.dir === 'string' && body.dir.trim() ? body.dir.trim() : VST3_SCAN_DIR
