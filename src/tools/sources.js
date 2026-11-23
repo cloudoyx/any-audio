@@ -3,6 +3,7 @@ import { extname, join } from 'node:path'
 import { FONT_EXTENSIONS, RECOMMENDED_FONTS, findRecommendedByFile, fontSearchDirs, installFont, listFonts, resolveFont } from '../audio/fonts.js'
 import { loadCatalog } from '../audio/banks.js'
 import { mergedCatalog } from '../audio/vst3-catalog.js'
+import { scanPluginTimbres } from '../audio/vst3-presets.js'
 import { DRUM_MAP, INSTRUMENTS } from '../audio/score.js'
 import { CATEGORY_LABELS, scoreTable } from '../audio/scoring.js'
 import { listSourceKinds } from '../audio/sources.js'
@@ -56,12 +57,84 @@ async function resolveBankArg(value, workspaceRoot) {
   return entry ? entry.path : resolveFont({ path: wanted, workspaceRoot })
 }
 
+// 清单只给预览：音色多的音源列前若干个，完整清单用 presets 查。
+const TIMBRE_PREVIEW = 12
+
+/** GM program → 第一个别名（INSTRUMENTS 的键序决定），把 bank 的 program 写成 instrument。 */
+const PROGRAM_ALIASES = new Map()
+for (const [name, program] of Object.entries(INSTRUMENTS)) {
+  if (!PROGRAM_ALIASES.has(program)) PROGRAM_ALIASES.set(program, name)
+}
+
+/**
+ * SF2 的可写音色：bank 0 的每个 program 一条。name 是库里的预设名，write 是谱里
+ * 能直接用的 instrument 写法（GM 别名优先，没有别名用 program 号）。读不了库返回
+ * timbres: null——一个坏库不该让整份清单失败。vendor 取库元数据里的作者，SF2 没有
+ * 厂商字段，这是最接近的一项。
+ */
+async function sf2Info(path) {
+  let bank
+  try {
+    bank = await loadSoundBank(path)
+  } catch {
+    return { timbres: null, vendor: '' }
+  }
+  const byProgram = new Map()
+  for (const preset of listPresets(bank, { limit: 10000 })) {
+    if (preset.drums || preset.bank !== 0 || byProgram.has(preset.program)) continue
+    byProgram.set(preset.program, preset.name)
+  }
+  const timbres = [...byProgram.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([program, name]) => {
+      const alias = PROGRAM_ALIASES.get(program)
+      return { name, program, write: alias ? `instrument:"${alias}"` : `instrument:${program}` }
+    })
+  const engineer = bank.soundBankInfo?.engineer
+  return { timbres, vendor: typeof engineer === 'string' ? engineer.trim() : '' }
+}
+
+function formatScores(scores) {
+  if (!scores) return '未评分'
+  const parts = Object.entries(scores)
+    .filter(([family]) => family !== 'default')
+    .map(([family, score]) => `${family} ${score}`)
+  if (Number.isFinite(scores.default)) parts.push(`default ${scores.default}（兜底）`)
+  return parts.join(', ') || '未评分'
+}
+
+function formatTimbres(entry, kind) {
+  if (kind === 'sf2' && entry.timbresReadable === false) return '读取失败（用 presets 重试）'
+  if (!entry.timbres?.length) {
+    return kind === 'sf2'
+      ? '1 个音色（默认）— 用默认音色，instrument 可省略'
+      : '1 个音色（默认）— 不写 preset，用该音源默认音色'
+  }
+  const shown = entry.timbres.map((timbre) => (kind === 'sf2' ? `${timbre.name}→${timbre.write}` : timbre.name))
+  const count = entry.timbreCount ?? entry.timbres.length
+  const head = entry.timbresTruncated
+    ? `共 ${count} 个，列前 ${entry.timbres.length} 个${kind === 'sf2' ? '；用 presets 查全部' : ''}`
+    : `${count} 个`
+  return `${head} — ${shown.join(' · ')}`
+}
+
+function formatWriteHint(entry, kind) {
+  if (!entry.timbres?.length) {
+    return kind === 'sf2'
+      ? `source:"${entry.id}"（用默认音色，instrument 可省略）`
+      : `source:"${entry.id}"（不写 preset，用默认音色）`
+  }
+  return kind === 'sf2'
+    ? `source:"${entry.id}"，instrument 按每条音色给出的值`
+    : `source:"${entry.id}", preset:"<音色名>"`
+}
+
 export const sourcesToolDefinition = finalizeTool({
   name: 'anyaudio_sources',
   description:
-    'Inspect and manage the sound sources used by anyaudio_music and anyaudio_sfx. Actions: "list" (installed SoundFont banks with their 1-10 instrument-family scores, the shared font library path and available source kinds), "install" (download a recommended bank or copy a .sf2/.sf3/.dls from disk into the shared library), "use" (make an installed bank the default source that anyaudio_music uses for tracks without a "source"), "instruments" (GM instrument names plus the Chinese-instrument aliases this plugin understands), "presets" (list the actual patches inside a bank, optionally filtered by query), "kinds" (what source types exist, including planned ones such as sample packs and narration voices). ' +
+    'Inspect and manage the sound sources used by anyaudio_music and anyaudio_sfx. Actions: "list" (every connected source — SoundFont banks and VST3 instruments — with its 1-10 instrument-family scores, measured range, and the timbres it offers, each with the exact score field to write), "install" (download a recommended bank or copy a .sf2/.sf3/.dls from disk into the shared library), "use" (make an installed bank the default source that anyaudio_music uses for tracks without a "source"), "instruments" (GM instrument names plus the Chinese-instrument aliases this plugin understands), "presets" (list the actual patches inside a bank, optionally filtered by query), "kinds" (what source types exist, including planned ones such as sample packs and narration voices). ' +
     'The font library is shared by every project and agent session on this machine, so a bank installed once is available everywhere. ' +
-    'Run "install" once if anyaudio_music reports that no SoundFont is installed. Custom banks are supported: pass "fromPath" to a local file or "url" to a direct download. Each track in a score may use a different installed bank via its "source" field; "auto" picks the best-scored installed bank for that instrument. Drum kits always come from the default bank.',
+    'Run "install" once if anyaudio_music reports that no SoundFont is installed. Custom banks are supported: pass "fromPath" to a local file or "url" to a direct download. Each track in a score names its source and timbre explicitly — the list action gives the exact field to write — and different tracks may use different sources. Drum kits always come from the default bank.',
   parameters: {
     type: 'object',
     properties: {
@@ -84,6 +157,7 @@ export const sourcesToolDefinition = finalizeTool({
         action: { type: 'string' },
         message: { type: 'string' },
         fonts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        vst3: { type: 'array', items: { type: 'object', additionalProperties: true } },
         directories: { type: 'array', items: { type: 'string' } },
         instruments: { type: 'array', items: { type: 'object', additionalProperties: true } },
         drums: { type: 'object', additionalProperties: true },
@@ -112,39 +186,43 @@ export const sourcesToolDefinition = finalizeTool({
         return value.kinds.map((kind) => `- ${kind.id} (${kind.status}) — ${kind.label}: ${kind.description}`).join('\n')
       }
       if (value.action === 'list') {
-        const withScores = (font) => {
-          if (!font.scores) return `${font.id ?? font.name} (unscored)`
-          return `${font.id ?? font.name}: ${Object.entries(font.scores).filter(([category]) => category !== 'default').map(([category, score]) => `${category} ${score}`).join(', ')}`
+        const lines = [
+          '已接入的全部音源（SF2 与 VST3 混排）。每条轨都要写 source；音色按每条给出的写法写。',
+        ]
+        for (const font of value.fonts) {
+          const tag = font.default ? ' [fallback]' : font.recommended ? ' [recommended]' : ''
+          const vendor = font.vendor ? `（${font.vendor}）` : ''
+          lines.push(`- [SF2] ${font.id} — ${font.name}${vendor} (${formatBytes(font.bytes)})${tag}`)
+          lines.push(`  评分: ${formatScores(font.scores)}`)
+          lines.push(`  写法: ${formatWriteHint(font, 'sf2')}`)
+          lines.push(`  音色: ${formatTimbres(font, 'sf2')}`)
         }
-        return [
-          '已接入的全部音源（SF2 与 VST3 混排）。谱里写 source 用 id；不写则工具按乐器族评分自动选：',
-          ...value.fonts.map((font) => `- [SF2] ${withScores(font)} — ${font.name} (${formatBytes(font.bytes)})${font.default ? ' [fallback]' : font.recommended ? ' [recommended]' : ''} → ${font.path}`),
-          ...value.vst3.map((entry) => {
-            const scores = entry.scores
-              ? Object.entries(entry.scores).map(([family, score]) => `${family === 'default' ? `${family} ${score}（兜底）` : `${family} ${score}`}`).join(', ')
-              : '未评分'
-            const range = entry.range ? `，实测音域 MIDI ${entry.range.low}-${entry.range.high}` : ''
-            const vendor = entry.vendor ? `（${entry.vendor}）` : ''
-            return `- [VST3] ${entry.id}: ${scores} — ${entry.name}${vendor}${range} → ${entry.path}`
-          }),
-          `Families: ${Object.keys(CATEGORY_LABELS).join(', ')}`,
-          // Two different things answer to "default": the bank the person chose
-          // with action "use" (music.font), and the bank used when they chose
-          // nothing. Calling both "default" is what made a person believe they
-          // had configured one, while the tool kept saying "not set"
-          // (improvement plan 04).
+        for (const entry of value.vst3) {
+          const vendor = entry.vendor && entry.vendor !== '未知' ? `（${entry.vendor}）` : ''
+          const range = entry.range ? `，实测音域 MIDI ${entry.range.low}-${entry.range.high}` : '，音域未实测'
+          lines.push(`- [VST3] ${entry.id} — ${entry.name}${vendor}${range}`)
+          lines.push(`  评分: ${formatScores(entry.scores)}`)
+          lines.push(`  写法: ${formatWriteHint(entry, 'vst3')}`)
+          lines.push(`  音色: ${formatTimbres(entry, 'vst3')}`)
+        }
+        lines.push(`Families: ${Object.keys(CATEGORY_LABELS).join(', ')}`)
+        // Two different things answer to "default": the bank the person chose
+        // with action "use" (music.font), and the bank used when they chose
+        // nothing. Calling both "default" is what made a person believe they
+        // had configured one, while the tool kept saying "not set"
+        // (improvement plan 04).
+        lines.push(
           value.defaultSource
             ? `Configured default source (drum kits): ${value.defaultSource}`
             : `Configured default source (drum kits): not set — renders fall back to ${value.fonts.find((font) => font.default)?.name ?? 'the installed default bank'}`,
-          `Search directories: ${value.directories.join(' | ')}`,
-          ...(value.legacy?.length
-            ? [
-                `From an older version (project folder, not part of the shared library — re-install with install + fromPath to use them):`,
-                ...value.legacy.map((font) => `- ${font.path} (${formatBytes(font.bytes)})`),
-              ]
-            : []),
-          `Source kinds: ${value.kinds.map((kind) => `${kind.id}:${kind.status}`).join(', ')}`,
-        ].join('\n')
+        )
+        lines.push(`Search directories: ${value.directories.join(' | ')}`)
+        if (value.legacy?.length) {
+          lines.push('From an older version (project folder, not part of the shared library — re-install with install + fromPath to use them):')
+          for (const font of value.legacy) lines.push(`- ${font.path} (${formatBytes(font.bytes)})`)
+        }
+        lines.push(`Source kinds: ${value.kinds.map((kind) => `${kind.id}:${kind.status}`).join(', ')}`)
+        return lines.join('\n')
       }
       return value.message ?? 'done'
     }),
@@ -204,31 +282,59 @@ export const sourcesToolDefinition = finalizeTool({
     // is no longer scanned (the library is machine-wide now); point at the files
     // so nothing silently disappears, without reading them into the library.
     const legacy = await legacyProjectFonts(workspaceRoot)
-    return {
-      ok: true,
-      action: 'list',
-      fonts: fonts.map((font) => {
-        const recommended = findRecommendedByFile(font.name)
-        return {
-          ...font,
-          relativePath: relativeToWorkspace(workspaceRoot, font.path),
-          id: recommended?.id ?? null,
-          recommended: Boolean(recommended),
-          default: Boolean(recommended?.default),
-          scores: recommended ? table.get(recommended.id) : null,
-        }
-      }),
-      vst3: (await mergedCatalog()).plugins.map((entry) => ({
+    const sf2 = []
+    for (const font of fonts) {
+      const recommended = findRecommendedByFile(font.name)
+      const info = await sf2Info(font.path)
+      sf2.push({
+        ...font,
+        kind: 'sf2',
+        relativePath: relativeToWorkspace(workspaceRoot, font.path),
+        // A custom bank has no catalog id; its file name is what the score's
+        // `source` resolves against, so that is the id the list must show.
+        id: recommended?.id ?? font.name,
+        vendor: info.vendor,
+        recommended: Boolean(recommended),
+        default: Boolean(recommended?.default),
+        scores: recommended ? table.get(recommended.id) : { default: 3 },
+        timbres: info.timbres ? info.timbres.slice(0, TIMBRE_PREVIEW) : [],
+        timbreCount: info.timbres?.length ?? 0,
+        timbresTruncated: Boolean(info.timbres && info.timbres.length > TIMBRE_PREVIEW),
+        timbresReadable: info.timbres !== null,
+      })
+    }
+    // 音色清单以磁盘上的预设为准。配置里有扫描结果就用它；没有就现场扫一遍
+    // （只读，不写配置——工具调用不落盘配置，落盘由设置页的扫描负责）。
+    const vst3 = []
+    for (const entry of (await mergedCatalog()).plugins) {
+      const stored = entry.timbres ?? []
+      const timbres = (stored.length ? stored : await scanPluginTimbres(entry.plugin)).map((timbre) => ({
+        id: timbre.id,
+        name: timbre.name,
+        category: timbre.category,
+        type: timbre.type,
+        write: `source:"${entry.id}", preset:"${timbre.name}"`,
+      }))
+      vst3.push({
         id: entry.id,
         name: entry.name,
         vendor: entry.vendor,
-        kind: entry.kind,
+        kind: 'vst3',
         path: entry.plugin,
         scores: entry.families ?? null,
         range: entry.range ?? null,
         articulations: entry.articulations?.length ?? 0,
         notes: entry.notes ?? '',
-      })),
+        timbres: timbres.slice(0, TIMBRE_PREVIEW),
+        timbreCount: timbres.length,
+        timbresTruncated: timbres.length > TIMBRE_PREVIEW,
+      })
+    }
+    return {
+      ok: true,
+      action: 'list',
+      fonts: sf2,
+      vst3,
       // Declared as `string` in the output schema: omit the key when unset
       // instead of sending null, or the host rejects the whole result.
       ...(config.music.font ? { defaultSource: config.music.font } : {}),

@@ -116,10 +116,15 @@ export const ampleSoundAdapter = {
       const header = await readHeader(statePath)
       // A broken preset is skipped, not fatal: the rest of the folder still counts.
       if (!header) continue
+      // The file name is the vendor's own preset name and is unique inside the
+      // folder; the XML Name can be stale (several files may carry the same one),
+      // so it is kept as metadata only. A name the caller cannot tell apart is a
+      // name it cannot choose.
       const fallback = basename(entry.name, extname(entry.name))
       timbres.push({
         presetId: presetIdOf(statePath),
-        name: header.Name || fallback,
+        name: fallback,
+        label: header.Name ?? '',
         category: header.Category ?? '',
         type: header.Type ?? '',
         statePath,
