@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import {
   FONT_EXTENSIONS,
   RECOMMENDED_FONTS,
@@ -28,8 +28,10 @@ import {
 } from '../audio/singing-install.js'
 import { gpuStatus, installGpuRuntime } from '../audio/singing-gpu.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
+import { builtInCatalog } from '../audio/vst3-catalog.js'
+import { createVst3Process } from '../audio/vst3-process.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
-import { findFfmpeg, resolveOutputPath, runFfmpeg } from '../tools/shared.js'
+import { findFfmpeg, resolveOutputPath, runFfmpeg, scratchPath } from '../tools/shared.js'
 import { handleClipBay, needsClientHeader } from './clipbay-routes.js'
 import { describeError, json, readJsonBody } from './http.js'
 
@@ -68,6 +70,25 @@ export function setGpuInstallRunner(fn) {
 let gpuStatusProbe = gpuStatus
 export function setGpuStatusProbe(fn) {
   gpuStatusProbe = typeof fn === 'function' ? fn : gpuStatus
+}
+// Injectable VST3 process factory for offline route tests (same pattern as the
+// singing install runner above). The settings preview reuses one process; the
+// manager's idle exit closes it after 60s with no request.
+let vst3ProcessFactory = (options) => createVst3Process(options)
+let vst3Process = null
+export function setVst3ProcessFactory(fn) {
+  vst3ProcessFactory = typeof fn === 'function' ? fn : (options) => createVst3Process(options)
+  vst3Process = null
+}
+function getVst3Process() {
+  if (!vst3Process) vst3Process = vst3ProcessFactory()
+  return vst3Process
+}
+/** Stop the shared preview process (tests and plugin disposal). */
+export async function shutdownVst3Process() {
+  const current = vst3Process
+  vst3Process = null
+  if (current) await current.shutdown().catch(() => {})
 }
 
 function publicJob(job) {
@@ -582,6 +603,57 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     })
   }
 
+  /** Built-in VST3 instrument catalog for the settings page. */
+  function vst3ListRoute() {
+    return { ok: true, ...builtInCatalog() }
+  }
+
+  /**
+   * Render a short note with one VST3 instrument and return it as a preview
+   * clip, the same shape /sources/preview returns. The settings page plays it
+   * through the existing /audio route.
+   */
+  async function vst3TestRoute(body) {
+    const catalog = builtInCatalog()
+    const requested = typeof body.plugin === 'string' ? body.plugin.trim() : ''
+    const entry = requested
+      ? catalog.plugins.find((item) => item.id === requested)
+        ?? catalog.plugins.find((item) => item.name === requested)
+        ?? catalog.plugins.find((item) => basename(item.plugin).toLowerCase() === requested.toLowerCase())
+        ?? null
+      : catalog.plugins[0]
+    const pluginPath = entry?.plugin ?? requested
+    if (!pluginPath) throw new Error('vst3/test needs a plugin id or path')
+    if (!existsSync(pluginPath)) throw new Error(`音源插件不存在：${pluginPath}`)
+    const pitch = body.pitch === undefined ? 45 : Number(body.pitch) // A2
+    if (!Number.isInteger(pitch) || pitch < 0 || pitch > 127) {
+      throw new Error(`pitch 必须是 0-127 的整数（MIDI 编号），现在是 ${JSON.stringify(body.pitch)}`)
+    }
+    const noteSeconds = Math.min(4, Math.max(0.1, Number(body.seconds) || 0.5))
+    const duration = Math.min(8, Math.max(noteSeconds + 0.2, Number(body.duration) || noteSeconds + 0.7))
+    const out = scratchPath(workspaceRoot, `vst3-preview-${randomUUID()}.wav`)
+    await mkdir(dirname(out), { recursive: true })
+    let result
+    let buffer
+    try {
+      result = await getVst3Process().render({
+        plugin: pluginPath,
+        notes: [{ pitch, start: 0, dur: noteSeconds, vel: 100 }],
+        duration,
+        out,
+      })
+      buffer = await readFile(out)
+    } finally {
+      await rm(out, { force: true })
+    }
+    return rememberAudio(buffer, {
+      kind: 'vst3',
+      label: `${entry?.name ?? basename(pluginPath)} · MIDI ${pitch}`,
+      durationSec: result.seconds,
+      peakDb: Number(toDb(result.peak).toFixed(1)),
+    })
+  }
+
   /**
    * Which engine a credential request is about.
    *
@@ -875,6 +947,13 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
         return json(res, 500, { ok: false, error: describeError(error) })
       }
     }
+    if (method === 'GET' && path === `${PREFIX}/vst3/list`) {
+      try {
+        return json(res, 200, vst3ListRoute())
+      } catch (error) {
+        return json(res, 500, { ok: false, error: describeError(error) })
+      }
+    }
     if (method === 'GET' && path === `${PREFIX}/sfx/packs`) {
       try {
         return json(res, 200, await sfxPacks())
@@ -908,6 +987,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       if (path === `${PREFIX}/sources/verify`) return json(res, 200, await verifySource(body))
       if (path === `${PREFIX}/sources/remove`) return json(res, 200, await removeSource(body))
       if (path === `${PREFIX}/sources/preview`) return json(res, 200, await previewSource(body))
+      if (path === `${PREFIX}/vst3/test`) return json(res, 200, await vst3TestRoute(body))
       if (path === `${PREFIX}/tts/preview`) return json(res, 200, await previewTts(body))
       if (path === `${PREFIX}/tts/cancel`) {
         const job = jobs.get(String(body.jobId ?? ''))
