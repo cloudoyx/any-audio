@@ -21,7 +21,7 @@
 
 **交付物一律是工程，不是一条混音。** 一条压好的混音里，某个音效想挪 0.5 秒、某句旁白想重配，都得整条重跑；工程里改一个片段就行。
 
-第一次使用若报"没有安装音源"，先调 `anyaudio_sources`（action `install`）安装 GeneralUser GS，再渲染。
+第一次使用若报"没有安装音源"，先征得用户同意，再用 `anyaudio_sources`（action `install`）装一套音源，再渲染。
 
 ## Score 格式
 
@@ -31,21 +31,23 @@
 {
   "title": "炊烟",
   "tracks": [
-    { "name": "lead", "instrument": "koto", "gainDb": -2, "pan": 0.1, "reverb": 0.35,
+    { "name": "lead", "source": "generaluser", "instrument": "koto", "gainDb": -2, "pan": 0.1, "reverb": 0.35,
       "notes": [[0, 2.0, "D4", 78], [2, 1.2, "F4", 84], [3.2, 2.4, "A4", 90]] },
-    { "name": "pad", "instrument": "slow-strings", "gainDb": -9,
+    { "name": "pad", "source": "generaluser", "instrument": "slow-strings", "gainDb": -9,
       "notes": [[0, 8, ["D3", "A3"], 60]] },
-    { "name": "bass", "instrument": "cello", "gainDb": -6,
+    { "name": "bass", "source": "generaluser", "instrument": "cello", "gainDb": -6,
       "notes": [[0, 4, "D2", 70], [4, 4, "A1", 66]] }
   ]
 }
 ```
 
+`source` 是 `anyaudio_sources` list 里的音源 id（例子里用默认装的 `generaluser`）；VST3 音源另写 `preset` 选音色，例如 `{ "name": "lead", "source": "<list 里的 VST3 音源 id>", "preset": "<list 里的音色名>", "notes": [...] }`。
+
 规则：
 
 - 音符是 `[起始秒, 时值秒, 音高, 力度]`；第四项力度 1–127，缺省 88。和弦把音高写成数组。也接受对象写法 `{t,d,p,v}`。
 - 音高可写 MIDI 号（60）或音名（`D3`、`F#4`、`Bb2`、`C5`）。
-- 轨道字段：`instrument`（GM 名或 program 号）、`gainDb`、`pan`（-1–1）、`reverb`/`chorus`（0–1 发送量）、`drums`（该轨用鼓组，音高按鼓件名如 `kick`/`snare` 解析）、`humanize:{timingMs,velocity}`（轻微时间/力度抖动，避免机械感）。
+- 轨道字段：`source`（音源 id，取自 `anyaudio_sources` 的 list）、`instrument`（SF2 音色名：GM 名或 program 号）、`preset`（VST3 音色名，取自 list）、`gainDb`、`pan`（-1–1）、`reverb`/`chorus`（0–1 发送量）、`drums`（该轨用鼓组，音高按鼓件名如 `kick`/`snare` 解析）、`humanize:{timingMs,velocity}`（轻微时间/力度抖动，避免机械感）。
 - **一个 score 最多 16 条轨道**（每条独占一个 MIDI 通道，鼓组固定占通道 9）；超过会直接报错。要更多声部就把同类乐器的音符合并到同一轨（同轨可变音高，和弦写成音高数组）。
 - 谱子很长时不要把它整个内联进工具调用：把 score 写成项目里的 `.json` 文件，`score` 参数直接传这个文件的路径（也接受 JSON 文本），省上下文又不容易漏字段。
 - 自动化：`automation:[{track:"pad", controller:"volume", points:[[0,90],[20,50]]}]`，控制器支持 volume/pan/expression/modulation/sustain/reverb-send/chorus-send/brightness。
@@ -56,14 +58,22 @@
 - 民族/古风：`guzheng`(古筝)、`guqin`(古琴)、`pipa`(琵琶)、`erhu`(二胡)、`dizi`(笛)、`xiao`(箫)、`sheng`(笙)、`suona`(唢呐)、`bianzhong`(编钟)、`yangqin`(扬琴)、`taiko`(太鼓)。它们映射到最接近的 GM 音色，不是真采样，但比正弦合成有质感。
 - 管弦：`strings`/`slow-strings`、`cello`、`violin`、`viola`、`harp`、`timpani`、`horn`、`trumpet`、`oboe`、`clarinet`、`flute`、`pizzicato`。
 - 氛围：`choir`、`warm-pad`、`choir-pad`、`soundtrack`、`crystal`、`atmosphere`。
-- 不确定就调 `anyaudio_sources`（默认的 `list` 动作）看**全部已接入音源**（SF2 与 VST3 混排，带评分与实测音域）；要看某音源的音色再调 `instruments` 或 `presets`。需要新音源时先告诉用户去设置页装，或征得用户明确同意后再装——**不得自行下载音源**（下载是大流量动作，必须用户同意）。
-- 音源可以换，换音源不用改 score；机器上接了哪些音源以设置页音源区为准。
+- 上面这些是 GM 别名，SF2 音色用它写 `instrument`；某个音源实际有哪些音色、叫什么，以 `anyaudio_sources` 的 list 为准，不要凭这份名单假设某条音色一定存在。
+- 写谱前先调 `anyaudio_sources`（默认的 `list` 动作）拿清单：**全部已接入音源**（SF2 与 VST3 混排，带评分、实测音域与音色列表），每条音色都写明怎么写进谱里。要看某音源的全部音色再调 `presets`；`instruments` 只是 GM 别名表，不是可用音色清单。
+- 需要新音源时先告诉用户去设置页装，或征得用户明确同意后再装——**不得自行下载音源**（下载是大流量动作，必须用户同意）。
+- 换音源或音色要改谱里的 `source`/`preset` 再重新生成；只调平衡不要重新生成（见混音一节）。机器上接了哪些音源，以 `anyaudio_sources` 的 list 为准。
 - 没有 DSH 也能渲染：`node scripts/anyaudio-cli.mjs render <score.json> <out.wav>`（可加 `--font`、`--duration`、`--peak`、`--rate`），等价于只调 `anyaudio_music` 的离线路径。适合先离线把谱子调好再进视频流程。
 
-## 每条轨道选音源（可选）
+## 每条轨道选音源与音色（必填）
 
-- 同一个 score 里，不同轨道可以用不同音源：在轨道上写 `source`（音源 id 或文件路径）。**默认不写**——工具会在全部已接入的音源里按乐器族自动挑最合适的：它掌握每个音源的实测音域与质量评分，这些数据你看不到，选源是工具的职责。只有用户点名要某个音源时才写 `source`，原样传给工具。
-- **不要凭先验断言某类乐器的音色上限**——以工具实际接入的音源为准；不确定就看音源列表的评分，或渲染后看逐轨报告（每轨会报告用了哪个音源、是否回退）。
+- **每条轨都要在谱里写明用哪个音源、哪个音色，写法照 `anyaudio_sources` list 里该条音色给出的字段**：
+  - SF2 音源：`source` 写音源 id，`instrument` 写音色名（GM 名或 program 号）。
+  - VST3 音源：`source` 写音源 id，`preset` 写音色名。
+- **为什么**：音源与音色的清单是唯一事实来源。乐器名千差万别、各音源组织音色的方式也不同，程序无法从一个乐器名猜出该用哪个音源、哪条音色；猜出来的不是你要的声音。所以选源是写谱人的职责，不是工具的。
+- **不指定会报错**：轨道没写 `source`、或写了清单里不存在的 id，工具直接报错，并把可用音源与音色清单附在错误里——照着清单改，不要猜、不要反复试。`preset` 只对 VST3 音源有意义，只写 `preset` 不写 `source` 也会报错。
+- 同一个 score 里不同轨可以用不同音源，SF2 与 VST3 可以混用；每条轨各自写自己的 `source`。
+- 音源没有可选音色时，list 会显示"1 个音色（默认）"，此时不写 `preset`，用该音源的默认音色。
+- **不要凭先验断言某类乐器的音色上限**——以清单里实际接入的音源与音色为准；逐轨报告会写明每条轨用了哪个音源、哪个音色。
 - **鼓组永远来自默认音源**（第一套加载的库）：其它库的鼓组不会被使用。要换鼓就把带鼓的库作为 `font` 传进来；默认库没有鼓时鼓轨不会响。
 - 装新音源：SF2 用 `anyaudio_sources` 的 `install`（按 id 下载）或 `fromPath`（本地文件）；VST3 在设置页音源区扫描添加。**装之前必须征得用户同意，不得自行下载。**音源装进整台机器共用的位置，所有项目与 Agent 会话共用，不用每个项目重装。想让某个库成为鼓组来源，用 `action: "use"`（会写入 `music.font` 配置）。许可证不允许再分发的音源由用户自备，不要下载来源不明的文件。
 
