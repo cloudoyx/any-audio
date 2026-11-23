@@ -32,6 +32,31 @@ function kindBadge(kind) {
 }
 
 /**
+ * The host's suggestion, not a rule: a plugin whose metadata declares an
+ * Instrument class gets a green「音源」, one that clearly is an effect gets a
+ * grey「效果器」. Anything unreadable shows nothing, and the person still picks.
+ */
+function suggestionBadge(recognized) {
+  if (recognized !== 'instrument' && recognized !== 'effect') return null
+  const instrument = recognized === 'instrument'
+  return h('span', {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '0 6px',
+      borderRadius: 4,
+      background: instrument ? C.good : C.soft,
+      color: instrument ? '#fff' : C.muted,
+      border: instrument ? 'none' : `1px solid ${C.border}`,
+      fontSize: 10,
+      fontWeight: 600,
+      lineHeight: '16px',
+      whiteSpace: 'nowrap',
+    },
+  }, instrument ? t('音源') : t('效果器'))
+}
+
+/**
  * What a person needs to know about a built-in instrument, in their words.
  * The catalog's own notes are written for the agent — measured MIDI numbers,
  * which notes are silent — and those stay out of the page.
@@ -241,10 +266,14 @@ function FontsTab({ state, reload, notify }) {
     try {
       const data = await api('/vst3/scan', { method: 'POST', body: { dir: scanDir.trim() || undefined } })
       setScan(data)
-      // Only what the plugin itself declares as an instrument starts checked:
-      // effect plugins (Waves, Valhalla, FabFilter …) and single files with no
+      // Only what the plugin itself declares as an instrument starts checked;
+      // a plugin the host recognises as an instrument counts too. Effect
+      // plugins (Waves, Valhalla, FabFilter …) and single files with no
       // metadata stay unchecked, and the person decides.
-      setScanPicks(Object.fromEntries((data.plugins ?? []).map(item => [item.path, item.declaredInstrument === true])))
+      setScanPicks(Object.fromEntries((data.plugins ?? []).map(item => [
+        item.path,
+        item.declaredInstrument === true || item.recognized === 'instrument',
+      ])))
       notify(t('扫描到 {0} 个 VST3 插件', data.plugins.length))
     } catch (error) {
       notify(error.message, 'error')
@@ -329,6 +358,7 @@ function FontsTab({ state, reload, notify }) {
       h('div', { style: S.itemHead },
         kindBadge('vst3'),
         h('span', { style: { fontWeight: 600 } }, plugin.name),
+        suggestionBadge(plugin.recognized),
         plugin.vendor && plugin.vendor !== '未知' ? h('span', { style: S.chip }, plugin.vendor) : null,
         scanned ? h('span', { style: S.chip }, t('未实测')) : null,
         h('span', { style: { flex: 1 } }),
@@ -461,6 +491,7 @@ function FontsTab({ state, reload, notify }) {
                 onChange: event => setScanPicks(current => ({ ...current, [item.path]: event.target.checked })),
               }),
               h('span', { style: { fontWeight: 600 } }, item.name),
+              suggestionBadge(item.recognized),
               item.vendor ? h('span', { style: S.chip }, item.vendor) : null,
               h('span', { style: S.desc }, item.form === 'single' ? t('单文件') : t('目录包')),
               added ? h('span', { style: S.chip }, t('已添加')) : null,
@@ -490,9 +521,10 @@ function FontsTab({ state, reload, notify }) {
         h('div', { style: S.itemHead },
           kindBadge('vst3'),
           h('span', { style: { fontWeight: 600 } }, t('VST3 插件')),
-          h('span', { style: S.chip }, t('已登记 {0} 个', vst3Plugins.filter(plugin => plugin.kind === 'scanned').length)),
+          h('span', { style: S.chip }, t('已有 {0} 个接入本插件', vst3Plugins.length)),
         ),
         h('div', { style: S.desc }, t('无统一目录：插件装在系统 VST3 目录，通过上方扫描或添加登记。')),
+        vst3Plugins.length === 0 ? h('div', { style: S.desc }, t('扫描后勾选并点「添加」即可接入')) : null,
       ),
     ),
   )

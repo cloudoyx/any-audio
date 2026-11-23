@@ -225,7 +225,9 @@ export const EN = {
   '已添加 {0} 个 VST3 音源': 'Added {0} VST3 instruments',
   'SF2 音源库': 'SF2 library',
   'VST3 插件': 'VST3 plugins',
-  '已登记 {0} 个': '{0} registered',
+  '已有 {0} 个接入本插件': '{0} connected to this plugin',
+  '扫描后勾选并点「添加」即可接入': 'Scan, tick what you want, then press Add.',
+  '效果器': 'Effect',
   '无统一目录：插件装在系统 VST3 目录，通过上方扫描或添加登记。': 'No shared folder: plugins live in the system VST3 folder and are registered by scanning or adding above.',
   'SF2 与 VST3 的存放位置。': 'Where SF2 and VST3 sources live.',
 
