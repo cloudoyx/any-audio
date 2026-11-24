@@ -12,17 +12,29 @@
                         {"pitch":60,"start":0.0,"dur":0.5,"vel":100},...],
                       "duration":4.0,"out":"...wav","preset":"...state"}
     worker → 调用方  {"type":"result","id":N,"ok":true,"peak":0.79,"seconds":4.0}
+    调用方 → worker  {"op":"probe","id":N,"plugin":"..."}
+    worker → 调用方  {"type":"result","id":N,"ok":true,"programs":[
+                        {"parameter":"program","values":["Say Again.",...]}]}
     worker → 调用方  {"type":"result","id":N,"ok":false,"kind":"param|load|render","error":"..."}
     调用方 → worker  {"op":"shutdown"}
 
-preset 可选：厂商预设状态文件的路径。给了就先把插件切到那份状态再渲染，不给就用
-插件默认状态（上一次渲染用过的预设会被撤掉）。预设装不进状态容器按 load 报错。
+preset 可选，三种写法：
+    状态文件路径（字符串）          厂商预设状态，装进插件状态容器再渲染；
+    {"kind":"state","path":"..."}   同上，显式写法；
+    {"kind":"file","path":"..."}    插件自己的预设文件，走 load_preset；
+    {"kind":"parameter","parameter":"program","value":"PHAROH"}
+                                    具名程序参数，渲染前 setattr 到插件上。
+不给就用插件默认状态（上一次渲染用过的预设会被撤掉）。预设装不进插件按 load 报错。
+
+probe 只加载插件、枚举参数，找出「参数名像 program/preset/patch 且取值是一串具名值」
+的参数（Dexed 的 program 就是这种），给调用方写进音色档案用；不预热、不出声。
 
 Windows 的 .vst3 是目录包，pedalboard 只认内层 DLL；传目录或 DLL 都行，这里自己找。
 Ample 系列采样器是流式加载，刚加载就渲染会静音：先预热到有声，再正式渲染。
 """
 import json
 import os
+import re
 import sys
 import traceback
 import wave
@@ -39,6 +51,14 @@ for _stream in (_PROTOCOL_OUT, sys.stdin):
         _stream.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):
         pass
+# 插件里的 C 代码直接写 fd 1（Dexed 加载时会打 banner），会混进协议行：
+# 把 fd 1 接到 stderr，协议行走复制出来的那个句柄。
+try:
+    _protocol_fd = os.dup(1)
+    os.dup2(2, 1)
+    _PROTOCOL_OUT = os.fdopen(_protocol_fd, "w", encoding="utf-8", newline="\n")
+except OSError:
+    pass
 
 try:
     from mido import Message
@@ -55,6 +75,8 @@ MAX_SECONDS = 600.0
 WARMUP_ATTEMPTS = 8
 WARMUP_SECONDS = 2.5
 FLUSH_SECONDS = 2.0
+# 具名程序参数：参数名像 program/preset/patch，取值又是一串具名值。
+PROGRAM_PARAMETER = re.compile(r"program|preset|patch", re.IGNORECASE)
 
 # 实测音域（MIDI）：超出会静音，提前拦下比渲染出空文件好。
 PLUGIN_RANGES = {
@@ -121,6 +143,108 @@ def read_preset_file(raw):
         return path.read_bytes()
     except OSError as exc:
         raise WorkerError("load", f"预设文件读不了：{exc}")
+
+
+def parse_preset(raw):
+    """把协议里的 preset 归一成 None 或 {kind, ...}；写法见模块开头的协议说明。"""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        path = raw.strip()
+        if not path:
+            raise WorkerError("param", "preset 必须是非空字符串：预设状态文件路径")
+        return {"kind": "state", "path": os.path.abspath(path)}
+    if not isinstance(raw, dict):
+        raise WorkerError("param", "preset 必须是状态文件路径或 {kind, ...} 对象")
+    kind = raw.get("kind")
+    if kind == "parameter":
+        parameter = raw.get("parameter")
+        value = raw.get("value")
+        if not isinstance(parameter, str) or not parameter.strip():
+            raise WorkerError("param", "参数型预设缺少 parameter：需要参数名")
+        if not isinstance(value, str) or not value.strip():
+            raise WorkerError("param", "参数型预设缺少 value：需要具名取值")
+        return {"kind": "parameter", "parameter": parameter.strip(), "value": value.strip()}
+    if kind in ("state", "file"):
+        path = raw.get("path")
+        if not isinstance(path, str) or not path.strip():
+            raise WorkerError("param", f"{kind} 型预设缺少 path：需要预设文件路径")
+        return {"kind": kind, "path": os.path.abspath(path.strip())}
+    raise WorkerError("param", f"未知 preset kind：{kind!r}（可用 state / file / parameter）")
+
+
+def preset_key(preset):
+    """预设的比较键：同一份预设重复请求时不必再切一次。"""
+    if preset is None:
+        return None
+    return json.dumps(preset, sort_keys=True, ensure_ascii=False)
+
+
+def plugin_parameters(plugin):
+    try:
+        parameters = plugin.parameters
+    except Exception:
+        return {}
+    return parameters if hasattr(parameters, "items") else {}
+
+
+def named_programs(plugin):
+    """插件暴露的具名程序参数：[{parameter, values}]，供 probe 写进音色档案。"""
+    programs = []
+    for name, parameter in plugin_parameters(plugin).items():
+        if not PROGRAM_PARAMETER.search(str(name)):
+            continue
+        values = getattr(parameter, "valid_values", None)
+        if not isinstance(values, list) or not values:
+            continue
+        if not all(isinstance(value, str) for value in values):
+            continue
+        programs.append({"parameter": str(name), "values": list(values)})
+    return programs
+
+
+def current_string_value(parameter, values):
+    """参数当前取的是哪个具名值：按 raw_value 反查，读不到就返回 None。"""
+    try:
+        raw = float(parameter.raw_value)
+    except Exception:
+        return None
+    for value in values:
+        try:
+            if abs(float(parameter.get_raw_value_for(value)) - raw) < 1e-6:
+                return value
+        except Exception:
+            continue
+    return None
+
+
+def string_parameter_defaults(plugin):
+    """加载时的具名取值参数值：切走参数型预设时按它还原。"""
+    defaults = {}
+    for name, parameter in plugin_parameters(plugin).items():
+        values = getattr(parameter, "valid_values", None)
+        if not isinstance(values, list) or not values:
+            continue
+        current = current_string_value(parameter, values)
+        if current is not None:
+            defaults[str(name)] = current
+    return defaults
+
+
+def resolve_parameter_value(plugin, name, value):
+    """把具名取值落到插件认的那个字符串上：有些插件会补空格（'PHAROH    '）。"""
+    parameter = plugin_parameters(plugin).get(name)
+    if parameter is None:
+        raise WorkerError("load", f"插件没有参数 {name}")
+    values = getattr(parameter, "valid_values", None)
+    if not isinstance(values, list) or not values:
+        return value
+    if value in values:
+        return value
+    matches = [item for item in values if isinstance(item, str) and item.strip() == value]
+    if len(matches) == 1:
+        return matches[0]
+    raise WorkerError("load", f"参数 {name} 没有取值 {value!r}；可用：{', '.join(values)}")
 
 
 def plugin_range(path):
@@ -193,10 +317,11 @@ def write_wav(path, audio):
 
 
 class PluginCache:
-    """按路径缓存已加载并预热过的插件实例，并按需切换预设状态。
+    """按路径缓存已加载并预热过的插件实例，并按需切换预设。
 
     一个实例只留一份"插件默认状态"（刚加载、还没被任何预设改过的那份），每次要
-    预设都从它出发做容器手术，所以连续换预设不会层层叠加；不给预设就切回默认。
+    预设都从它出发，所以连续换预设不会层层叠加；不给预设就切回默认。
+    参数型预设改的是插件参数，不在状态容器里，所以切走时按加载时记下的默认值还原。
     """
 
     def __init__(self):
@@ -206,32 +331,80 @@ class PluginCache:
         key = str(path).lower()
         entry = self._plugins.get(key)
         if entry is None:
-            entry = {"plugin": self._load(path), "defaultState": None, "preset": None}
+            plugin = self._load(path)
+            entry = {
+                "plugin": plugin,
+                "defaultState": None,
+                "defaults": string_parameter_defaults(plugin),
+                "preset": None,
+                "applied": None,
+            }
             self._plugins[key] = entry
         self._select_state(entry, preset)
         return entry["plugin"]
 
+    def load_plugin(self, path):
+        """只加载不预热：probe 只读参数，不需要出声。"""
+        return self._load_plugin(path)
+
     def _select_state(self, entry, preset):
         """把实例切到 preset 指定的状态；preset 为空就回到插件默认状态。"""
-        if preset == entry["preset"]:
+        key = preset_key(preset)
+        if key == entry["preset"]:
             return
-        if preset is None:
-            if entry["preset"] is not None:
-                self._set_state(entry, entry["defaultState"])
-                entry["preset"] = None
+        self._restore(entry)
+        # 先清掉记录再应用：应用失败时下一次请求会重试，而不是误以为已经切好了。
+        entry["preset"] = None
+        if preset is not None:
+            if entry["defaultState"] is None:
+                try:
+                    entry["defaultState"] = bytes(entry["plugin"].preset_data)
+                except Exception as exc:
+                    raise WorkerError("load", f"读不到插件默认状态：{exc}")
+            self._apply(entry, preset)
+        entry["preset"] = key
+
+    def _restore(self, entry):
+        """撤掉上一次预设：状态型切回默认状态，参数型把参数设回加载时的值。"""
+        applied = entry["applied"]
+        if applied is None:
             return
-        if entry["defaultState"] is None:
+        entry["applied"] = None
+        if applied["kind"] == "parameter":
+            default = entry["defaults"].get(applied["parameter"])
+            if default is not None:
+                try:
+                    setattr(entry["plugin"], applied["parameter"], default)
+                except Exception as exc:
+                    raise WorkerError("load", f"参数 {applied['parameter']} 还原不了：{exc}")
+                return
+        self._set_state(entry, entry["defaultState"])
+
+    def _apply(self, entry, preset):
+        kind = preset["kind"]
+        if kind == "parameter":
+            name = preset["parameter"]
+            value = resolve_parameter_value(entry["plugin"], name, preset["value"])
             try:
-                entry["defaultState"] = bytes(entry["plugin"].preset_data)
+                setattr(entry["plugin"], name, value)
             except Exception as exc:
-                raise WorkerError("load", f"读不到插件默认状态：{exc}")
-        state = read_preset_file(preset)
+                raise WorkerError("load", f"参数 {name} 设不上：{exc}")
+            entry["applied"] = {"kind": "parameter", "parameter": name}
+            return
+        if kind == "file":
+            try:
+                entry["plugin"].load_preset(preset["path"])
+            except Exception as exc:
+                raise WorkerError("load", f"预设文件装不进插件：{exc}")
+            entry["applied"] = {"kind": "file"}
+            return
+        state = read_preset_file(preset["path"])
         try:
             merged = apply_preset(entry["defaultState"], state)
         except PresetError as exc:
             raise WorkerError("load", f"预设装不进插件状态：{exc}")
         self._set_state(entry, merged)
-        entry["preset"] = preset
+        entry["applied"] = {"kind": "state"}
 
     @staticmethod
     def _set_state(entry, state):
@@ -241,6 +414,12 @@ class PluginCache:
             raise WorkerError("load", f"插件拒绝加载状态：{exc}")
 
     def _load(self, path):
+        plugin = self._load_plugin(path)
+        self._warmup(plugin, path)
+        return plugin
+
+    @staticmethod
+    def _load_plugin(path):
         if Message is None:
             raise WorkerError("load", f"mido 未安装：{_MIDO_ERROR}")
         try:
@@ -253,7 +432,6 @@ class PluginCache:
             raise WorkerError("load", f"VST3 加载失败：{exc}")
         if not getattr(plugin, "is_instrument", False):
             raise WorkerError("load", f"不是乐器插件：{path.name}")
-        self._warmup(plugin, path)
         return plugin
 
     def _warmup(self, plugin, path):
@@ -326,11 +504,7 @@ def handle_render(cache, msg):
             if isinstance(pitch, int) and not isinstance(pitch, bool) and 0 <= pitch <= 127:
                 keyswitches.add(pitch)
     raw_preset = msg.get("preset")
-    preset = None
-    if raw_preset is not None:
-        if not isinstance(raw_preset, str) or not raw_preset.strip():
-            raise WorkerError("param", "preset 必须是非空字符串：预设状态文件路径")
-        preset = os.path.abspath(raw_preset.strip())
+    preset = parse_preset(raw_preset)
     path = resolve_plugin_path(plugin_raw)
     check_range(path, notes, keyswitches)
     plugin = cache.get(path, preset)
@@ -346,6 +520,16 @@ def handle_render(cache, msg):
     except Exception as exc:
         raise WorkerError("render", f"写 WAV 失败：{exc}")
     return {"peak": round(peak, 4), "seconds": round(audio.shape[-1] / SAMPLE_RATE, 3)}
+
+
+def handle_probe(cache, msg):
+    """枚举插件的具名程序参数；只读参数，不预热也不出声。"""
+    plugin_raw = msg.get("plugin")
+    if not isinstance(plugin_raw, str) or not plugin_raw.strip():
+        raise WorkerError("param", "缺少 plugin：需要 VST3 路径")
+    path = resolve_plugin_path(plugin_raw)
+    plugin = cache.load_plugin(path)
+    return {"programs": named_programs(plugin)}
 
 
 def selftest():
@@ -395,12 +579,13 @@ def main(argv):
             continue
         if msg.get("op") == "shutdown":
             return 0
-        if msg.get("op") != "render":
+        op = msg.get("op")
+        if op not in ("render", "probe"):
             send({"type": "result", "id": msg.get("id"), "ok": False,
                   "kind": "param", "error": f"未知 op：{msg.get('op')}"})
             continue
         try:
-            result = handle_render(cache, msg)
+            result = handle_probe(cache, msg) if op == "probe" else handle_render(cache, msg)
             send({"type": "result", "id": msg.get("id"), "ok": True, **result})
         except WorkerError as exc:
             if exc.kind != "param":

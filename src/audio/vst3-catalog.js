@@ -175,7 +175,16 @@ function validateKeyswitchList(list, where) {
   }
 }
 
-/** 音色条目：{ id, name, category, type, statePath }，全部字符串，id 在同一音源内唯一。 */
+/** 音色条目的三种来源：状态文件、插件预设文件、具名程序参数。 */
+const TIMBRE_KINDS = new Set(['state', 'parameter', 'file'])
+
+/**
+ * 音色条目：{ id, name, category, type, kind, ... }，id 在同一音源内唯一。
+ *
+ * kind 缺省是 state（厂商预设状态文件，用 statePath）；parameter 型用
+ * parameter + value 描述一个具名程序参数取值，没有 statePath；file 型用
+ * statePath 指向插件自己的预设文件。
+ */
 function validateTimbres(list, where) {
   if (!Array.isArray(list)) throw new Vst3CatalogError(`${where} 必须是数组`)
   const seen = new Set()
@@ -184,14 +193,47 @@ function validateTimbres(list, where) {
     if (!isObject(item)) throw new Vst3CatalogError(`${at} 必须是对象`)
     requireString(item.id, `${at}.id`)
     requireString(item.name, `${at}.name`)
-    for (const field of ['category', 'type', 'statePath']) {
+    for (const field of ['category', 'type']) {
       if (typeof item[field] !== 'string') throw new Vst3CatalogError(`${at}.${field} 必须是字符串`)
+    }
+    const kind = item.kind ?? 'state'
+    if (!TIMBRE_KINDS.has(kind)) {
+      throw new Vst3CatalogError(`${at}.kind 必须是 "state"、"parameter" 或 "file"，现在是 ${JSON.stringify(item.kind)}`)
+    }
+    if (kind === 'parameter') {
+      requireString(item.parameter, `${at}.parameter`)
+      requireString(item.value, `${at}.value`)
+    } else if (typeof item.statePath !== 'string') {
+      throw new Vst3CatalogError(`${at}.statePath 必须是字符串`)
     }
     if (seen.has(item.id)) {
       throw new Vst3CatalogError(`${at}.id "${item.id}" 与同一音源的其他音色重复`)
     }
     seen.add(item.id)
   }
+}
+
+/**
+ * probe 的结果 → 参数型音色：每个具名取值一条，name 是谱面 preset 写的名字，
+ * value 是侧车要设给参数的值。同一个参数里重名的取值只留第一条。
+ */
+export function timbresFromPrograms(programs) {
+  const out = []
+  const seen = new Set()
+  for (const program of Array.isArray(programs) ? programs : []) {
+    const parameter = typeof program?.parameter === 'string' ? program.parameter.trim() : ''
+    if (!parameter) continue
+    for (const raw of Array.isArray(program.values) ? program.values : []) {
+      if (typeof raw !== 'string') continue
+      const name = raw.trim()
+      if (!name) continue
+      const id = `${parameter}:${name}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push({ id, name, category: '', type: '', kind: 'parameter', parameter, value: name })
+    }
+  }
+  return out
 }
 
 /** 乐器族评分：键是 scoring.js 的族键或 default（兜底分），分数 1-10，供 auto 跨类选源使用。 */
