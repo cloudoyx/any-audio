@@ -283,7 +283,11 @@ await test('drum tracks accept drum-kit names as pitches', async () => {
   assert(pitches[0] === 36 && pitches[1] === 41 && pitches[2] === 52, `unexpected drum pitches ${pitches.join(',')}`)
 })
 
-const font = (await tools.get('anyaudio_sources').execute({ action: 'list' }, exec)).fonts[0]
+// The engine tests need a general-purpose bank: a single-instrument bank (an
+// electric guitar, say) sorts first by file name and has no koto or cello, so
+// picking fonts[0] would compare two fallbacks. Prefer the default bank.
+const fontList = (await tools.get('anyaudio_sources').execute({ action: 'list' }, exec)).fonts
+const font = fontList.find((item) => item.default) ?? fontList[0]
 assert(font, 'a SoundFont must be installed for the engine tests (run node scripts/fetch-font.mjs)')
 
 await test('per-track gainDb is the real relative level of each track', async () => {
