@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolveVst3Python } from '../src/audio/vst3-process.js'
 import { listFonts } from '../src/audio/fonts.js'
 import { compileScore } from '../src/audio/score.js'
 import { mergedCatalog } from '../src/audio/vst3-catalog.js'
@@ -50,11 +51,9 @@ const ANYAUDIO = join(REPO_ROOT, '.anyaudio')
 const PROJECTS = join(ANYAUDIO, 'projects')
 const TMP = join(ANYAUDIO, 'tmp')
 const OUT = join(ANYAUDIO, 'out')
-const REAL_PYTHON = join(
-  REPO_ROOT, '.venv',
-  process.platform === 'win32' ? 'Scripts' : 'bin',
-  process.platform === 'win32' ? 'python.exe' : 'python',
-)
+// The interpreter the sidecar would actually launch: the machine-wide runtime
+// installed from the settings page, or the checkout's own .venv.
+const REAL_PYTHON = resolveVst3Python()
 
 function listing(path) {
   try { return new Set(readdirSync(path)) } catch { return new Set() }

@@ -14,7 +14,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  DEFAULT_IDLE_SEC, DEFAULT_RENDER_TIMEOUT_MS, createVst3Process, resolveVst3Config,
+  DEFAULT_IDLE_SEC, DEFAULT_RENDER_TIMEOUT_MS, createVst3Process, resolveVst3Config, resolveVst3Python,
 } from '../src/audio/vst3-process.js'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
@@ -23,11 +23,9 @@ const FAKE_WORKER = join(here, 'fixtures', 'fake-vst3-worker.mjs')
 const NODE = process.execPath
 const WORK = mkdtempSync(join(tmpdir(), 'anyaudio-vst3-process-'))
 const REAL_PLUGIN = 'C:\\Program Files\\Common Files\\VST3\\ABPL.vst3'
-const REAL_PYTHON = join(
-  REPO_ROOT, '.venv',
-  process.platform === 'win32' ? 'Scripts' : 'bin',
-  process.platform === 'win32' ? 'python.exe' : 'python',
-)
+// The interpreter the sidecar would actually launch: the machine-wide runtime
+// installed from the settings page, or the checkout's own .venv.
+const REAL_PYTHON = resolveVst3Python()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const tests = []
