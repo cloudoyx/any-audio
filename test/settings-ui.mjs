@@ -119,7 +119,7 @@ const fontsTree = FontsTab({ state: { fonts: fontState }, reload: () => {}, noti
 const fontsText = text(fontsTree)
 
 step('the sound-source page has the five sections in order', () => {
-  assert.deepEqual(titles(fontsTree), ['推荐音源', '已安装', 'VST3 运行时', '安装音源', '音源目录'])
+  assert.deepEqual(titles(fontsTree), ['音源介绍', '推荐音源', '已安装', '安装自定义音源', '音源目录'])
 })
 
 step('the sound-source page no longer offers a URL install', () => {
