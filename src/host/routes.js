@@ -28,7 +28,7 @@ import {
 } from '../audio/singing-install.js'
 import { gpuStatus, installGpuRuntime } from '../audio/singing-gpu.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
-import { mergedCatalog } from '../audio/vst3-catalog.js'
+import { mergedCatalog, timbresFromPrograms } from '../audio/vst3-catalog.js'
 import { recognizeVst3 } from '../audio/vst3-known.js'
 import { createVst3Process } from '../audio/vst3-process.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
@@ -728,6 +728,34 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     return { ok: true, dir: requested, plugins }
   }
 
+  /**
+   * Ask the sidecar which named program parameters the plugin exposes and turn
+   * them into parameter-type timbres. Any failure — not an instrument, no
+   * pedalboard, plugin crash — means "no parameter presets": adding a plugin
+   * must not fail because it cannot be probed.
+   */
+  async function probeParameterTimbres(path) {
+    try {
+      const manager = getVst3Process()
+      if (typeof manager.probe !== 'function') return []
+      const { programs } = await manager.probe(path)
+      return timbresFromPrograms(programs)
+    } catch {
+      return []
+    }
+  }
+
+  /** Store parameter timbres next to whatever vendor presets the path already has. */
+  function mergeTimbres(stored, path, timbres) {
+    const key = path.toLowerCase()
+    const index = stored.findIndex((entry) => String(entry.path ?? '').toLowerCase() === key)
+    if (index < 0) return [...stored, { path, timbres }]
+    const existing = stored[index].timbres ?? []
+    const seen = new Set(existing.map((item) => item.id))
+    const merged = [...existing, ...timbres.filter((item) => !seen.has(item.id))]
+    return stored.map((entry, at) => (at === index ? { path: stored[index].path, timbres: merged } : entry))
+  }
+
   async function vst3AddRoute(body) {
     const path = typeof body.path === 'string' ? body.path.trim() : ''
     if (!path) throw new Error('path is required')
@@ -744,7 +772,13 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       : meta.vendor
     const plugins = [...(config.vst3?.plugins ?? []), { path, name, vendor }]
     const updated = await updateConfig({ vst3: { plugins } })
-    return { ok: true, plugin: { path, name, vendor }, config: updated.config }
+    // A plugin that exposes a named program parameter gets parameter-type
+    // timbres, so a score can switch its sound by preset name.
+    const timbres = await probeParameterTimbres(path)
+    if (timbres.length === 0) return { ok: true, plugin: { path, name, vendor }, config: updated.config }
+    const stored = updated.config.vst3?.timbres ?? []
+    const final = await updateConfig({ vst3: { timbres: mergeTimbres(stored, path, timbres) } })
+    return { ok: true, plugin: { path, name, vendor }, timbres, config: final.config }
   }
 
   async function vst3RemoveRoute(body) {

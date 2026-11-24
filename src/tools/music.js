@@ -200,7 +200,15 @@ export async function selectSources(compiled, { catalog = null, fonts = null, wo
           )
           continue
         }
-        track.presetPath = match.statePath
+        // A parameter-type timbre is a named program value the sidecar sets on
+        // the plugin; a state/file timbre is a preset file it loads.
+        if (match.kind === 'parameter') {
+          track.presetParameter = { parameter: match.parameter, value: match.value }
+        } else if (match.kind === 'file') {
+          track.presetFile = match.statePath
+        } else {
+          track.presetPath = match.statePath
+        }
       }
       continue
     }
@@ -244,13 +252,16 @@ export async function selectSources(compiled, { catalog = null, fonts = null, wo
 async function renderVst3TrackStem(track, { manager, sampleRate, durationSec, workspaceRoot, stamp, index }) {
   const out = scratchPath(workspaceRoot, `vst3-${stamp}-${index}.wav`)
   const events = vst3NoteEvents(track)
+  // The preset the score's timbre name resolved to; without one the sidecar
+  // renders the instrument's own default state.
+  const preset = track.presetParameter
+    ? { kind: 'parameter', ...track.presetParameter }
+    : track.presetFile ? { kind: 'file', path: track.presetFile } : track.presetPath
   const result = await renderVst3Stem({
     plugin: track.vst3.plugin,
     notes: events.notes,
     keyswitches: events.keyswitches,
-    // The state file the score's preset name resolved to; without one the
-    // sidecar renders the instrument's own default state.
-    preset: track.presetPath,
+    preset,
     duration: durationSec,
     out,
     manager,

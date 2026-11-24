@@ -321,13 +321,22 @@ function normalizeVst3Timbres(value, issues) {
       const id = typeof item.id === 'string' ? item.id.trim() : ''
       const name = typeof item.name === 'string' ? item.name.trim() : ''
       if (!id || !name) continue
-      timbres.push({
+      const timbre = {
         id,
         name,
         category: typeof item.category === 'string' ? item.category.trim() : '',
         type: typeof item.type === 'string' ? item.type.trim() : '',
-        statePath: typeof item.statePath === 'string' ? item.statePath.trim() : '',
-      })
+      }
+      // 参数型音色没有状态文件：它描述一个具名程序参数取值，三个字段必须留住，
+      // 否则 probe 写进来的音色下一次读配置就没了。
+      if (item.kind === 'parameter') {
+        const parameter = typeof item.parameter === 'string' ? item.parameter.trim() : ''
+        const value = typeof item.value === 'string' ? item.value.trim() : ''
+        if (!parameter || !value) continue
+        timbres.push({ ...timbre, kind: 'parameter', parameter, value })
+        continue
+      }
+      timbres.push({ ...timbre, statePath: typeof item.statePath === 'string' ? item.statePath.trim() : '' })
     }
     out.push({ path, timbres })
   }

@@ -3,14 +3,21 @@
 // Protocol — one JSON line in / one JSON line out over pipes (no network port):
 //   worker -> us  {"type":"ready","sampleRate":48000}
 //   worker -> us  {"type":"result","id":N,"ok":true,"peak":0.79,"seconds":4.0}
+//   worker -> us  {"type":"result","id":N,"ok":true,"programs":[{"parameter":"program","values":[...]}]}
 //   worker -> us  {"type":"result","id":N,"ok":false,"kind":"param|load|render","error":"..."}
 //   us -> worker  {"op":"render","id":N,"plugin":"...","notes":[...],"duration":4.0,"out":"...","preset":"..."}
+//   us -> worker  {"op":"probe","id":N,"plugin":"..."}
 //   us -> worker  {"op":"shutdown"}
 //
-// `preset` is optional: the path of a vendor preset state file. The worker swaps
-// that state into the plugin's own state container before rendering; without it
-// the plugin renders at its default state (a preset used by an earlier render is
-// undone). A preset that cannot be loaded is a `kind:"load"` error, never a crash.
+// `preset` is optional and takes three shapes:
+//   "C:\\...\\warm.state"                                  a vendor preset state file
+//   { kind: "state" | "file", path }                       the same, or a plugin preset file
+//   { kind: "parameter", parameter: "program", value: "PHAROH" }
+//                                                          a named program parameter
+// The worker swaps a state into the plugin's own state container, loads a preset
+// file, or sets the parameter before rendering; without a preset the plugin
+// renders at its default state (a preset used by an earlier render is undone).
+// A preset that cannot be applied is a `kind:"load"` error, never a crash.
 //
 // Hard rules (same as singing-process.js):
 //  - Start on demand, exit after idleSec (60s default) with nothing pending.
@@ -84,6 +91,42 @@ function validateConfig(config) {
   }
 }
 
+/** Normalise a preset request. A state-file path stays a string (the worker's
+ *  original shape); a descriptor object is validated field by field. */
+function validatePreset(raw) {
+  if (typeof raw === 'string') {
+    const path = raw.trim()
+    return path ? path : null
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Vst3ProcessError('preset must be a state-file path or a { kind, ... } object', {
+      code: 'BAD_PRESET', kind: 'param',
+    })
+  }
+  if (raw.kind === 'parameter') {
+    const parameter = typeof raw.parameter === 'string' ? raw.parameter.trim() : ''
+    const value = typeof raw.value === 'string' ? raw.value.trim() : ''
+    if (!parameter || !value) {
+      throw new Vst3ProcessError('a parameter preset needs non-empty parameter and value', {
+        code: 'BAD_PRESET', kind: 'param',
+      })
+    }
+    return { kind: 'parameter', parameter, value }
+  }
+  if (raw.kind === 'state' || raw.kind === 'file') {
+    const path = typeof raw.path === 'string' ? raw.path.trim() : ''
+    if (!path) {
+      throw new Vst3ProcessError(`a ${raw.kind} preset needs a non-empty path`, {
+        code: 'BAD_PRESET', kind: 'param',
+      })
+    }
+    return { kind: raw.kind, path }
+  }
+  throw new Vst3ProcessError(`unknown preset kind: ${JSON.stringify(raw.kind)}`, {
+    code: 'BAD_PRESET', kind: 'param',
+  })
+}
+
 /** Validate and normalise a render task into the sidecar's note shape. */
 function validateTask(task) {
   if (!task || typeof task !== 'object') {
@@ -131,12 +174,7 @@ function validateTask(task) {
   const keyswitches = Array.isArray(task.keyswitches)
     ? task.keyswitches.filter((pitch) => Number.isInteger(pitch) && pitch >= 0 && pitch <= 127)
     : []
-  if (task.preset !== undefined && task.preset !== null && typeof task.preset !== 'string') {
-    throw new Vst3ProcessError('preset must be a path to a preset state file', {
-      code: 'BAD_PRESET', kind: 'param',
-    })
-  }
-  const preset = typeof task.preset === 'string' ? task.preset.trim() : ''
+  const preset = task.preset === undefined || task.preset === null ? null : validatePreset(task.preset)
   return {
     plugin: task.plugin,
     notes,
@@ -216,12 +254,44 @@ class Vst3Process {
     })
   }
 
-  _waitFor(id, timeoutMs) {
+  /** Ask the worker which named program parameters a plugin exposes.
+   *  Returns { programs: [{ parameter, values }] }; an empty list means the
+   *  plugin has no named program parameter, which is not an error. */
+  probe(plugin) {
+    return this._enqueue(async () => {
+      const config = this._config()
+      if (typeof plugin !== 'string' || !plugin.trim()) {
+        throw new Vst3ProcessError('plugin must be a VST3 path', { code: 'BAD_PLUGIN', kind: 'param' })
+      }
+      if (!this.child) await this._start(config)
+      this._cancelIdle()
+
+      const id = ++this.seq
+      try {
+        this.child.stdin.write(Buffer.from(JSON.stringify({ op: 'probe', id, plugin: plugin.trim() }) + '\n', 'utf8'))
+      } catch (err) {
+        this._stopNow().catch(() => {})
+        throw new Vst3ProcessError(`Cannot write to VST3 worker: ${err.message}`, {
+          code: 'WRITE_FAILED', kind: 'render',
+        })
+      }
+
+      let result
+      try {
+        result = await this._waitFor(id, config.renderTimeoutMs, 'probe')
+      } finally {
+        this._armIdle(config.idleMs)
+      }
+      return { programs: Array.isArray(result.programs) ? result.programs : [] }
+    })
+  }
+
+  _waitFor(id, timeoutMs, label = 'render') {
     return new Promise((resolvePromise, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new Vst3ProcessError(
-          `VST3 render timed out after ${Math.round(timeoutMs / 1000)}s (id=${id}).`,
+          `VST3 ${label} timed out after ${Math.round(timeoutMs / 1000)}s (id=${id}).`,
           { code: 'RENDER_TIMEOUT', kind: 'render' },
         ))
         // A hung plugin cannot be trusted to answer the next request.
