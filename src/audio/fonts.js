@@ -16,6 +16,12 @@ export const RECOMMENDED_FONTS = [
     name: 'GeneralUser GS',
     file: 'GeneralUser-GS.sf2',
     url: 'https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2',
+    // 下载入口：官方地址与 url 同源；网盘位先留空，等用户把链接做好再填。
+    links: [
+      { label: '官方下载', url: 'https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2' },
+      { label: '百度网盘', url: '' },
+      { label: '夸克网盘', url: '' },
+    ],
     bytes: 32319396,
     sha256: '9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe',
     license: 'GeneralUser GS License v2.0 (free for private/commercial music and for software use; sample provenance partly unverifiable)',
@@ -31,6 +37,11 @@ export const RECOMMENDED_FONTS = [
     name: 'MuseScore General',
     file: 'MuseScore_General.sf3',
     url: 'https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3',
+    links: [
+      { label: '官方下载', url: 'https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3' },
+      { label: '百度网盘', url: '' },
+      { label: '夸克网盘', url: '' },
+    ],
     bytes: 39900972,
     sha256: '5b85b6c2c61d10b2b91cddd41efcce7b25cd31c8271d511c73afafbef20b6fa3',
     license: 'MIT (FluidR3Mono by Michael Cowgill, FluidR3 by Frank Wen, adaptation by S. Christian Collins; keep the copyright notice)',
@@ -64,6 +75,11 @@ export const RECOMMENDED_FONTS = [
     name: 'Electric Guitar Clean (FSBS)',
     file: 'EGuitarFSBS-clean-bridge-20260807.sf2',
     manual: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-SF2-20260807.7z',
+    links: [
+      { label: '官方下载', url: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-SF2-20260807.7z' },
+      { label: '百度网盘', url: '' },
+      { label: '夸克网盘', url: '' },
+    ],
     bytes: 445922788,
     sha256: 'e66351135ff7c06ca0fee799688e767c917a085988ff29691c02f72c0a4ddabe',
     license: 'CC0 1.0 (FreePats, direct recording of a Fender electric guitar)',

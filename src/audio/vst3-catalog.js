@@ -74,6 +74,12 @@ export function builtInCatalog() {
         name: 'Dexed',
         vendor: 'Digital Suburban',
         plugin: `${VST3_DIR}\\Dexed.vst3`,
+        // 下载入口：官方地址；网盘位先留空，等用户把链接做好再填。
+        links: [
+          { label: '官方下载', url: 'https://asb2m10.github.io/dexed/' },
+          { label: '百度网盘', url: '' },
+          { label: '夸克网盘', url: '' },
+        ],
         format: 'vst3',
         instrument: true,
         range: { low: 21, high: 108 },
@@ -90,6 +96,9 @@ export function builtInCatalog() {
         name: 'Grand Piano (Audiolatry)',
         vendor: 'Audiolatry',
         plugin: `${VST3_DIR}\\Grand Piano Windows VST3\\Grand Piano.vst3`,
+        links: [
+          { label: '官方下载', url: 'https://audiolatry.com/products/grand-piano' },
+        ],
         format: 'vst3',
         instrument: true,
         range: { low: 21, high: 108 },

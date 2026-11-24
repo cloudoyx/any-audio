@@ -835,7 +835,14 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
 
   /** Built-in + scanned VST3 instrument catalog for the settings page. */
   async function vst3ListRoute() {
-    return { ok: true, ...(await mergedCatalog()) }
+    const catalog = await mergedCatalog()
+    // The catalog entry exists whether or not the plugin is on this machine;
+    // `installed` is what lets the page tell "recommended" from "already here".
+    return {
+      ok: true,
+      ...catalog,
+      plugins: catalog.plugins.map((entry) => ({ ...entry, installed: existsSync(entry.plugin) })),
+    }
   }
 
   /**
