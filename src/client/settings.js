@@ -81,6 +81,8 @@ function FontsTab({ state, reload, notify }) {
   const [scan, setScan] = useState(null)
   const [scanPicks, setScanPicks] = useState({})
   const [vst3Preview, setVst3Preview] = useState(null)
+  const [runtime, setRuntime] = useState(null)
+  const [runtimeJob, setRuntimeJob] = useState(null)
   const toggleDetails = (key) => setOpenDetails(current => ({ ...current, [key]: !current[key] }))
 
   // The job lives on the host, not in this component: reopening the settings
@@ -128,6 +130,60 @@ function FontsTab({ state, reload, notify }) {
   }, [])
 
   useEffect(() => { loadVst3() }, [loadVst3])
+
+  // The VST3 render runtime is a separate install from the sound sources: the
+  // sidecar needs a Python that can import pedalboard/numpy/mido, and a machine
+  // that only installed the plugin has none. Status has its own route, and the
+  // install is a host job, so reopening settings must pick up a running one.
+  const loadRuntime = useCallback(async () => {
+    try {
+      setRuntime(await api('/vst3/status'))
+    } catch (error) {
+      setRuntime({ ok: false, error: error.message })
+    }
+  }, [])
+
+  useEffect(() => { loadRuntime() }, [loadRuntime])
+
+  useEffect(() => {
+    let cancelled = false
+    api('/jobs/active?kind=vst3-install')
+      .then((data) => { if (!cancelled && data.job) setRuntimeJob(data.job) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (!runtimeJob || runtimeJob.status !== 'running') return undefined
+    const timer = setInterval(async () => {
+      try {
+        const data = await api(`/jobs?id=${encodeURIComponent(runtimeJob.id)}`)
+        setRuntimeJob(data.job)
+        if (data.job.status === 'done') {
+          notify(t('VST3 运行时已安装'))
+          await loadRuntime()
+        }
+        if (data.job.status === 'error') notify(jobFailure(data.job), 'error')
+      } catch (error) {
+        notify(error.message, 'error')
+        setRuntimeJob(null)
+      }
+    }, 700)
+    return () => clearInterval(timer)
+  }, [runtimeJob, loadRuntime, notify])
+
+  async function installRuntime() {
+    setBusy('vst3-install')
+    try {
+      const data = await api('/vst3/install', { method: 'POST', body: {} })
+      setRuntimeJob(data.job)
+      notify(data.reused ? t('已有一个下载任务在进行') : t('安装已开始，关掉设置页后仍会继续'))
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
 
   async function install(body) {
     setBusy(`install:${body.id || body.fromPath || 'custom'}`)
@@ -320,6 +376,13 @@ function FontsTab({ state, reload, notify }) {
   const scanPlugins = scan?.plugins ?? []
   const pickedCount = scanPlugins.filter(item => scanPicks[item.path]
     && !vst3Plugins.some(plugin => plugin.plugin.toLowerCase() === item.path.toLowerCase())).length
+  const runtimeInstalled = Boolean(runtime?.runtime?.installed)
+  const runtimeReady = Boolean(runtime?.ready)
+  const runtimeInstalling = Boolean(runtimeJob && runtimeJob.status === 'running')
+  const runtimePercent = runtimeJob?.status === 'done'
+    ? 100
+    : runtimeJob && runtimeJob.total ? (runtimeJob.received / runtimeJob.total) * 100 : 0
+  const runtimeDeps = runtime?.deps ?? {}
 
   function renderFontRow(row) {
     const recommended = fonts.available.find(font => font.id === row.recommendedId)
@@ -450,6 +513,57 @@ function FontsTab({ state, reload, notify }) {
       fonts.rows.length === 0 && vst3Plugins.length === 0
         ? h('p', { style: S.desc }, t('还没有安装任何音源。从上面的推荐里挑一套，或在下面按文件安装。'))
         : h('div', { style: S.list }, [...fonts.rows.map(renderFontRow), ...vst3Plugins.map(renderVst3Row)]),
+    ),
+    h(Card, { title: t('VST3 运行时'), desc: t('VST3 音源渲染需要 Python 运行时（pedalboard/numpy/mido），点安装自动下载配置。') },
+      runtime === null
+        ? h('p', { style: S.desc }, t('正在检测…'))
+        : runtime.ok === false
+          ? h(Notice, { tone: 'error' }, t('状态检测失败：{0}', runtime.error))
+          : h(Fragment, null,
+            h('div', { style: S.row },
+              h('span', { style: S.label }, t('运行时')),
+              h('span', {
+                style: runtimeInstalled && !runtimeInstalling
+                  ? { ...S.chip, borderColor: C.good, color: C.good }
+                  : S.chip,
+              }, runtimeInstalling ? t('安装中') : runtimeInstalled ? t('已安装') : t('未安装')),
+              runtime.runtime?.version ? h('span', { style: S.mono }, t('版本：{0}', runtime.runtime.version)) : null,
+              h('span', { style: { flex: 1 } }),
+              runtimeReady ? null : h(Btn, {
+                kind: 'primary',
+                disabled: runtimeInstalling || busy === 'vst3-install',
+                onClick: installRuntime,
+              }, t('安装运行时')),
+            ),
+            h('div', { style: S.row },
+              h('span', { style: S.label }, t('依赖')),
+              ...['pedalboard', 'numpy', 'mido'].map(name => h('span', {
+                key: name,
+                style: {
+                  ...S.chip,
+                  borderColor: runtimeDeps[name] ? C.good : C.border,
+                  color: runtimeDeps[name] ? C.good : C.muted,
+                },
+              }, name)),
+            ),
+            runtimeInstalled && !runtimeReady && !runtimeInstalling
+              ? h('div', { style: S.desc }, t('运行时已装好，但依赖不全；点「安装运行时」补齐。'))
+              : null,
+            runtimeJob && runtimeJob.status !== 'error'
+              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                h('div', { style: { ...S.row, justifyContent: 'space-between' } },
+                  h('span', { style: S.label }, runtimeJob.status === 'running'
+                    ? `${t('正在安装')}${runtimeJob.total ? ` ${Math.round(runtimePercent)}%` : ''}${runtimeJob.message ? ` · ${runtimeJob.message}` : ''}`
+                    : t('完成：{0}', t('已安装'))),
+                  runtimeJob.total ? h('span', { style: S.mono }, `${bytes(runtimeJob.received)} / ${bytes(runtimeJob.total)}`) : null,
+                ),
+                h('div', { style: S.bar }, h('div', { style: S.barFill(runtimePercent) })),
+              )
+              : null,
+            runtimeJob?.status === 'error'
+              ? h(Notice, { tone: 'error' }, t('安装失败：{0}', jobFailure(runtimeJob)))
+              : null,
+          ),
     ),
     h(Card, { title: t('安装音源'), desc: t('SF2 填一个 .sf2 / .sf3 / .dls 文件的路径；VST3 填插件路径，或扫描目录后逐条添加。') },
       h('div', { style: S.grid2 },
