@@ -403,7 +403,9 @@ export function Guide() {
 
   if (step === 1) {
     return h(Modal, { title: t('装音源'), step: 2, onClose: finish },
-      h('p', { style: S.desc }, t('乐器声音来自这里。装一套 GeneralUser GS（32 MB）——通用音色，配乐够用。')),
+      h('p', { style: S.desc }, t('乐器声音来自音源。先装一套 GeneralUser GS（32 MB）——通用音色，配乐够用。')),
+      h('p', { style: S.desc }, t('插件支持两种音源：SF2 体积小、安装方便；VST3 音色真实、可调性好，但需要先装运行时。')),
+      h('p', { style: S.desc }, t('以后想换音源或加装 VST3，到「设置 → AnyAudio → 音源」里操作。')),
       fontInstalled ? h(Notice, null, t('已安装 {0} 个音源', fonts.rows.length)) : null,
       job ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
         h('div', { style: { ...S.row, justifyContent: 'space-between' } },
