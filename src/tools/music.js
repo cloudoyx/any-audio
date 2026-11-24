@@ -20,11 +20,16 @@ function describeTracks(tracks) {
   return tracks
     .map((track) => {
       const kind = track.sourceKind === 'vst3' ? ' (vst3)' : ''
-      const preset = track.preset ? `, preset: ${track.preset}` : ''
+      const preset = track.preset && track.sourceKind !== 'vst3' ? `, preset: ${track.preset}` : ''
       const fallback = track.fallback ? ', fallback' : ''
       const source = track.source ? ` [source: ${track.source}${kind}${preset}${fallback}]` : ''
       const level = Number.isFinite(track.rmsDb) ? `, ${track.rmsDb.toFixed(1)} dBFS RMS` : ''
-      return `- ${track.name}: ${track.instrument}${track.drums ? ' (drum kit)' : ''}${source}, ${track.notes} notes, ${track.endSec.toFixed(2)}s${level}`
+      // A VST3 track's instrument field is not what plays — the plugin's preset
+      // is. Printing "piano" for a guitar plugin reads as a mistake.
+      const label = track.sourceKind === 'vst3'
+        ? (track.preset ? `preset:${track.preset}` : 'default preset')
+        : `${track.instrument}${track.drums ? ' (drum kit)' : ''}`
+      return `- ${track.name}: ${label}${source}, ${track.notes} notes, ${track.endSec.toFixed(2)}s${level}`
     })
     .join('\n')
 }
@@ -323,7 +328,7 @@ export const musicToolDefinition = finalizeTool({
     'Drum kits always come from the default SoundFont (the first loaded bank) — pass another kit as "font" if you need it. ' +
     'Score format (seconds on the video timeline): {title, tracks:[{name, instrument, source, preset, gainDb, pan, reverb, drums, humanize:{timingMs,velocity}, notes:[[startSec, durSec, pitch|pitches, velocity, art?]]}], automation:[{track, controller, points:[[sec,value]]}]}. ' +
     'The optional fifth note element "art" is a VST3 articulation id — "sus" (sustain), "pm" (palm mute), "ls" (legato slide), "hp" (hammer-on/pull-off); the sidecar sends the matching keyswitch just before the note. SoundFont tracks ignore it. ' +
-    'Pitch accepts MIDI numbers or names (D3, F#4, Bb2); instruments accept GM names (piano, cello, strings, koto, shakuhachi, erhu, guzheng) or GM program numbers. ' +
+    'Pitch accepts MIDI numbers or names (D3, F#4, Bb2); instruments accept GM names (piano, cello, strings, koto, shakuhachi, erhu, guzheng), GM program numbers, or an object {program, bank, name} for a patch outside bank 0 (anyaudio_sources action "presets" prints the exact field for every patch). ' +
     'Each track\'s gainDb is the level its stem is rendered at. That is a fact about the file, measured and recorded when the stem lands — it is not a mixing knob. To rebalance later, change the clip gain; do not render again. Positive values lift a track above the loudest one (the whole score is shifted instead of clipping). Per-track levels come back on every call (this tool measures them as part of rendering, one synthesis per track), so there is nothing to ask for; a part sitting more than 12 dB under the loudest one gets a warning. ' +
     'Read the anyaudio-scoring skill for arrangement technique and mixing workflow.',
   parameters: {

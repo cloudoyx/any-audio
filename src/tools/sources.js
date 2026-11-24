@@ -46,6 +46,16 @@ async function legacyProjectFonts(workspaceRoot) {
   return found
 }
 
+/** The exact score field for one SF2 preset: bank 0 uses the alias/program, other banks need the object form. */
+function writeForPreset(preset) {
+  if (preset.drums) return 'drums:true（鼓组，音高按鼓件名）'
+  if (preset.bank === 0) {
+    const alias = PROGRAM_ALIASES.get(preset.program)
+    return alias ? `instrument:"${alias}"` : `instrument:${preset.program}`
+  }
+  return `instrument:{program:${preset.program}, bank:${preset.bank}, name:"${preset.name}"}`
+}
+
 async function resolveBankArg(value, workspaceRoot) {
   if (typeof value !== 'string' || !value.trim()) return resolveFont({ path: value, workspaceRoot })
   const wanted = value.trim()
@@ -112,9 +122,13 @@ function formatTimbres(entry, kind) {
   }
   const shown = entry.timbres.map((timbre) => (kind === 'sf2' ? `${timbre.name}→${timbre.write}` : timbre.name))
   const count = entry.timbreCount ?? entry.timbres.length
-  const head = entry.timbresTruncated
-    ? `共 ${count} 个，列前 ${entry.timbres.length} 个${kind === 'sf2' ? '；用 presets 查全部' : ''}`
-    : `${count} 个`
+  // SF2 lists bank 0 (the standard GM set); other banks hold extra patches and
+  // are reachable through "presets", which prints the exact field for each.
+  const head = kind === 'sf2'
+    ? `bank 0 共 ${count} 个${entry.timbresTruncated ? `，列前 ${entry.timbres.length} 个` : ''}；其他 bank 用 presets 查`
+    : entry.timbresTruncated
+      ? `共 ${count} 个，列前 ${entry.timbres.length} 个`
+      : `${count} 个`
   return `${head} — ${shown.join(' · ')}`
 }
 
@@ -132,7 +146,7 @@ function formatWriteHint(entry, kind) {
 export const sourcesToolDefinition = finalizeTool({
   name: 'anyaudio_sources',
   description:
-    'Inspect and manage the sound sources used by anyaudio_music and anyaudio_sfx. Actions: "list" (every connected source — SoundFont banks and VST3 instruments — with its 1-10 instrument-family scores, measured range, and the timbres it offers, each with the exact score field to write), "install" (download a recommended bank or copy a .sf2/.sf3/.dls from disk into the shared library), "use" (make an installed bank the default source that anyaudio_music uses for tracks without a "source"), "instruments" (GM instrument names plus the Chinese-instrument aliases this plugin understands), "presets" (list the actual patches inside a bank, optionally filtered by query), "kinds" (what source types exist, including planned ones such as sample packs and narration voices). ' +
+    'Inspect and manage the sound sources used by anyaudio_music and anyaudio_sfx. Actions: "list" (every connected source — SoundFont banks and VST3 instruments — with its 1-10 instrument-family scores, measured range, and the timbres it offers, each with the exact score field to write), "install" (download a recommended bank or copy a .sf2/.sf3/.dls from disk into the shared library), "use" (choose the bank drum kits come from), "instruments" (GM alias reference — the names this plugin understands; not the list of available timbres, use "list" for that), "presets" (list one source\'s timbres — a SoundFont bank or a VST3 instrument — each with the exact score field to write), "kinds" (what source types exist, including planned ones such as sample packs and narration voices). ' +
     'The font library is shared by every project and agent session on this machine, so a bank installed once is available everywhere. ' +
     'Run "install" once if anyaudio_music reports that no SoundFont is installed. Custom banks are supported: pass "fromPath" to a local file or "url" to a direct download. Each track in a score names its source and timbre explicitly — the list action gives the exact field to write — and different tracks may use different sources. Drum kits always come from the default bank.',
   parameters: {
@@ -143,7 +157,8 @@ export const sourcesToolDefinition = finalizeTool({
       url: { type: 'string', description: 'Direct URL of a custom SoundFont to install.' },
       fromPath: { type: 'string', description: 'Local SoundFont path to install (useful when downloads are blocked).' },
       path: { type: 'string', description: 'Bank path to inspect with "presets" or to make the default with "use".' },
-      font: { type: 'string', description: 'Same as path: an installed id (e.g. "musescore-general"), file name or .sf2 path.' },
+      source: { type: 'string', description: 'The source id from action "list" — a SoundFont bank or a VST3 instrument. Lists that source\'s timbres, each with the exact score field to write.' },
+      font: { type: 'string', description: 'Alias of "source" (kept for older calls): an installed id (e.g. "musescore-general"), file name or .sf2 path.' },
       query: { type: 'string', description: 'Filter preset names, e.g. "piano", "koto", "shakuhachi".' },
       limit: { type: 'number', description: 'Max presets to list, default 60.' },
     },
@@ -180,7 +195,10 @@ export const sourcesToolDefinition = finalizeTool({
         ].join('\n')
       }
       if (value.action === 'presets') {
-        return [`Presets in ${value.font} (${value.presets.length} shown):`, ...value.presets.map((preset) => `- ${preset.name} — program ${preset.program}, bank ${preset.bank}${preset.drums ? ' (drum kit)' : ''}`)].join('\n')
+        if (value.kind === 'vst3') {
+          return [`Timbres in ${value.source} (${value.timbres.length}):`, ...value.timbres.map((timbre) => `- ${timbre.name}${timbre.category ? ` (${timbre.category})` : ''} → ${timbre.write}`)].join('\n')
+        }
+        return [`Presets in ${value.font} (${value.presets.length} shown):`, ...value.presets.map((preset) => `- ${preset.name} — program ${preset.program}, bank ${preset.bank}${preset.drums ? ' (drum kit)' : ''} → ${preset.write}`)].join('\n')
       }
       if (value.action === 'kinds') {
         return value.kinds.map((kind) => `- ${kind.id} (${kind.status}) — ${kind.label}: ${kind.description}`).join('\n')
@@ -255,9 +273,40 @@ export const sourcesToolDefinition = finalizeTool({
       return { ok: true, action, kinds: listSourceKinds() }
     }
     if (action === 'presets') {
-      const fontPath = await resolveBankArg(args.path ?? args.font, workspaceRoot)
+      const wanted = String(args.source ?? args.path ?? args.font ?? '').trim()
+      const catalog = await mergedCatalog()
+      // A VST3 source id names a plugin; its timbres come from the catalog, not
+      // from a SoundFont file. Checking it first keeps the two source kinds on
+      // one action instead of making the caller guess which one to call.
+      const vst3 = catalog.plugins.find((entry) => entry.id === wanted || entry.name === wanted)
+      if (vst3) {
+        const timbres = vst3.timbres?.length ? vst3.timbres : await scanPluginTimbres(vst3.plugin)
+        return {
+          ok: true,
+          action,
+          source: vst3.id,
+          kind: 'vst3',
+          timbres: timbres.map((timbre) => ({
+            name: timbre.name,
+            category: timbre.category,
+            type: timbre.type,
+            write: `source:"${vst3.id}", preset:"${timbre.name}"`,
+          })),
+        }
+      }
+      let fontPath
+      try {
+        fontPath = await resolveBankArg(wanted, workspaceRoot)
+      } catch {
+        const available = [
+          ...(await listFonts()).map((font) => `[SF2] ${findRecommendedByFile(font.name)?.id ?? font.name}`),
+          ...catalog.plugins.map((entry) => `[VST3] ${entry.id}`),
+        ]
+        throw new Error(`unknown source "${wanted}"; available sources: ${available.join(', ')}`)
+      }
       const bank = await loadSoundBank(fontPath)
       const presets = listPresets(bank, { query: args.query, limit: Math.min(200, Math.max(1, Math.round(Number(args.limit) || 60))) })
+        .map((preset) => ({ ...preset, write: writeForPreset(preset) }))
       return { ok: true, action, font: relativeToWorkspace(workspaceRoot, fontPath), presets }
     }
     if (action === 'use') {
@@ -272,7 +321,7 @@ export const sourcesToolDefinition = finalizeTool({
         action,
         font: fontPath,
         default: config.music.font,
-        message: `Default sound source set to ${fontPath}; anyaudio_music now uses it for tracks without a "source" (persisted as "${config.music.font}" in ${configPath}).`,
+        message: `Default sound source set to ${fontPath}; it is the bank drum kits come from (persisted as "${config.music.font}" in ${configPath}).`,
       }
     }
     const fonts = await listFonts()
