@@ -232,6 +232,7 @@ export const EN = {
   '音域：实测 MIDI {0}–{1}': 'Range: measured MIDI {0}–{1}',
   '音域：未实测': 'Range: not measured',
   '演奏法：{0} 个': 'Articulations: {0}',
+  '音色：{0} 个 — {1}': 'Timbres: {0} — {1}',
   '效果音：{0} 个': 'Effects: {0}',
   '只能显式指定，不参与自动选源。': 'Can only be named explicitly, never picked by auto.',
   '单文件': 'Single file',
