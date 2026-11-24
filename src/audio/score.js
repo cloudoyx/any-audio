@@ -376,6 +376,11 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
     usedChannels.add(channel)
 
     const instrument = resolveInstrument(track.instrument ?? track.program ?? (drums ? 'drums' : 'piano'))
+    // Whether the score named a timbre at all: a track that names none falls
+    // back to piano, and the reply should say so instead of pretending the
+    // fallback was a choice.
+    const instrumentExplicit = (track.instrument !== undefined && track.instrument !== null && track.instrument !== '')
+      || Number.isFinite(track.program)
     const source = typeof track.source === 'string' && track.source.trim() ? track.source.trim() : undefined
     // `preset` is a VST3 timbre: it names one of the presets the source offers.
     // A SoundFont track picks its timbre with `instrument` instead, so a preset
@@ -421,7 +426,7 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
 
     const end = notes.reduce((max, note) => Math.max(max, note.start + note.duration), 0)
     return {
-      name, channel, program, bank: instrument.bank, instrument: instrument.label, source,
+      name, channel, program, bank: instrument.bank, instrument: instrument.label, instrumentExplicit, source,
       preset, vst3, drums, gainDb, pan, reverb, chorus, notes, events, endSec: end,
     }
   })

@@ -280,6 +280,29 @@ export async function planFonts(compiled, { workspaceRoot, fontPath } = {}) {
     }
   }
 
+  // A bank number the font does not have renders the wrong patch (or silence).
+  // Naming it keeps a typo from passing as a deliberate choice.
+  const presetKeys = new Map()
+  for (const record of banks) {
+    const keys = new Set()
+    for (const preset of melodicPresets(record.bank)) keys.add(`${preset.bankMSB ?? 0}:${preset.program}`)
+    presetKeys.set(record.id, keys)
+  }
+  for (const track of compiled.tracks) {
+    if (track.drums) continue
+    const assignment = layout.get(track.name)
+    if (!assignment) continue
+    const keys = presetKeys.get(assignment.fontId)
+    if (!keys) continue
+    const bank = Number.isFinite(track.bank) ? track.bank : 0
+    if (!keys.has(`${bank}:${assignment.program}`)) {
+      warnings.push(
+        `track "${track.name}": source "${assignment.fontId}" has no program ${assignment.program} in bank ${bank} — `
+        + 'the render will not use the patch you named; check the bank number with anyaudio_sources action "presets"',
+      )
+    }
+  }
+
   return {
     banks,
     layout,

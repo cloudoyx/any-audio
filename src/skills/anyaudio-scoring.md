@@ -59,7 +59,7 @@
 - 管弦：`strings`/`slow-strings`、`cello`、`violin`、`viola`、`harp`、`timpani`、`horn`、`trumpet`、`oboe`、`clarinet`、`flute`、`pizzicato`。
 - 氛围：`choir`、`warm-pad`、`choir-pad`、`soundtrack`、`crystal`、`atmosphere`。
 - 上面这些是 GM 别名，SF2 音色用它写 `instrument`；某个音源实际有哪些音色、叫什么，以 `anyaudio_sources` 的 list 为准，不要凭这份名单假设某条音色一定存在。
-- 写谱前先调 `anyaudio_sources`（默认的 `list` 动作）拿清单：**全部已接入音源**（SF2 与 VST3 混排，带评分、实测音域与音色列表），每条音色都写明怎么写进谱里。要看某音源的全部音色再调 `presets`；`instruments` 只是 GM 别名表，不是可用音色清单。
+- 写谱前先调 `anyaudio_sources`（默认的 `list` 动作）拿清单：**全部已接入音源**（SF2 与 VST3 混排，带评分、实测音域与音色列表），每条音色都写明怎么写进谱里。要看某音源的全部音色再调 `presets`（`source` 传音源 id，SF2 与 VST3 都支持；`query` 可按名字过滤，例如 `query:"12-String"`）；`instruments` 只是 GM 别名表，不是可用音色清单。
 - 需要新音源时先告诉用户去设置页装，或征得用户明确同意后再装——**不得自行下载音源**（下载是大流量动作，必须用户同意）。
 - 换音源或音色要改谱里的 `source`/`preset` 再重新生成；只调平衡不要重新生成（见混音一节）。机器上接了哪些音源，以 `anyaudio_sources` 的 list 为准。
 - 没有 DSH 也能渲染：`node scripts/anyaudio-cli.mjs render <score.json> <out.wav>`（可加 `--font`、`--duration`、`--peak`、`--rate`），等价于只调 `anyaudio_music` 的离线路径。适合先离线把谱子调好再进视频流程。

@@ -410,7 +410,11 @@ test('选源：VST3 无 preset 用默认；preset 按名字/ id 解析到状态�
   const plain = await selectSources(noPreset, { catalog: fakeCatalog, fonts: fakeFonts })
   assert.equal(plain.vst3Tracks.length, 1, '显式 VST3 source 应交给侧车')
   assert.equal(plain.vst3Tracks[0].presetPath, undefined, '不写 preset 时用插件默认音色')
-  assert.equal(plain.warnings.length, 0, `不写 preset 不该有警告：${JSON.stringify(plain.warnings)}`)
+  // A VST3 track that names an instrument but no preset is the "instrument
+  // selects the timbre" mistake: the plugin preset is the timbre, so the reply
+  // says the instrument was ignored instead of letting it pass silently.
+  assert.equal(plain.warnings.length, 1, `应有一条 instrument 被忽略的警告：${JSON.stringify(plain.warnings)}`)
+  assert.match(plain.warnings[0], /does not apply to a VST3 source/)
 
   const byName = compileScore({
     tracks: [{ name: 'lead', instrument: 'piano', source: 'fake-synth', preset: 'Warm Pad', notes: [[0, 0.5, 60, 100]] }],

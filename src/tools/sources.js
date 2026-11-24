@@ -125,7 +125,7 @@ function formatTimbres(entry, kind) {
   // SF2 lists bank 0 (the standard GM set); other banks hold extra patches and
   // are reachable through "presets", which prints the exact field for each.
   const head = kind === 'sf2'
-    ? `bank 0 共 ${count} 个${entry.timbresTruncated ? `，列前 ${entry.timbres.length} 个` : ''}；其他 bank 用 presets 查`
+    ? `仅列前 ${entry.timbres.length} 个（bank 0 共 ${count} 个），其余用 presets 查`
     : entry.timbresTruncated
       ? `共 ${count} 个，列前 ${entry.timbres.length} 个`
       : `${count} 个`
@@ -208,7 +208,7 @@ export const sourcesToolDefinition = finalizeTool({
           '已接入的全部音源（SF2 与 VST3 混排）。每条轨都要写 source；音色按每条给出的写法写。',
         ]
         for (const font of value.fonts) {
-          const tag = font.default ? ' [fallback]' : font.recommended ? ' [recommended]' : ''
+          const tag = font.default ? ' [fallback：默认/兜底音源]' : font.recommended ? ' [recommended]' : ''
           const vendor = font.vendor ? `（${font.vendor}）` : ''
           lines.push(`- [SF2] ${font.id} — ${font.name}${vendor} (${formatBytes(font.bytes)})${tag}`)
           lines.push(`  评分: ${formatScores(font.scores)}`)
@@ -223,7 +223,7 @@ export const sourcesToolDefinition = finalizeTool({
           lines.push(`  写法: ${formatWriteHint(entry, 'vst3')}`)
           lines.push(`  音色: ${formatTimbres(entry, 'vst3')}`)
         }
-        lines.push(`Families: ${Object.keys(CATEGORY_LABELS).join(', ')}`)
+        lines.push(`Families（评分用的乐器族名，写谱不用管）: ${Object.keys(CATEGORY_LABELS).join(', ')}`)
         // Two different things answer to "default": the bank the person chose
         // with action "use" (music.font), and the bank used when they chose
         // nothing. Calling both "default" is what made a person believe they
@@ -239,7 +239,7 @@ export const sourcesToolDefinition = finalizeTool({
           lines.push('From an older version (project folder, not part of the shared library — re-install with install + fromPath to use them):')
           for (const font of value.legacy) lines.push(`- ${font.path} (${formatBytes(font.bytes)})`)
         }
-        lines.push(`Source kinds: ${value.kinds.map((kind) => `${kind.id}:${kind.status}`).join(', ')}`)
+        lines.push(`Source kinds（音源类型状态；planned 表示尚未支持）: ${value.kinds.map((kind) => `${kind.id}:${kind.status}`).join(', ')}`)
         return lines.join('\n')
       }
       return value.message ?? 'done'

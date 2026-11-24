@@ -28,7 +28,7 @@ function describeTracks(tracks) {
       // is. Printing "piano" for a guitar plugin reads as a mistake.
       const label = track.sourceKind === 'vst3'
         ? (track.preset ? `preset:${track.preset}` : 'default preset')
-        : `${track.instrument}${track.drums ? ' (drum kit)' : ''}`
+        : `${track.instrument}${track.drums ? ' (drum kit)' : ''}${Number.isFinite(track.bank) && track.bank !== 0 ? ` (program ${track.program}, bank ${track.bank})` : ''}`
       return `- ${track.name}: ${label}${source}, ${track.notes} notes, ${track.endSec.toFixed(2)}s${level}`
     })
     .join('\n')
@@ -178,6 +178,15 @@ export async function selectSources(compiled, { catalog = null, fonts = null, wo
         continue
       }
       track.vst3 = explicit
+      // A VST3 track's timbre is the plugin preset; an instrument name there is
+      // ignored, and silently ignoring it would let the caller believe its
+      // choice took effect.
+      if (track.instrumentExplicit) {
+        warnings.push(
+          `track "${track.name}": instrument "${track.instrument}" does not apply to a VST3 source — `
+          + 'the plugin preset is the timbre; set preset instead',
+        )
+      }
       if (track.preset) {
         const timbres = await timbresOf(explicit)
         const match = timbres.find((timbre) => timbre.name === track.preset)
@@ -208,6 +217,11 @@ export async function selectSources(compiled, { catalog = null, fonts = null, wo
         `track "${track.name}": preset "${track.preset}" only applies to a VST3 source; `
         + `"${source}" is a SoundFont, so it was ignored — use instrument for its timbre`,
       )
+    }
+    // A track that names no timbre renders piano; saying so keeps a forgotten
+    // instrument from looking like a deliberate choice.
+    if (!track.instrumentExplicit && !track.drums) {
+      warnings.push(`track "${track.name}": no instrument named — rendered with the default piano`)
     }
   }
 
@@ -596,6 +610,10 @@ export const musicToolDefinition = finalizeTool({
         name: track.name,
         instrument: track.instrument,
         program: vst3 ? null : assignment?.program ?? track.program,
+        // The bank the render actually used: an object-form instrument names a
+        // patch outside bank 0, and the reply has to show which one was loaded
+        // rather than echoing the name the score wrote.
+        bank: vst3 ? null : assignment?.bank ?? track.bank ?? 0,
         source: vst3 ? vst3.id : assignment?.source,
         sourceKind: vst3 ? 'vst3' : 'sf2',
         // The timbre the score named, echoed back so the reply says which one

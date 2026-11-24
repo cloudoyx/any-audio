@@ -99,7 +99,10 @@ test('source 必填：不写 source 报错并附可用清单，写了 VST3 id �
   assert.equal(selection.vst3Tracks.length, 1, '显式 VST3 source 应交给侧车')
   assert.equal(selection.vst3Tracks[0].vst3.id, 'fake-bass')
   assert.equal(selection.sf2Compiled.tracks.length, 0, '选中 VST3 的轨不能同时留在 SF2 计划里')
-  assert.equal(selection.warnings.length, 0, `显式 source 不该产生警告，实际：${JSON.stringify(selection.warnings)}`)
+  // A VST3 track's timbre is the plugin preset; an instrument name there is
+  // ignored, and the reply says so instead of letting it pass silently.
+  assert.equal(selection.warnings.length, 1, `应有一条 instrument 被忽略的警告，实际：${JSON.stringify(selection.warnings)}`)
+  assert.match(selection.warnings[0], /does not apply to a VST3 source/)
 })
 
 test('编译期音域校验：VST3 轨超实测音域报错并点名音轨', async () => {
