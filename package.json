@@ -6,7 +6,9 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./client": "./lib/client.js",
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -49,7 +51,8 @@
     "url": "https://github.com/cloudoyx/any-audio/issues"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": "^0.2.2-rc.3"
   },
   "scripts": {
     "build": "node scripts/build-client.mjs",

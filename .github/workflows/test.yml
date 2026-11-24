@@ -1,0 +1,25 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      # The engine tests need a general-purpose bank; the VST3 tests skip
+      # themselves when the Python runtime is absent, which is the case here.
+      - run: node scripts/fetch-font.mjs --id generaluser
+      - run: npm test
+      - run: npm run test:client
+      - run: npm run test:settings
+      - run: npm run test:ui
+      - run: npm run test:vst3
