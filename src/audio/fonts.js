@@ -83,7 +83,11 @@ export function findRecommended(id) {
 
 export function findRecommendedByFile(fileName) {
   const base = basename(String(fileName ?? '')).toLowerCase()
-  return RECOMMENDED_FONTS.find((font) => font.file.toLowerCase() === base) ?? null
+  // The 7z archives name their payload with spaces where the release page uses
+  // hyphens ("EGuitarFSBS-clean bridge 20260807.sf2"), so a separator-only
+  // difference must still count as the same bank.
+  const normalize = (name) => name.replace(/[\s_-]+/g, '-')
+  return RECOMMENDED_FONTS.find((font) => normalize(font.file.toLowerCase()) === normalize(base)) ?? null
 }
 
 /**
