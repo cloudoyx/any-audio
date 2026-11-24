@@ -19,8 +19,8 @@ export const RECOMMENDED_FONTS = [
     // 下载入口：官方地址与 url 同源；网盘位先留空，等用户把链接做好再填。
     links: [
       { label: '官方下载', url: 'https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2' },
-      { label: '百度网盘', url: '' },
-      { label: '夸克网盘', url: '' },
+      { label: '百度网盘', url: 'https://pan.baidu.com/s/154U8ED1GIt5bgarkbzrkIg?pwd=6666' },
+      { label: '夸克网盘', url: 'https://pan.quark.cn/s/a92b52c165e3' },
     ],
     bytes: 32319396,
     sha256: '9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe',
@@ -39,8 +39,8 @@ export const RECOMMENDED_FONTS = [
     url: 'https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3',
     links: [
       { label: '官方下载', url: 'https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3' },
-      { label: '百度网盘', url: '' },
-      { label: '夸克网盘', url: '' },
+      { label: '百度网盘', url: 'https://pan.baidu.com/s/1eMtwrPzCCRuwreYsCL1I9A?pwd=6666' },
+      { label: '夸克网盘', url: 'https://pan.quark.cn/s/5006ee85f96e' },
     ],
     bytes: 39900972,
     sha256: '5b85b6c2c61d10b2b91cddd41efcce7b25cd31c8271d511c73afafbef20b6fa3',
@@ -77,8 +77,8 @@ export const RECOMMENDED_FONTS = [
     manual: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-SF2-20260807.7z',
     links: [
       { label: '官方下载', url: 'https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-SF2-20260807.7z' },
-      { label: '百度网盘', url: '' },
-      { label: '夸克网盘', url: '' },
+      { label: '百度网盘', url: 'https://pan.baidu.com/s/1FQXIjMz0laDWa4Wn4WWfYw?pwd=6666' },
+      { label: '夸克网盘', url: 'https://pan.quark.cn/s/aace8c9a9007' },
     ],
     bytes: 445922788,
     sha256: 'e66351135ff7c06ca0fee799688e767c917a085988ff29691c02f72c0a4ddabe',

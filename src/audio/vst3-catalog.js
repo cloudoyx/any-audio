@@ -77,8 +77,8 @@ export function builtInCatalog() {
         // 下载入口：官方地址；网盘位先留空，等用户把链接做好再填。
         links: [
           { label: '官方下载', url: 'https://asb2m10.github.io/dexed/' },
-          { label: '百度网盘', url: '' },
-          { label: '夸克网盘', url: '' },
+          { label: '百度网盘', url: 'https://pan.baidu.com/s/1Iv4VC1aI9ylYW7k7ly7-Uw?pwd=6666' },
+          { label: '夸克网盘', url: 'https://pan.quark.cn/s/dada53d8cb9c' },
         ],
         format: 'vst3',
         instrument: true,

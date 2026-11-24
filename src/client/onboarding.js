@@ -384,6 +384,8 @@ export function Guide() {
   }
 
   const fontInstalled = Boolean(fonts?.rows?.length)
+  // 网盘入口：后端把 links 放在推荐数据里；url 为空的位（网盘链接还没做好）不渲染。
+  const fontLinks = (fonts?.available?.find(font => font.id === 'generaluser')?.links ?? []).filter(link => link.url)
   const packInstalled = Boolean(packs?.some((pack) => pack.id === BASE_PACK.id))
   const percent = job && job.total ? Math.round((job.received / job.total) * 100) : 0
   // The note belongs to the step that produced it: a download message from the
@@ -415,7 +417,11 @@ export function Guide() {
       ) : null,
       note ? h(Notice, null, note) : null,
       h(Actions, null,
-        fontInstalled || (job && job.status !== 'error') ? null : h(Btn, { kind: 'primary', disabled: busy === 'font', onClick: installFont }, t('下载安装')),
+        fontInstalled || (job && job.status !== 'error') ? null : h(Btn, { kind: 'primary', disabled: busy === 'font', onClick: installFont }, t('官方下载安装')),
+        ...fontLinks.map(link => h(Btn, {
+          key: link.label,
+          onClick: () => window.open(link.url, '_blank', 'noopener,noreferrer'),
+        }, t(link.label))),
         h(Btn, { onClick: () => goTo(2) }, fontInstalled || job ? t('下一步') : t('跳过')),
       ),
     )

@@ -298,6 +298,7 @@ async function fontState(workspaceRoot) {
       archiveBytes: preset.archiveBytes ?? null,
       manual: preset.manual ?? null,
       url: preset.url ?? null,
+      links: preset.links ?? [],
       license: preset.license,
       note: preset.note,
       tagline: preset.tagline ?? '',

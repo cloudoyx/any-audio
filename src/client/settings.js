@@ -57,6 +57,27 @@ function suggestionBadge(recognized) {
 }
 
 /**
+ * 下载入口按钮：官方地址 + 网盘。url 为空的位（网盘链接还没做好）不渲染，
+ * 免得点开一个空白页；label 走 t()，两种界面语言下都是同一个入口。
+ */
+function downloadLinks(links) {
+  return (links ?? []).filter(link => link.url).map(link => h(Btn, {
+    key: link.label,
+    onClick: () => window.open(link.url, '_blank', 'noopener,noreferrer'),
+  }, t(link.label)))
+}
+
+/**
+ * 一个 SF2 的下载入口。后端把 links 放在推荐数据里；还没有这个字段时退回
+ * url / manual，官方入口始终在。
+ */
+function fontLinks(font) {
+  if (Array.isArray(font.links) && font.links.length) return font.links
+  const url = font.url || font.manual
+  return url ? [{ label: '官方下载', url }] : []
+}
+
+/**
  * What a person needs to know about a built-in instrument, in their words.
  * The catalog's own notes are written for the agent — measured MIDI numbers,
  * which notes are silent — and those stay out of the page.
@@ -360,9 +381,6 @@ function FontsTab({ state, reload, notify }) {
   }
 
   const fonts = state.fonts
-  // A single-instrument bank (e.g. Electric Guitar Clean) is published only as
-  // a 7z archive, so there is no URL the installer could fetch: point the
-  // button at the release page instead of offering a download that always fails.
   const libraryDir = fonts.libraryDir || fonts.directories?.[0] || ''
   const percent = job && job.total ? (job.received / job.total) * 100 : 0
   const installing = Boolean(job && job.status === 'running')
@@ -370,9 +388,15 @@ function FontsTab({ state, reload, notify }) {
   // belongs in the list below, and leaving it here only pushes the ones the
   // person can still add further down the page.
   const missingRecommended = fonts.available.filter(font => !fonts.rows.some(row => row.recommendedId === font.id))
-  const allRecommendedInstalled = fonts.available.length > 0 && missingRecommended.length === 0
-  const recommendedShown = showRecommended ? fonts.available : missingRecommended
   const vst3Plugins = vst3?.plugins ?? []
+  // 推荐位固定五个：三个 SF2（通用 + 两个特色）+ Dexed + Grand Piano，装一个少一个。
+  // 内置档案里带下载链接的才是推荐位：ABPL/AGML 没有链接，只在下面的自定义安装里出现。
+  const recommendedVst3 = vst3Plugins.filter(plugin => plugin.links?.length && !plugin.installed)
+  const allRecommendedInstalled = fonts.available.length > 0 && missingRecommended.length === 0 && recommendedVst3.length === 0
+  const recommendedShown = showRecommended ? fonts.available : missingRecommended
+  const recommendedVst3Shown = showRecommended ? vst3Plugins.filter(plugin => plugin.links?.length) : recommendedVst3
+  // 已安装卡只列真的在这台机器上的：catalog 条目装没装由 installed 说了算。
+  const installedVst3 = vst3Plugins.filter(plugin => plugin.installed)
   const scanPlugins = scan?.plugins ?? []
   const pickedCount = scanPlugins.filter(item => scanPicks[item.path]
     && !vst3Plugins.some(plugin => plugin.plugin.toLowerCase() === item.path.toLowerCase())).length
@@ -412,11 +436,27 @@ function FontsTab({ state, reload, notify }) {
     )
   }
 
+  /** 详情折叠里的内容：已安装卡和推荐卡说的是同一件事。 */
+  function vst3DetailLines(plugin) {
+    const scanned = plugin.kind === 'scanned'
+    const note = VST3_NOTES[plugin.id] ?? (scanned ? '扫描条目：音域与演奏法未实测。' : '')
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+      h('div', { style: S.desc }, plugin.range ? t('音域：实测 MIDI {0}–{1}', plugin.range.low, plugin.range.high) : t('音域：未实测')),
+      h('div', { style: S.desc }, t('演奏法：{0} 个', plugin.articulations.length)),
+      h('div', { style: S.desc }, t('效果音：{0} 个', plugin.fxSounds.length)),
+      plugin.timbres?.length
+        ? h('div', { style: S.desc }, t('音色：{0} 个 — {1}', plugin.timbres.length, plugin.timbres.slice(0, 16).map(timbre => timbre.name).join(' · ') + (plugin.timbres.length > 16 ? ' …' : '')))
+        : null,
+      note ? h('div', { style: S.desc }, t(note)) : null,
+      scanned ? h('div', { style: S.desc }, t('只能显式指定，不参与自动选源。')) : null,
+      h('div', { style: S.mono }, plugin.plugin),
+    )
+  }
+
   function renderVst3Row(plugin) {
     const scanned = plugin.kind === 'scanned'
     const open = Boolean(openDetails[`vst3:${plugin.id}`])
     const playing = vst3Preview?.pluginId === plugin.id
-    const note = VST3_NOTES[plugin.id] ?? (scanned ? '扫描条目：音域与演奏法未实测。' : '')
     return h('div', { key: `vst3:${plugin.id}`, style: S.item },
       h('div', { style: S.itemHead },
         kindBadge('vst3'),
@@ -431,18 +471,52 @@ function FontsTab({ state, reload, notify }) {
         scanned ? h(Btn, { disabled: busy === `vst3:remove:${plugin.plugin}`, onClick: () => removeVst3(plugin) }, t('移除')) : null,
         h(Btn, { onClick: () => toggleDetails(`vst3:${plugin.id}`) }, open ? t('收起') : t('详情')),
       ),
-      open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-        h('div', { style: S.desc }, plugin.range ? t('音域：实测 MIDI {0}–{1}', plugin.range.low, plugin.range.high) : t('音域：未实测')),
-        h('div', { style: S.desc }, t('演奏法：{0} 个', plugin.articulations.length)),
-        h('div', { style: S.desc }, t('效果音：{0} 个', plugin.fxSounds.length)),
-        plugin.timbres?.length
-          ? h('div', { style: S.desc }, t('音色：{0} 个 — {1}', plugin.timbres.length, plugin.timbres.slice(0, 16).map(timbre => timbre.name).join(' · ') + (plugin.timbres.length > 16 ? ' …' : '')))
-          : null,
-        note ? h('div', { style: S.desc }, t(note)) : null,
-        scanned ? h('div', { style: S.desc }, t('只能显式指定，不参与自动选源。')) : null,
-        h('div', { style: S.mono }, plugin.plugin),
-      ) : null,
+      open ? vst3DetailLines(plugin) : null,
       playing ? h('audio', { controls: true, autoPlay: true, src: vst3Preview.url, style: S.audio }) : null,
+    )
+  }
+
+  /** 推荐位的一行：徽章 + 名称 + 大小 + 状态 + 下载入口 + 详情；装好后不再显示入口。 */
+  function renderRecommendedFont(font) {
+    const installed = fonts.rows.find(row => row.recommendedId === font.id)
+    const key = `rec:${font.id}`
+    const open = Boolean(openDetails[key])
+    return h('div', { key: font.id, style: S.item },
+      h('div', { style: S.itemHead },
+        kindBadge('sf2'),
+        h('span', { style: { fontWeight: 600 } }, font.name),
+        h('span', { style: S.mono }, bytes(font.bytes)),
+        h('span', { style: S.chip }, installed ? t('已安装') : t('未安装')),
+        font.default ? h('span', { style: S.chip }, t('默认')) : null,
+        h('span', { style: { flex: 1 } }),
+        installed ? null : downloadLinks(fontLinks(font)),
+        h(Btn, { onClick: () => toggleDetails(key) }, open ? t('收起') : t('详情')),
+      ),
+      font.tagline ? h('div', { style: S.desc }, t(font.tagline)) : null,
+      open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+        h('div', { style: S.mono }, t('许可证：{0}', font.license)),
+        font.manual ? h('div', { style: S.mono }, t('手动下载：{0}', font.manual)) : null,
+        font.manual ? h('div', { style: S.mono }, t('安装说明：解压后把 .sf2 放到 {0}，文件名保持 {1}', libraryDir || t('未设置'), font.file)) : null,
+        installed?.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', installed.sha256.slice(0, 24), installed.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
+      ) : null,
+    )
+  }
+
+  /** 推荐位的 VST3 一行：厂商代替大小，详情与已安装卡共用。 */
+  function renderRecommendedVst3(plugin) {
+    const key = `rec:${plugin.id}`
+    const open = Boolean(openDetails[key])
+    return h('div', { key: `vst3:${plugin.id}`, style: S.item },
+      h('div', { style: S.itemHead },
+        kindBadge('vst3'),
+        h('span', { style: { fontWeight: 600 } }, plugin.name),
+        plugin.vendor && plugin.vendor !== '未知' ? h('span', { style: S.chip }, plugin.vendor) : null,
+        h('span', { style: S.chip }, plugin.installed ? t('已安装') : t('未安装')),
+        h('span', { style: { flex: 1 } }),
+        plugin.installed ? null : downloadLinks(plugin.links),
+        h(Btn, { onClick: () => toggleDetails(key) }, open ? t('收起') : t('详情')),
+      ),
+      open ? vst3DetailLines(plugin) : null,
     )
   }
 
@@ -484,41 +558,9 @@ function FontsTab({ state, reload, notify }) {
           h(Btn, { onClick: () => setShowRecommended(true) }, t('查看')),
         )
         : h('div', { style: S.list },
-          recommendedShown.map(font => {
-            const installed = fonts.rows.find(row => row.recommendedId === font.id)
-            const key = `rec:${font.id}`
-            const open = Boolean(openDetails[key])
-            return h('div', { key: font.id, style: S.item },
-              h('div', { style: S.itemHead },
-                kindBadge('sf2'),
-                h('span', { style: { fontWeight: 600 } }, font.name),
-                h('span', { style: S.mono }, bytes(font.bytes)),
-                h('span', { style: S.chip }, installed ? t('已安装') : t('未安装')),
-                font.default ? h('span', { style: S.chip }, t('默认')) : null,
-                h('span', { style: { flex: 1 } }),
-                installed ? null : font.url
-                  ? h(Btn, { kind: 'primary', disabled: installing || busy === `install:${font.id}`, onClick: () => install({ id: font.id }) }, t('下载安装'))
-                  : font.manual
-                    ? h(Btn, { kind: 'primary', onClick: () => window.open(font.manual, '_blank', 'noopener,noreferrer') }, t('下载'))
-                    : null,
-                h(Btn, { onClick: () => toggleDetails(key) }, open ? t('收起') : t('详情')),
-              ),
-              font.tagline ? h('div', { style: S.desc }, t(font.tagline)) : null,
-              open ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
-                h('div', { style: S.mono }, t('许可证：{0}', font.license)),
-                font.manual ? h('div', { style: S.mono }, t('手动下载：{0}', font.manual)) : null,
-                font.manual ? h('div', { style: S.mono }, t('安装说明：解压后把 .sf2 放到 {0}，文件名保持 {1}', libraryDir || t('未设置'), font.file)) : null,
-                installed?.sha256 ? h('div', { style: S.mono }, t('SHA-256：{0}…（{1}）', installed.sha256.slice(0, 24), installed.status === 'ok' ? t('记录一致') : t('与记录不一致'))) : null,
-              ) : null,
-            )
-          }),
+          recommendedShown.map(renderRecommendedFont),
+          recommendedVst3Shown.map(renderRecommendedVst3),
         ),
-      h('div', { style: S.item },
-        h('div', { style: S.itemHead },
-          kindBadge('vst3'),
-          h('span', { style: { fontWeight: 600 } }, t('VST3 音源暂无推荐')),
-        ),
-      ),
     ),
     h(Card, { inline: true, title: t('已安装'), desc: t('这些音源已经在这台机器上，可以直接用。') },
       preview ? h('div', { style: { ...S.item } },
@@ -539,9 +581,9 @@ function FontsTab({ state, reload, notify }) {
       ) : null,
       vst3Error ? h(Notice, { tone: 'error' }, t('读取音源档案失败：{0}', vst3Error)) : null,
       !vst3 && !vst3Error ? h('p', { style: S.desc }, t('正在读取音源档案…')) : null,
-      fonts.rows.length === 0 && vst3Plugins.length === 0
+      fonts.rows.length === 0 && installedVst3.length === 0
         ? h('p', { style: S.desc }, t('还没有安装任何音源。从上面的推荐里挑一套，或在下面按文件安装。'))
-        : h('div', { style: S.list }, [...fonts.rows.map(renderFontRow), ...vst3Plugins.map(renderVst3Row)]),
+        : h('div', { style: S.list }, [...fonts.rows.map(renderFontRow), ...installedVst3.map(renderVst3Row)]),
     ),
     h(Card, { inline: true, title: t('安装自定义音源'), desc: t('装 SF2 或 VST3 音源，按下面的方式操作。') },
       h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
