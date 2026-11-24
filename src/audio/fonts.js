@@ -72,7 +72,7 @@ export const RECOMMENDED_FONTS = [
     // Still recognised and still scored, just not offered: the recommendation
     // list is a shortlist, and this one is a 446 MB manual download.
     hidden: false,
-    scores: { piano: 2, chromatic: 2, organ: 1, guitar: 9, bass: 3, strings: 1, ensemble: 1, brass: 1, reed: 1, pipe: 1, synthLead: 2, synthPad: 2, ethnic: 1, percussive: 2, drums: 1, default: 2 },
+    scores: { piano: 2, chromatic: 2, organ: 1, guitar: 6, bass: 3, strings: 1, ensemble: 1, brass: 1, reed: 1, pipe: 1, synthLead: 2, synthPad: 2, ethnic: 1, percussive: 2, drums: 1, default: 2 },
     presetScores: [],
   },
 ]
