@@ -8,6 +8,9 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { RECOMMENDED_FONTS } from '../src/audio/fonts.js'
+import { builtInCatalog } from '../src/audio/vst3-catalog.js'
+
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const source = await readFile(join(root, 'lib', 'client.js'), 'utf8')
 
@@ -150,7 +153,7 @@ step('the bank a render lands on is marked, even when nobody chose one', () => {
   assert.ok(text(fontsTree).includes('自动选择'), 'the folder card must say the default was picked automatically')
 })
 
-step('a missing recommendation is offered with its one-line purpose', () => {
+step('a missing recommendation is offered with its one-line purpose and an official link', () => {
   const partial = {
     ...fontState,
     rows: [],
@@ -159,7 +162,14 @@ step('a missing recommendation is offered with its one-line purpose', () => {
   const body = text(tree)
   assert.ok(body.includes('GeneralUser GS'), 'the recommendation is missing')
   assert.ok(body.includes('通用音色，配乐够用'), 'the one-line purpose is missing')
-  assert.ok(findClickable(tree, '下载安装'), 'the install button is missing for a URL bank')
+  const official = findClickable(tree, '官方下载')
+  assert.ok(official, 'the official download button is missing for a URL bank')
+  let opened = null
+  const savedOpen = fakeWindow.open
+  fakeWindow.open = (url) => { opened = url }
+  try { official.props.onClick() } finally { fakeWindow.open = savedOpen }
+  assert.equal(opened, fontState.available[0].url, 'the button must open the official url')
+  assert.ok(!findClickable(tree, '下载安装'), 'the old installer button must be gone')
   assert.ok(!body.includes('许可证'), 'the licence must stay behind Details')
 })
 
@@ -178,9 +188,9 @@ step('a manual-only bank opens its release page and explains where to install', 
   }
   const partial = { ...fontState, rows: [], available: [manual] }
   const tree = FontsTab({ state: { fonts: partial }, reload: () => {}, notify: () => {} })
-  const button = findClickable(tree, '下载')
-  assert.ok(button, 'the Download link button is missing')
-  assert.ok(!findClickable(tree, '下载安装'), 'a manual bank must not offer the failing installer')
+  const button = findClickable(tree, '官方下载')
+  assert.ok(button, 'the official download button is missing for a manual bank')
+  assert.ok(!findClickable(tree, '下载安装'), 'the old installer button must be gone')
   let opened = null
   const savedOpen = fakeWindow.open
   fakeWindow.open = (url) => { opened = url }
@@ -188,6 +198,135 @@ step('a manual-only bank opens its release page and explains where to install', 
   assert.equal(opened, manual.manual, 'the button must open the release page')
 
   assert.ok(findClickable(tree, '详情'), 'the Details toggle is missing')
+})
+
+step('the recommendation card offers five sources: three SF2 banks and two VST3 instruments', () => {
+  // The data the page renders: three visible SF2 recommendations plus the two
+  // built-in VST3 instruments that carry download links (ABPL/AGML have none,
+  // so they stay in the custom-install section).
+  const sf2 = RECOMMENDED_FONTS.filter(font => !font.hidden)
+  assert.deepEqual(
+    sf2.map(font => font.name),
+    ['GeneralUser GS', 'MuseScore General', 'Electric Guitar Clean (FSBS)'],
+    'the three SF2 recommendations are missing',
+  )
+  for (const font of sf2) {
+    assert.ok(Array.isArray(font.links) && font.links.length >= 1, `${font.id} must carry download links`)
+    assert.equal(font.links[0].label, '官方下载', `${font.id} must lead with the official link`)
+  }
+  const vst3 = builtInCatalog().plugins.filter(plugin => plugin.links?.length)
+  assert.deepEqual(
+    vst3.map(plugin => plugin.name),
+    ['Dexed', 'Grand Piano (Audiolatry)'],
+    'the two VST3 recommendations are missing',
+  )
+  assert.equal(sf2.length + vst3.length, 5, 'the recommendation card is five entries')
+
+  // Both lists live in the same card, and a VST3 entry only stays in the offer
+  // list while it is not installed.
+  const settings = readFileSync(join(root, 'src', 'client', 'settings.js'), 'utf8')
+  assert.ok(settings.includes('recommendedShown.map(renderRecommendedFont)'), 'the SF2 offers must render in the recommendation card')
+  assert.ok(settings.includes('recommendedVst3Shown.map(renderRecommendedVst3)'), 'the VST3 offers must render in the same card')
+  assert.ok(settings.includes('plugin.installed ? null : downloadLinks(plugin.links)'), 'an installed VST3 offer must not show its download links')
+
+  // Render the three SF2 offers: each one shows its name and an official link.
+  const available = sf2.map(font => ({
+    id: font.id,
+    name: font.name,
+    file: font.file,
+    bytes: font.bytes,
+    manual: font.manual ?? null,
+    url: font.url ?? null,
+    links: font.links ?? [],
+    license: font.license,
+    note: font.note,
+    tagline: font.tagline ?? '',
+    default: Boolean(font.default),
+    suggested: Boolean(font.suggested),
+    installed: false,
+    status: 'missing',
+  }))
+  const tree = FontsTab({ state: { fonts: { ...fontState, rows: [], available } }, reload: () => {}, notify: () => {} })
+  const body = text(tree)
+  for (const font of sf2) assert.ok(body.includes(font.name), `${font.name} must be offered`)
+  const official = []
+  walk(tree, (element) => {
+    if (typeof element.props?.onClick === 'function' && strings(element.children).join('') === '官方下载') official.push(element)
+  })
+  assert.equal(official.length, 3, `each SF2 offer needs its official link, got ${official.length}`)
+  assert.ok(!body.includes('下载安装'), 'the old install button must be gone')
+
+  // A link slot with no url (a netdisk link that is not ready yet) must not
+  // render a dead button.
+  const partialLinks = FontsTab({
+    state: {
+      fonts: {
+        ...fontState,
+        rows: [],
+        available: [{
+          ...available[0],
+          links: [{ label: '官方下载', url: '' }, { label: '百度网盘', url: 'https://pan.baidu.com/s/x' }],
+        }],
+      },
+    },
+    reload: () => {},
+    notify: () => {},
+  })
+  assert.ok(!findClickable(partialLinks, '官方下载'), 'an empty url must not render a button')
+  assert.ok(findClickable(partialLinks, '百度网盘'), 'a link with a url must still render')
+})
+
+step('the installed card lists only the VST3 entries that are on this machine', () => {
+  const settings = readFileSync(join(root, 'src', 'client', 'settings.js'), 'utf8')
+  // Run the page's own filter expressions, so the assertion is about behaviour
+  // rather than about a string that happens to be there.
+  const filterOf = (name) => {
+    const match = settings.match(new RegExp(`const ${name} = (vst3Plugins\\.filter\\([^\\n]+\\))`))
+    assert.ok(match, `${name} filter is missing from the page`)
+    return new Function('vst3Plugins', `return ${match[1]}`)
+  }
+  const plugins = [
+    { id: 'dexed', links: [{ label: '官方下载', url: 'https://asb2m10.github.io/dexed/' }], installed: false },
+    { id: 'grand-piano', links: [{ label: '官方下载', url: 'https://audiolatry.com/products/grand-piano' }], installed: true },
+    { id: 'ample-bass-p-lite', links: [], installed: true },
+  ]
+  assert.deepEqual(
+    filterOf('installedVst3')(plugins).map(plugin => plugin.id),
+    ['grand-piano', 'ample-bass-p-lite'],
+    'the installed card must not list a plugin that is not installed',
+  )
+  assert.deepEqual(
+    filterOf('recommendedVst3')(plugins).map(plugin => plugin.id),
+    ['dexed'],
+    'an installed plugin must not be offered again',
+  )
+  // The flag is the host's answer, not the catalog's: a built-in entry exists
+  // whether or not the plugin is on the machine.
+  const routes = readFileSync(join(root, 'src', 'host', 'routes.js'), 'utf8')
+  assert.ok(/installed: existsSync\(entry\.plugin\)/.test(routes), 'the host must mark each catalog entry with installed')
+  assert.ok(settings.includes('...installedVst3.map(renderVst3Row)'), 'the installed card must render only the installed VST3 list')
+})
+
+step('the guide offers the official install, the two netdisk links and a skip', () => {
+  const onboarding = readFileSync(join(root, 'src', 'client', 'onboarding.js'), 'utf8')
+  assert.ok(onboarding.includes("t('官方下载安装')"), 'the official install button is missing from the guide')
+  // The netdisk buttons come from the same recommended data as the settings
+  // page, filtered so an empty url never renders a dead button.
+  assert.ok(
+    onboarding.includes("fonts?.available?.find(font => font.id === 'generaluser')?.links"),
+    'the guide must read the GeneralUser links from the recommended data',
+  )
+  assert.ok(onboarding.includes('.filter(link => link.url)'), 'an empty netdisk url must not render a button')
+  assert.ok(/\.\.\.fontLinks\.map\(link => h\(Btn/.test(onboarding), 'the netdisk links must render as buttons')
+  assert.ok(onboarding.includes("t('跳过')"), 'the guide must stay skippable')
+  // The data behind those buttons: the official link plus both netdisks.
+  const generaluser = RECOMMENDED_FONTS.find(font => font.id === 'generaluser')
+  assert.deepEqual(
+    generaluser.links.map(link => link.label),
+    ['官方下载', '百度网盘', '夸克网盘'],
+    'the guide needs the official link and both netdisk links',
+  )
+  assert.ok(generaluser.links.every(link => link.url), 'every guide link must have a url')
 })
 
 step('an installed recommendation moves out of the offer list', () => {
