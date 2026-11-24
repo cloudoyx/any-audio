@@ -27,6 +27,7 @@ import { listFonts } from '../src/audio/fonts.js'
 import { compileScore } from '../src/audio/score.js'
 import { parseWav, peakOf } from '../src/audio/wav.js'
 import { projectDir } from '../src/project/paths.js'
+import { resolveVst3Python } from '../src/audio/vst3-process.js'
 import { createProject } from '../src/project/store.js'
 import { musicToolDefinition, selectSources } from '../src/tools/music.js'
 
@@ -38,11 +39,9 @@ const PROJECTS = join(ANYAUDIO, 'projects')
 const TMP = join(ANYAUDIO, 'tmp')
 const OUT = join(ANYAUDIO, 'out')
 const REAL_PLUGIN = 'C:\\Program Files\\Common Files\\VST3\\ABPL.vst3'
-const REAL_PYTHON = join(
-  REPO_ROOT, '.venv',
-  process.platform === 'win32' ? 'Scripts' : 'bin',
-  process.platform === 'win32' ? 'python.exe' : 'python',
-)
+// The interpreter the sidecar would actually launch: the machine-wide runtime
+// installed from the settings page, or the checkout's own .venv.
+const REAL_PYTHON = resolveVst3Python()
 
 function listing(path) {
   try { return new Set(readdirSync(path)) } catch { return new Set() }

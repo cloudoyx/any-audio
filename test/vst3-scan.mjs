@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 
 import { builtInCatalog } from '../src/audio/vst3-catalog.js'
 import { recognizeVst3 } from '../src/audio/vst3-known.js'
+import { resolveVst3Python } from '../src/audio/vst3-process.js'
 import { scanVst3Packages } from '../src/host/routes.js'
 import { renderVst3Stem } from '../src/tools/instrument.js'
 
@@ -33,11 +34,11 @@ const here = fileURLToPath(new URL('.', import.meta.url))
 const REPO_ROOT = resolve(here, '..')
 const WORK = mkdtempSync(join(tmpdir(), 'anyaudio-vst3-scan-'))
 const VST3_DIR = 'C:/Program Files/Common Files/VST3'
-const REAL_PYTHON = join(
-  REPO_ROOT, '.venv',
-  process.platform === 'win32' ? 'Scripts' : 'bin',
-  process.platform === 'win32' ? 'python.exe' : 'python',
-)
+// The interpreter the sidecar would actually launch: the machine-wide runtime
+// installed from the settings page, or the checkout's own .venv. Hard-coding
+// the venv would keep these tests SKIPped on a machine that installed the
+// runtime the normal way.
+const REAL_PYTHON = resolveVst3Python()
 
 // 只读机器配置：指向临时文件，扫描/选源看不到用户自己加的插件，也不会写回。
 const previousConfig = process.env.ANYAUDIO_CONFIG
