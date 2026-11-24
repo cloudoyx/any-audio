@@ -171,6 +171,7 @@ export const EN = {
   '下载安装': 'Install',
   '官方下载安装': 'Download and install',
   '官方下载': 'Official download',
+  'VST3 插件，需要先装运行时。': 'A VST3 plugin; the runtime must be installed first.',
   '下载': 'Download',
   '安装说明：解压后把 .sf2 放到 {0}，文件名保持 {1}': 'Install: unpack the .sf2 into {0}, keeping the file name {1}',
   '未设置': 'not set',

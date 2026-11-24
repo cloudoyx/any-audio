@@ -813,7 +813,9 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       ? body.vendor.trim()
       : meta.vendor
     const plugins = [...(config.vst3?.plugins ?? []), { path, name, vendor }]
-    const updated = await updateConfig({ vst3: { plugins } })
+    // Adding a plugin that was removed from the list brings it back.
+    const hidden = (config.vst3?.hidden ?? []).filter((entry) => entry.toLowerCase() !== path.toLowerCase())
+    const updated = await updateConfig({ vst3: { plugins, hidden } })
     // A plugin that exposes a named program parameter gets parameter-type
     // timbres, so a score can switch its sound by preset name.
     const timbres = await probeParameterTimbres(path)
@@ -829,8 +831,17 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
     const { config } = await readConfig()
     const plugins = config.vst3?.plugins ?? []
     const next = plugins.filter((entry) => entry.path.toLowerCase() !== path.toLowerCase())
-    if (next.length === plugins.length) return { ok: false, error: `VST3 插件不在配置里：${path}` }
-    const updated = await updateConfig({ vst3: { plugins: next } })
+    if (next.length !== plugins.length) {
+      // Scanned entry: drop it from the config, the plugin file stays.
+      const updated = await updateConfig({ vst3: { plugins: next } })
+      return { ok: true, removed: true, config: updated.config }
+    }
+    // Built-in entry: remember the path as hidden so the page stops listing it.
+    const hidden = config.vst3?.hidden ?? []
+    if (hidden.some((entry) => entry.toLowerCase() === path.toLowerCase())) {
+      return { ok: false, error: `VST3 插件不在列表里：${path}` }
+    }
+    const updated = await updateConfig({ vst3: { hidden: [...hidden, path] } })
     return { ok: true, removed: true, config: updated.config }
   }
 

@@ -144,11 +144,13 @@ export async function mergedCatalog() {
   const builtIn = builtInCatalog()
   const { config } = await readConfig()
   const timbres = timbresByPath(config)
+  // 从列表里移除的内置插件：路径记在 config.vst3.hidden，文件不动。
+  const hidden = new Set((config.vst3?.hidden ?? []).map((path) => String(path).toLowerCase()))
   const seen = new Set(builtIn.plugins.map((entry) => entry.plugin.toLowerCase()))
   const scanned = []
   for (const plugin of config.vst3?.plugins ?? []) {
     const path = String(plugin.path ?? '').trim()
-    if (!path || seen.has(path.toLowerCase())) continue
+    if (!path || seen.has(path.toLowerCase()) || hidden.has(path.toLowerCase())) continue
     seen.add(path.toLowerCase())
     const name = plugin.name || basename(path).replace(/\.vst3$/i, '') || path
     scanned.push({
@@ -173,11 +175,13 @@ export async function mergedCatalog() {
   return {
     version: builtIn.version,
     plugins: [
-      ...builtIn.plugins.map((entry) => ({
-        ...entry,
-        kind: 'builtin',
-        timbres: timbres.get(entry.plugin.toLowerCase()) ?? [],
-      })),
+      ...builtIn.plugins
+        .filter((entry) => !hidden.has(entry.plugin.toLowerCase()))
+        .map((entry) => ({
+          ...entry,
+          kind: 'builtin',
+          timbres: timbres.get(entry.plugin.toLowerCase()) ?? [],
+        })),
       ...scanned,
     ],
   }

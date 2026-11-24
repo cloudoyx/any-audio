@@ -57,6 +57,8 @@ export const DEFAULTS = {
     // Plugins the person added through the settings page. `path` is the unique
     // key; the built-in catalog is separate and always available.
     plugins: [],
+    // 从列表里移除的内置插件路径：文件不动，只是不再出现在音源页。
+    hidden: [],
     // 厂商预设扫描结果，按插件路径分组：[{ path, timbres: [{ id, name, category, type, statePath }] }]。
     // 由 audio/vst3-presets.js 写入；数组整体替换，重复扫描不会累积。
     timbres: [],
@@ -213,6 +215,24 @@ export function normalizeConfig(input) {
   } else if (vst3Raw.plugins !== undefined) {
     issues.push('vst3.plugins must be an array; it was ignored')
   }
+  // 从列表里移除的内置插件：只记路径，文件不动。
+  const vst3Hidden = []
+  const seenHidden = new Set()
+  if (Array.isArray(vst3Raw.hidden)) {
+    for (const [index, entry] of vst3Raw.hidden.entries()) {
+      const path = typeof entry === 'string' ? entry.trim() : ''
+      if (!path) {
+        issues.push(`vst3.hidden[${index}] must be a non-empty string; it was ignored`)
+        continue
+      }
+      const key = path.toLowerCase()
+      if (seenHidden.has(key)) continue
+      seenHidden.add(key)
+      vst3Hidden.push(path)
+    }
+  } else if (vst3Raw.hidden !== undefined) {
+    issues.push('vst3.hidden must be an array; it was ignored')
+  }
   const vst3Timbres = normalizeVst3Timbres(vst3Raw.timbres, issues)
 
   const sfxRaw = isPlainObject(raw.sfx) ? raw.sfx : {}
@@ -274,7 +294,7 @@ export function normalizeConfig(input) {
         idleSec: Math.round(clampNumber(singingRaw.idleSec, 0, 3600, DEFAULTS.singing.idleSec)),
       },
       music,
-      vst3: { plugins: vst3Plugins, timbres: vst3Timbres },
+      vst3: { plugins: vst3Plugins, hidden: vst3Hidden, timbres: vst3Timbres },
       sfx: {
         sampleRate: Math.round(clampNumber(sfxRaw.sampleRate, 8000, 192000, DEFAULTS.sfx.sampleRate)),
         packs: normalizePackPriorities(sfxRaw.packs, issues),

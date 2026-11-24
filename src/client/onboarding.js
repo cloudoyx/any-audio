@@ -384,8 +384,10 @@ export function Guide() {
   }
 
   const fontInstalled = Boolean(fonts?.rows?.length)
-  // 网盘入口：后端把 links 放在推荐数据里；url 为空的位（网盘链接还没做好）不渲染。
-  const fontLinks = (fonts?.available?.find(font => font.id === 'generaluser')?.links ?? []).filter(link => link.url)
+  // 网盘入口：后端把 links 放在推荐数据里；官方入口由「官方下载安装」承担，
+  // 这里只留网盘，url 为空的位（还没做好）不渲染。
+  const fontLinks = (fonts?.available?.find(font => font.id === 'generaluser')?.links ?? [])
+    .filter(link => link.url && link.label !== '官方下载')
   const packInstalled = Boolean(packs?.some((pack) => pack.id === BASE_PACK.id))
   const percent = job && job.total ? Math.round((job.received / job.total) * 100) : 0
   // The note belongs to the step that produced it: a download message from the

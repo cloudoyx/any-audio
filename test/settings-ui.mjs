@@ -316,7 +316,12 @@ step('the guide offers the official install, the two netdisk links and a skip', 
     onboarding.includes("fonts?.available?.find(font => font.id === 'generaluser')?.links"),
     'the guide must read the GeneralUser links from the recommended data',
   )
-  assert.ok(onboarding.includes('.filter(link => link.url)'), 'an empty netdisk url must not render a button')
+  // The official entry is the install button itself; the guide only adds the
+  // netdisk buttons, and an empty url never renders a dead button.
+  assert.ok(
+    onboarding.includes(".filter(link => link.url && link.label !== '官方下载')"),
+    'the guide must keep only the netdisk links with a url',
+  )
   assert.ok(/\.\.\.fontLinks\.map\(link => h\(Btn/.test(onboarding), 'the netdisk links must render as buttons')
   assert.ok(onboarding.includes("t('跳过')"), 'the guide must stay skippable')
   // The data behind those buttons: the official link plus both netdisks.
