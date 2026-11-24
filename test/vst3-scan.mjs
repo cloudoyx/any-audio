@@ -81,9 +81,12 @@ if (!scanDirExists) {
       assert.ok(candidate.form === 'bundle' || candidate.form === 'single', `未知形态：${candidate.form}`)
       assert.equal(candidate.hasInnerDll, candidate.form === 'bundle', `${candidate.name} 的 hasInnerDll 与 form 不一致`)
       if (candidate.form === 'bundle') {
+        // A bundle may ship without moduleinfo.json (0x808 does), so the
+        // declaration is true/false when the metadata was read and null when
+        // there is none — the same three-state contract as a single file.
         assert.ok(
-          candidate.declaredInstrument === true || candidate.declaredInstrument === false,
-          `${candidate.name} 目录包必须读到 moduleinfo 声明`,
+          candidate.declaredInstrument === true || candidate.declaredInstrument === false || candidate.declaredInstrument === null,
+          `${candidate.name} 目录包的声明只能是 true/false/null`,
         )
       } else {
         assert.equal(candidate.declaredInstrument, null, `${candidate.name} 单文件没有 moduleinfo，声明必须是 null`)
