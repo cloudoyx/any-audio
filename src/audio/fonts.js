@@ -71,7 +71,7 @@ export const RECOMMENDED_FONTS = [
     tagline: '电吉他独奏',
     // Still recognised and still scored, just not offered: the recommendation
     // list is a shortlist, and this one is a 446 MB manual download.
-    hidden: true,
+    hidden: false,
     scores: { piano: 2, chromatic: 2, organ: 1, guitar: 9, bass: 3, strings: 1, ensemble: 1, brass: 1, reed: 1, pipe: 1, synthLead: 2, synthPad: 2, ethnic: 1, percussive: 2, drums: 1, default: 2 },
     presetScores: [],
   },
