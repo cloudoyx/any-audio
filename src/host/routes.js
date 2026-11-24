@@ -29,6 +29,7 @@ import {
 import { gpuStatus, installGpuRuntime } from '../audio/singing-gpu.js'
 import { encodeWav, peakOf, rmsOf, toDb } from '../audio/wav.js'
 import { mergedCatalog } from '../audio/vst3-catalog.js'
+import { runVst3Install, vst3Root, vst3Status } from '../audio/vst3-install.js'
 import { recognizeVst3 } from '../audio/vst3-known.js'
 import { createVst3Process } from '../audio/vst3-process.js'
 import { configPath, readConfig, resetConfig, updateConfig } from '../config.js'
@@ -71,6 +72,12 @@ export function setGpuInstallRunner(fn) {
 let gpuStatusProbe = gpuStatus
 export function setGpuStatusProbe(fn) {
   gpuStatusProbe = typeof fn === 'function' ? fn : gpuStatus
+}
+// Injectable VST3 runtime installer for offline route tests (same pattern as the
+// singing install runner above).
+let vst3InstallRunner = runVst3Install
+export function setVst3InstallRunner(fn) {
+  vst3InstallRunner = typeof fn === 'function' ? fn : runVst3Install
 }
 // Injectable VST3 process factory for offline route tests (same pattern as the
 // singing install runner above). The settings preview reuses one process; the
@@ -715,6 +722,40 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
 
   const VST3_SCAN_DIR = 'C:\\Program Files\\Common Files\\VST3'
 
+  /** VST3 render-runtime status: is the runtime installed, and can it import the deps. */
+  async function vst3StatusRoute() {
+    try {
+      return { ok: true, ...(await vst3Status()) }
+    } catch (error) {
+      return { ok: false, error: describeError(error) }
+    }
+  }
+
+  /** Start (or join) a VST3 render-runtime install job. */
+  async function vst3InstallRoute() {
+    // One install at a time: a second request joins the running job so two
+    // downloads never race on the same `.part` file (same as singingInstallRoute).
+    const running = runningJob('vst3-install')
+    if (running) return { ok: true, job: publicJob(running), reused: true }
+    const job = startJob('vst3-install', async (current) => {
+      current.message = 'preparing'
+      const result = await vst3InstallRunner({
+        signal: current.abort.signal,
+        onProgress: (event) => {
+          if (event.received !== undefined) {
+            current.received = event.received
+            current.total = event.total ?? 0
+          }
+          if (event.message) current.message = event.message
+          else if (event.phase) current.message = event.phase
+        },
+      })
+      current.message = 'ready'
+      return result
+    }, 'VST3 runtime')
+    return { ok: true, job: publicJob(job), reused: false, root: vst3Root() }
+  }
+
   async function vst3ScanRoute(body) {
     const requested = typeof body.dir === 'string' && body.dir.trim() ? body.dir.trim() : VST3_SCAN_DIR
     let info
@@ -1126,6 +1167,13 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
         return json(res, 500, { ok: false, error: describeError(error) })
       }
     }
+    if (method === 'GET' && path === `${PREFIX}/vst3/status`) {
+      try {
+        return json(res, 200, await vst3StatusRoute())
+      } catch (error) {
+        return json(res, 500, { ok: false, error: describeError(error) })
+      }
+    }
     if (method === 'GET' && path === `${PREFIX}/vst3/list`) {
       try {
         return json(res, 200, await vst3ListRoute())
@@ -1166,6 +1214,7 @@ function makeRoutes({ ctx, log, workspaceRoot }) {
       if (path === `${PREFIX}/sources/verify`) return json(res, 200, await verifySource(body))
       if (path === `${PREFIX}/sources/remove`) return json(res, 200, await removeSource(body))
       if (path === `${PREFIX}/sources/preview`) return json(res, 200, await previewSource(body))
+      if (path === `${PREFIX}/vst3/install`) return json(res, 200, await vst3InstallRoute())
       if (path === `${PREFIX}/vst3/scan`) return json(res, 200, await vst3ScanRoute(body))
       if (path === `${PREFIX}/vst3/add`) return json(res, 200, await vst3AddRoute(body))
       if (path === `${PREFIX}/vst3/remove`) return json(res, 200, await vst3RemoveRoute(body))

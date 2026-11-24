@@ -28,6 +28,8 @@ import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { vst3Root, vst3RuntimeExe } from './vst3-install.js'
+
 export const DEFAULT_IDLE_SEC = 60
 export const DEFAULT_RENDER_TIMEOUT_MS = 120000
 
@@ -37,9 +39,33 @@ const STDIO = ['pipe', 'pipe', 'inherit'] // index 2 = stderr inherited, NEVER '
 const here = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(here, '..', '..')
 const DEFAULT_WORKER = resolve(REPO_ROOT, 'engine', 'vst3_worker.py')
-const DEFAULT_PYTHON = process.platform === 'win32'
+// A developer checkout's own venv. Kept only as the last resort: a person who
+// installed the plugin has no repo, so the machine-wide runtime comes first.
+const REPO_VENV_PYTHON = process.platform === 'win32'
   ? resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
   : resolve(REPO_ROOT, '.venv', 'bin', 'python')
+
+function envPath(name) {
+  const value = process.env[name]
+  return value && value.trim() ? resolve(value.trim()) : null
+}
+
+/**
+ * The interpreter the sidecar launches, in priority order:
+ *   1. `options.python` — an explicit override (tests, a custom build)
+ *   2. ANYAUDIO_VST3_PYTHON — the same override from the environment
+ *   3. the machine-wide runtime installed from the settings page
+ *   4. the repo's own .venv — a developer checkout only
+ * The first three are what a person who installed the plugin has; the venv is
+ * the fallback that keeps a checkout working without an install step.
+ */
+export function resolveVst3Python(options = {}) {
+  const explicit = options.python ?? envPath('ANYAUDIO_VST3_PYTHON')
+  if (explicit) return explicit
+  const installed = vst3RuntimeExe(vst3Root())
+  if (existsSync(installed)) return installed
+  return REPO_VENV_PYTHON
+}
 
 export class Vst3ProcessError extends Error {
   constructor(message, { code = 'VST3_ERROR', kind = 'render' } = {}) {
@@ -55,7 +81,7 @@ export class Vst3ProcessError extends Error {
 export function resolveVst3Config(options = {}) {
   const injected = Boolean(options.command || options.args)
   const worker = options.worker ?? DEFAULT_WORKER
-  const python = options.python ?? DEFAULT_PYTHON
+  const python = resolveVst3Python(options)
   const idleSec = Number.isFinite(Number(options.idleSec)) ? Number(options.idleSec) : DEFAULT_IDLE_SEC
   const idleMs = Math.max(100, Number.isFinite(Number(options.idleMs)) ? Number(options.idleMs) : idleSec * 1000)
   const renderTimeoutMs = Math.max(1, Number.isFinite(Number(options.renderTimeoutMs))
@@ -73,7 +99,7 @@ function validateConfig(config) {
   if (config.injected) return
   if (!existsSync(config.command)) {
     throw new Vst3ProcessError(
-      `VST3 runtime not found: ${config.command}. Install the project venv (pip install pedalboard numpy mido).`,
+      `VST3 运行时未安装，请到 设置 → AnyAudio → 音源 安装（找不到 ${config.command}）`,
       { code: 'ENV_MISSING', kind: 'load' },
     )
   }
