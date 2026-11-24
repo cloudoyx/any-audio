@@ -282,13 +282,18 @@ export function HelpTip({ text }) {
   )
 }
 
-export function Card({ title, desc, right, children }) {
+export function Card({ title, desc, right, inline, children }) {
   return h('section', { style: S.card },
     h('div', { style: S.cardHead },
-      h('div', null,
-        h('div', { style: S.cardTitle }, title),
-        desc ? h('p', { style: S.desc }, desc) : null,
-      ),
+      inline
+        ? h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', minWidth: 0 } },
+          h('span', { style: S.cardTitle }, title),
+          desc ? h('span', { style: S.desc }, desc) : null,
+        )
+        : h('div', null,
+          h('div', { style: S.cardTitle }, title),
+          desc ? h('p', { style: S.desc }, desc) : null,
+        ),
       right || null,
     ),
     children,
