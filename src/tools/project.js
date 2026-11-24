@@ -465,6 +465,10 @@ async function runRender(workspaceRoot, args, exec) {
     // into project.json; later exports reuse it (spec §10.2).
     freezeNormalize: true,
   })
+  // The frozen gain is measured on the first export. Changing clip gains after
+  // that makes it stale, and the mix can then clip — say so instead of leaving
+  // the caller to notice a peak above 0 on its own.
+  const clipping = Number(result.peakDb) > 0
   return {
     ok: true,
     mode: 'render',
@@ -474,6 +478,10 @@ async function runRender(workspaceRoot, args, exec) {
     durationSec: result.durationSec,
     peakDb: result.peakDb,
     rmsDb: result.rmsDb,
+    clipping,
+    warning: clipping
+      ? `peak ${Number(result.peakDb).toFixed(1)} dBFS is above 0 — the mix clips. The normalization gain was measured on an earlier mix and is stale after the clip gains changed; lower the master fader (target:"project", field:"masterFaderDb") or the clip gains, then render again.`
+      : null,
     trackCount: result.trackCount,
     clipCount: result.clipCount,
   }
@@ -551,6 +559,8 @@ export const projectToolDefinition = finalizeTool({
         format: { type: 'string' },
         peakDb: { type: 'number' },
         rmsDb: { type: 'number' },
+        clipping: { type: 'boolean' },
+        warning: { oneOf: [{ type: 'string' }, { type: 'null' }] },
         tracks: { type: 'array', items: { type: 'object', additionalProperties: true } },
         materials: { type: 'array', items: { type: 'object', additionalProperties: true } },
         projects: { type: 'array', items: { type: 'object', additionalProperties: true } },
@@ -570,8 +580,9 @@ export const projectToolDefinition = finalizeTool({
         return [
           `Rendered ${Number(value.durationSec).toFixed(2)}s of ${value.trackCount} tracks (${value.clipCount} clips) → ${value.relative || value.file}`,
           `peak ${Number(value.peakDb).toFixed(1)} dBFS, RMS ${Number(value.rmsDb).toFixed(1)} dBFS`,
+          value.clipping ? `⚠ ${value.warning}` : null,
           'The clip bay shows this project as it is on disk, so no further step is needed.',
-        ].join('\n')
+        ].filter(Boolean).join('\n')
       }
       if (value.mode === 'create') {
         return [
