@@ -158,15 +158,8 @@ export async function selectSources(compiled, { catalog = null, fonts = null, wo
     }
     const explicit = vst3ById.get(source)
     if (explicit) {
-      // Drum kits are GM programs on the SoundFont side; a VST3 instrument has
-      // no drum map, so a drum track naming one would render pitches, not hits.
-      if (track.drums) {
-        problems.push(
-          `track "${track.name}" is a drum track, and drum kits always come from the default SoundFont; `
-          + `"${source}" is a VST3 instrument — name an SF2 source instead`,
-        )
-        continue
-      }
+      // A drum track may name a VST3 instrument too: its GM drum-map pitches go
+      // straight to the plugin, which decides what each key plays.
       if (!existsSync(explicit.plugin)) {
         track.vst3 = null
         track.vst3Fallback = true

@@ -15,7 +15,7 @@
  *     mergedCatalog 按插件路径挂载 timbres；配置里的重复路径/坏条目被清洗；
  *  5. 谱面校验：preset 无 source 报错、preset 类型错报错、VST3 无 preset 用默认、
  *     未知 preset 报错并列出音色、不写 source 报错并附清单、source:"auto" 不再是
- *     魔法值、SF2 轨写 preset 被忽略并警告、鼓轨写 VST3 source 报错；
+ *     魔法值、SF2 轨写 preset 被忽略并警告、鼓轨写 VST3 source 走 VST3 路径；
  *  6. 超音域报错文案只让改音高，不再建议换音源；
  *  7. list 的写法与谱面字段一致，且 list 只读不落盘配置；
  *  8. 真实渲染：source+preset 渲染成功且逐轨报告含 source/preset；不写 preset
@@ -467,7 +467,7 @@ test('选源：不写 source 报错并附完整清单；source:"auto" 不再是�
   )
 })
 
-test('选源：SF2 轨写 preset 被忽略并警告；鼓轨写 VST3 source 报错', async () => {
+test('选源：SF2 轨写 preset 被忽略并警告；鼓轨写 VST3 source 走 VST3 路径', async () => {
   const sf2Preset = compileScore({
     tracks: [{ name: 'pad', instrument: 'piano', source: 'fake-font', preset: 'Warm Pad', notes: [[0, 0.5, 60, 100]] }],
   })
@@ -478,14 +478,15 @@ test('选源：SF2 轨写 preset 被忽略并警告；鼓轨写 VST3 source 报�
     `SF2 轨写 preset 必须警告：${JSON.stringify(sf2.warnings)}`,
   )
 
+  // 鼓轨可以指定 VST3 音源：GM 鼓音符直接发给插件，不再要求换 SF2。
   const drums = compileScore({
     tracks: [{ name: 'kit', drums: true, source: 'fake-synth', notes: [[0, 0.25, 36, 100]] }],
   })
-  await assert.rejects(
-    selectSources(drums, { catalog: fakeCatalog, fonts: fakeFonts }),
-    /drum track.*VST3 instrument/,
-    '鼓轨写 VST3 source 必须报错（鼓组永远来自默认 SF2 库）',
-  )
+  const drumSelection = await selectSources(drums, { catalog: fakeCatalog, fonts: fakeFonts })
+  assert.equal(drumSelection.vst3Tracks.length, 1, '鼓轨写 VST3 source 必须走 VST3 路径')
+  assert.equal(drumSelection.vst3Tracks[0].vst3.id, 'fake-synth')
+  assert.equal(drumSelection.vst3Tracks[0].drums, true, '鼓轨标记必须保留')
+  assert.equal(drumSelection.sf2Compiled.tracks.length, 0, '鼓轨不能同时留在 SF2 计划里')
 })
 
 test('超音域报错只让改音高，不再建议换音源', () => {

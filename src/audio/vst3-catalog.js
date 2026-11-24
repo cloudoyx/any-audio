@@ -69,6 +69,36 @@ export function builtInCatalog() {
         timbres: [],
         notes: '低音 E 弦不出声（实测 MIDI 42 起）；效果音直接当音符弹。',
       },
+      {
+        id: 'dexed',
+        name: 'Dexed',
+        vendor: 'Digital Suburban',
+        plugin: `${VST3_DIR}\\Dexed.vst3`,
+        format: 'vst3',
+        instrument: true,
+        range: { low: 21, high: 108 },
+        families: { synthLead: 8, synthPad: 8 },
+        articulations: [],
+        fxSounds: [],
+        // 参数型预设：probe 把 program 参数的 32 个具名取值写进机器配置，
+        // mergedCatalog 再按插件路径挂上来，所以内置档案本身不带音色。
+        timbres: [],
+        notes: 'FM 合成器；预设由 program 参数提供（参数型）',
+      },
+      {
+        id: 'grand-piano',
+        name: 'Grand Piano (Audiolatry)',
+        vendor: 'Audiolatry',
+        plugin: `${VST3_DIR}\\Grand Piano Windows VST3\\Grand Piano.vst3`,
+        format: 'vst3',
+        instrument: true,
+        range: { low: 21, high: 108 },
+        families: { piano: 9 },
+        articulations: [],
+        fxSounds: [],
+        timbres: [],
+        notes: '单音色 ROMpler（一档）；无预设可切换',
+      },
     ],
   }
 }

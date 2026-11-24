@@ -39,14 +39,17 @@ function mutateCatalog(index, mutate) {
 }
 
 // ---------------------------------------------------------------------------
-test('内置档案：版本、两个插件与实测音域', () => {
+test('内置档案：版本、四个插件与实测音域', () => {
   const catalog = builtInCatalog()
   assert.equal(CATALOG_VERSION, 1)
   assert.equal(catalog.version, CATALOG_VERSION)
-  assert.equal(catalog.plugins.length, 2)
-  const [bass, guitar] = catalog.plugins
-  assert.equal(bass.id, 'ample-bass-p-lite')
-  assert.equal(guitar.id, 'ample-guitar-m-lite')
+  assert.equal(catalog.plugins.length, 4)
+  // 按 id 找，不按位置：以后再加档案也不会让这条测试挂掉。
+  const byId = new Map(catalog.plugins.map((entry) => [entry.id, entry]))
+  const bass = byId.get('ample-bass-p-lite')
+  const guitar = byId.get('ample-guitar-m-lite')
+  assert.ok(bass, '内置档案必须有 ABPL')
+  assert.ok(guitar, '内置档案必须有 AGML')
   assert.deepEqual(bass.range, { low: 40, high: 72 })
   assert.deepEqual(guitar.range, { low: 42, high: 84 })
   for (const entry of catalog.plugins) {
@@ -78,7 +81,7 @@ test('builtInCatalog 每次返回新对象，改一份不污染下一份', () =>
   first.plugins[0].articulations[0].keyswitch = 1
   first.plugins.push({})
   const second = builtInCatalog()
-  assert.equal(second.plugins.length, 2)
+  assert.equal(second.plugins.length, 4)
   assert.equal(second.plugins[0].range.low, 40)
   assert.equal(second.plugins[0].articulations[0].keyswitch, 24)
 })
