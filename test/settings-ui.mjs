@@ -118,8 +118,8 @@ const fontState = {
 const fontsTree = FontsTab({ state: { fonts: fontState }, reload: () => {}, notify: () => {} })
 const fontsText = text(fontsTree)
 
-step('the sound-source page has the four sections in order', () => {
-  assert.deepEqual(titles(fontsTree), ['推荐音源', '已安装', '安装音源', '音源目录'])
+step('the sound-source page has the five sections in order', () => {
+  assert.deepEqual(titles(fontsTree), ['推荐音源', '已安装', 'VST3 运行时', '安装音源', '音源目录'])
 })
 
 step('the sound-source page no longer offers a URL install', () => {
@@ -145,8 +145,8 @@ step('a fully installed recommendation list collapses to one line', () => {
 
 step('the bank a render lands on is marked, even when nobody chose one', () => {
   const installed = fontsTree.children.find((card) => card?.props?.title === '已安装')
-  assert.ok(text(installed).includes('当前默认'), 'the effective default must be marked')
-  assert.ok(!findClickable(installed, '设为默认'), 'a row that already is the default needs no button')
+  assert.ok(text(installed).includes('鼓组音源'), 'the effective default must be marked')
+  assert.ok(!findClickable(installed, '设为鼓组音源'), 'a row that already is the default needs no button')
   assert.ok(text(fontsTree).includes('自动选择'), 'the folder card must say the default was picked automatically')
 })
 
