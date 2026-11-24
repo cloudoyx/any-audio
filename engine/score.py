@@ -16,6 +16,10 @@ from pathlib import Path
 
 HAN = re.compile(r"[\u4e00-\u9fff]")
 HAN_RUN = re.compile(r"[\u4e00-\u9fff]+")
+# 英文词：允许撇号（don't / we're）与弯撇号
+LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z'\u2019]*")
+# 联合分词：单个汉字 或 一个英文词，保持歌词里的原始顺序
+TOKEN = re.compile(r"[\u4e00-\u9fff]|[A-Za-z][A-Za-z'\u2019]*")
 SONORANTS = {"m", "n", "l", "r", "y", "w"}
 MIDI_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 LEADING_REST_SEC = 0.15
@@ -38,9 +42,11 @@ def default_pinyin_fn(run):
 class ScoreConverter:
     """把外部音符转换为 DS 段落。音素表/拼音词典/拼音函数都可注入。"""
 
-    def __init__(self, phoneme_set, pinyin_dict, pinyin_fn=None):
+    def __init__(self, phoneme_set, pinyin_dict, pinyin_fn=None, word_dict=None):
         self.phoneme_set = set(phoneme_set)
         self.pinyin_dict = pinyin_dict
+        # 英文词 → 音素（dsdict-en.yaml，268k 条）。空字典表示声库不支持英文。
+        self.word_dict = word_dict or {}
         self._pinyin = pinyin_fn or default_pinyin_fn
 
     @classmethod
@@ -60,7 +66,8 @@ class ScoreConverter:
         # 字典覆盖：601 条读音与全量 yaml 解析一致，行扫描 ~0.18s（yaml 全量要 5s）。
         bank_dict = cls._load_bank_pinyin_dict(bank)
         pinyin_dict.update(bank_dict)
-        return cls(phoneme_set, pinyin_dict, pinyin_fn)
+        word_dict = cls._load_bank_word_dict(bank)
+        return cls(phoneme_set, pinyin_dict, pinyin_fn, word_dict)
 
     @staticmethod
     def _load_bank_pinyin_dict(bank):
@@ -85,21 +92,51 @@ class ScoreConverter:
                 return result
         return {}
 
+    @staticmethod
+    def _load_bank_word_dict(bank):
+        """从 dsdur/dsdict-en.yaml 提取 英文词 → [音素]。
+
+        与中文词典同一套行扫描；键是小写英文词（允许撇号），值是 en/* 音素。
+        声库没有这份词典时返回空字典，英文歌词会明确报错而不是静默哑掉。
+        """
+        for candidate in (Path(bank) / "dsdur" / "dsdict-en.yaml", Path(bank) / "dsdict-en.yaml"):
+            if not candidate.is_file():
+                continue
+            result = {}
+            current = None
+            with candidate.open(encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("- grapheme: "):
+                        key = line[len("- grapheme: "):].strip().lower()
+                        if re.fullmatch(r"[a-z][a-z'\u2019-]{0,31}", key) and key not in result:
+                            current = key
+                            result[current] = []
+                        else:
+                            current = None
+                    elif current is not None and line.startswith("  - "):
+                        result[current].append(line[4:].strip())
+            if result:
+                return result
+        return {}
+
     # ---------- 拼音 → 音素 ----------
 
     def phrase_readings(self, run):
         return self._pinyin(run)
 
     def map_phonemes(self, raw):
-        """裸音素补 zh/ 前缀并对照声库音素表；有一个查不到就整字不唱。"""
+        """裸音素按语言前缀补齐并对照声库音素表；有一个查不到就整字不唱。"""
         if self.phoneme_set is None:
             return list(raw)
         mapped = []
         for phoneme in raw:
             if phoneme in self.phoneme_set:
                 mapped.append(phoneme)
-            elif "zh/" + phoneme in self.phoneme_set:
-                mapped.append("zh/" + phoneme)
+                continue
+            for prefix in ("zh/", "en/", "ja/"):
+                if prefix + phoneme in self.phoneme_set:
+                    mapped.append(prefix + phoneme)
+                    break
             else:
                 return []
         return mapped
@@ -113,6 +150,15 @@ class ScoreConverter:
         # 声库字典的值可能是 list（权威）或空格串（opencpop 兜底）。
         phones = raw.split() if isinstance(raw, str) else list(raw)
         return self.map_phonemes(phones)
+
+    def phonemes_from_word(self, word):
+        """英文词 → 音素。整词查 dsdict-en；查不到返回空列表，由调用方报错。"""
+        if not word:
+            return []
+        raw = self.word_dict.get(word.lower())
+        if not raw:
+            return []
+        return self.map_phonemes(raw)
 
     @staticmethod
     def split_onset(phones):
@@ -163,8 +209,12 @@ class ScoreConverter:
         return any(not s["rest"] for s in syllables)
 
     def _syllables(self, items, reading_at):
-        """第一遍：拆音节。一个音节 = 一个词，可能跨多个音符（拖腔）。"""
+        """第一遍：拆音节。一个音节 = 一个词，可能跨多个音符（拖腔）。
+
+        中英混排时按歌词里的原始顺序取词：汉字走拼音读音，英文词走整词查表。
+        """
         syllables, text = [], []
+        has_latin = False
         cursor = 0.0
         for index, (start, dur, midi, lyric) in enumerate(items):
             if start > cursor + GAP_EPS:
@@ -181,15 +231,29 @@ class ScoreConverter:
                 cursor = start + dur
                 continue
             units = []
-            for char, reading in zip(HAN.findall(lyric), reading_at.get(index, [])):
-                phones = self.phonemes_from_reading(reading)
+            readings = list(reading_at.get(index, []))
+            han_seen = 0
+            for match in TOKEN.finditer(lyric):
+                tok = match.group(0)
+                latin = not HAN.fullmatch(tok)
+                if latin:
+                    phones = self.phonemes_from_word(tok)
+                    has_latin = has_latin or bool(phones)
+                else:
+                    reading = readings[han_seen] if han_seen < len(readings) else ""
+                    han_seen += 1
+                    phones = self.phonemes_from_reading(reading)
                 if phones:
-                    units.append((char, phones))
+                    units.append((tok, phones, latin))
             if not units:
                 raise ValueError(f"「{lyric}」没有可唱的音素（声库音素表里查不到读音）")
             step = dur / len(units)
-            for grapheme, phones in units:
-                onset, final = self.split_onset(phones)
+            for grapheme, phones, latin in units:
+                if latin:
+                    # 英文音节不做中文的「声母前移」：整个词的音素留在本音符
+                    onset, final = [], list(phones)
+                else:
+                    onset, final = self.split_onset(phones)
                 syllables.append({
                     "notes": [(int(midi), round(step, 4))],
                     "onset": onset,
@@ -198,7 +262,7 @@ class ScoreConverter:
                 })
                 text.append(grapheme)
             cursor = start + dur
-        return syllables, text
+        return syllables, text, has_latin
 
     def build_from_score(self, score, max_seconds=300):
         """外部音符 → (notes, text, lang)。"""
@@ -206,7 +270,7 @@ class ScoreConverter:
         if not items:
             return [], "", "zh"
         reading_at = self._readings_by_index(items)
-        syllables, text = self._syllables(items, reading_at)
+        syllables, text, has_latin = self._syllables(items, reading_at)
 
         # 首字的清声母前面补一个短休止，否则它会挤占第一个音符的时长；
         # 浊响音本身带音高，留在本音符开头即可。
@@ -249,7 +313,8 @@ class ScoreConverter:
             total += note["dur"]
         while kept and kept[-1]["rest"]:
             kept.pop()
-        return kept, "".join(text), "zh"
+        lang = "en" if has_latin else "zh"
+        return kept, " ".join(text) if has_latin else "".join(text), lang
 
     def build_ds(self, notes, text, lang="zh"):
         """内部音符 → DS 段落字段。ph_num 按词不按音符，连音音符不占 ph_num。"""
