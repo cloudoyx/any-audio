@@ -199,7 +199,7 @@ await test('music renders', async () => {
     projectId,
     score: {
       title: '渲染检查曲',
-      tracks: [{ name: 'lead', instrument: 'piano', notes: [[0, 1, 'C4', 90], [1, 1, 'E4', 90]] }],
+      tracks: [{ name: 'lead', instrument: 'piano', source: 'generaluser', notes: [[0, 1, 'C4', 90], [1, 1, 'E4', 90]] }],
     },
     durationSec: 2,
     tailSec: 0.2,
@@ -217,8 +217,8 @@ await test('a plain music call still reports every track level', async () => {
     score: {
       title: '电平检查曲',
       tracks: [
-        { name: 'lead', instrument: 'piano', notes: [[0, 0.5, 'C5', 100], [0.5, 0.5, 'E5', 100]] },
-        { name: 'pad', instrument: 'strings', gainDb: -14, notes: [[0, 1, 'C3', 80]] },
+        { name: 'lead', instrument: 'piano', source: 'generaluser', notes: [[0, 0.5, 'C5', 100], [0.5, 0.5, 'E5', 100]] },
+        { name: 'pad', instrument: 'strings', source: 'generaluser', gainDb: -14, notes: [[0, 1, 'C3', 80]] },
       ],
     },
     durationSec: 1.2,

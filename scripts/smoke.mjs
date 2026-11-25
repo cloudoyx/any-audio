@@ -77,9 +77,9 @@ const rendered = projectId
         score: {
           title: 'smoke',
           tracks: [
-            { name: 'lead', instrument: 'koto', gainDb: -2, reverb: 0.3, notes: [[0, 1.2, 'D4', 84], [1.2, 0.6, 'F4', 76], [1.8, 1.4, 'A4', 92]] },
+            { name: 'lead', instrument: 'koto', gainDb: -2, reverb: 0.3, source: 'generaluser', notes: [[0, 1.2, 'D4', 84], [1.2, 0.6, 'F4', 76], [1.8, 1.4, 'A4', 92]] },
             { name: 'bass', instrument: 'cello', gainDb: -6, source: 'generaluser', notes: [[0, 3, 'D2', 70]] },
-            { name: 'auto-lead', instrument: 'flute', gainDb: -8, source: 'auto', notes: [[0, 1, 'A4', 70]] },
+            { name: 'auto-lead', instrument: 'flute', gainDb: -8, source: 'generaluser', notes: [[0, 1, 'A4', 70]] },
           ],
         },
         durationSec: 3,
