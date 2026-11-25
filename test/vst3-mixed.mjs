@@ -124,6 +124,26 @@ test('编译期音域校验：VST3 轨超实测音域报错并点名音轨', asy
   )
 })
 
+test('扫弦：strum-down/up 把和弦按 18ms 依次起音，单音写扫弦报错', async () => {
+  const down = compileScore({
+    tracks: [{ name: 'g', source: 'ample-guitar-m-lite', notes: [[0, 1, [50, 57, 62], 90, 'strum-down']] }],
+  })
+  const starts = down.tracks[0].notes.map((note) => note.start)
+  assert.deepEqual(starts.map((s) => Number(s.toFixed(3))), [0, 0.018, 0.036], '下扫从低到高依次起音')
+  assert.deepEqual(down.tracks[0].notes.map((note) => note.midi), [50, 57, 62], '下扫音高从低到高')
+
+  const up = compileScore({
+    tracks: [{ name: 'g', source: 'ample-guitar-m-lite', notes: [[0, 1, [50, 57, 62], 90, 'strum-up']] }],
+  })
+  assert.deepEqual(up.tracks[0].notes.map((note) => note.midi), [62, 57, 50], '上扫音高从高到低')
+
+  assert.throws(
+    () => compileScore({ tracks: [{ name: 'g', source: 'ample-guitar-m-lite', notes: [[0, 1, 60, 90, 'strum-down']] }] }),
+    /needs a chord/,
+    '单音写扫弦必须报错',
+  )
+})
+
 test('回退：VST3 插件文件缺失时落回 SF2（可注入假档案，不卸载真插件）', async () => {
   const missingPlugin = join(WORK, 'not-installed', 'ABPL.vst3')
   const catalog = {

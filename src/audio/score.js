@@ -61,6 +61,15 @@ const AUTOMATION = {
 }
 
 const DEFAULT_VELOCITY = 88
+
+/**
+ * Tool-level strum gestures. A strum is a chord whose notes start in quick
+ * succession, the way a hand crosses the strings — a physical gesture, not a
+ * plugin articulation, so any instrument can play it. `strum-down` runs from the
+ * lowest pitch to the highest, `strum-up` the other way.
+ */
+export const STRUM_ARTS = new Set(['strum-down', 'strum-up'])
+const STRUM_SPREAD_SEC = 0.018
 const BLOCK = 128
 const EVENT_PRIORITY = { bank: 0, program: 1, cc: 2, off: 3, on: 4 }
 
@@ -222,11 +231,19 @@ function collectNotes(track, warn, drums = false) {
     }
     const pitches = Array.isArray(pitch) ? pitch : [pitch]
     if (!pitches.length) throw new Error(`track "${track.name}" note #${index} has no pitch`)
+    const strum = art !== undefined && STRUM_ARTS.has(art)
+    if (strum && pitches.length < 2) {
+      throw new Error(`track "${track.name}" note #${index}: art "${art}" needs a chord (an array of pitches)`)
+    }
+    const ordered = strum
+      ? [...pitches].sort((a, b) => parseOne(a) - parseOne(b))
+      : pitches
+    if (strum && art === 'strum-up') ordered.reverse()
     const vel = velocity === undefined ? DEFAULT_VELOCITY : Math.round(number(velocity, `note #${index} velocity`))
     if (vel < 1 || vel > 127) warn(`track "${track.name}" note #${index} velocity clamped to 1..127`)
-    for (const p of pitches) {
+    for (const [position, p] of ordered.entries()) {
       notes.push({
-        start,
+        start: start + (strum ? position * STRUM_SPREAD_SEC : 0),
         duration,
         midi: parseOne(p),
         velocity: Math.max(1, Math.min(127, vel)),
@@ -329,7 +346,7 @@ export function checkVst3Notes(trackName, entry, notes) {
   }
   const artIds = new Set((entry.articulations ?? []).map((item) => item.id))
   for (const note of notes) {
-    if (note.art && !artIds.has(note.art)) {
+    if (note.art && !STRUM_ARTS.has(note.art) && !artIds.has(note.art)) {
       throw new ScoreError(
         `track "${trackName}" note at ${note.start.toFixed(2)}s: art "${note.art}" is not one of ${entry.id}'s articulations (${[...artIds].join(', ')})`,
       )

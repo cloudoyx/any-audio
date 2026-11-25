@@ -45,7 +45,7 @@
 
 规则：
 
-- 音符是 `[起始秒, 时值秒, 音高, 力度]`；第四项力度 1–127，缺省 88。和弦把音高写成数组。也接受对象写法 `{t,d,p,v}`。
+- 音符是 `[起始秒, 时值秒, 音高, 力度, 演奏法]`；力度 1–127，缺省 88；和弦把音高写成数组；第五项可选——写 `strum-down` / `strum-up` 让和弦按 18ms 依次起音（扫弦，任何音源都可用），VST3 音源还可写 `sus` / `pm` / `ls` / `hp`。也接受对象写法 `{t,d,p,v,art}`。
 - 音高可写 MIDI 号（60）或音名（`D3`、`F#4`、`Bb2`、`C5`）。
 - 轨道字段：`source`（音源 id，取自 `anyaudio_sources` 的 list）、`instrument`（SF2 音色：GM 名、program 号，或对象 `{program, bank, name}`——bank 不为 0 的预设用对象写法，`presets` 会给出每条音色的准确写法）、`preset`（VST3 音色名，取自 list）、`gainDb`、`pan`（-1–1）、`reverb`/`chorus`（0–1 发送量）、`drums`（该轨用鼓组，音高按鼓件名如 `kick`/`snare` 解析）、`humanize:{timingMs,velocity}`（轻微时间/力度抖动，避免机械感）。
 - **一个 score 最多 16 条轨道**（每条独占一个 MIDI 通道，鼓组固定占通道 9）；超过会直接报错。要更多声部就把同类乐器的音符合并到同一轨（同轨可变音高，和弦写成音高数组）。
