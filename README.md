@@ -123,16 +123,17 @@ Then open the **DAW** tab at the top; the audio is already laid out by track:
 
 ## Sound sources
 
-The repository does not bundle SoundFonts. The plugin offers two **suggested** banks — GeneralUser GS as the default foundation and MuseScore General as an extra general-purpose orchestral bank — and it can also load compatible SoundFont files (`.sf2`, `.sf3`, `.dls`) placed in `~/.dsh/anyaudio/fonts`. That directory is one shared library for every project and agent session on the machine, so a bank installed once is available everywhere.
+The plugin supports two kinds of sound source: **SoundFont** (`.sf2`, `.sf3`, `.dls`) and **VST3 instrument plugins**. SoundFont banks are small and simple to install; VST3 instruments sound more realistic and are more adjustable. Both kinds can be used together.
 
-| Bank | Size | License | How to get it | Notes |
+| Source | Size | License | How to get it | Notes |
 | --- | --- | --- | --- | --- |
-| GeneralUser GS | 32 MB | GeneralUser GS License v2.0 | One click | **Suggested — default foundation and fallback**; the only bank guaranteed to include a drum kit |
-| MuseScore General | 40 MB | MIT | One click | **Suggested — extra general-purpose orchestral bank**; 309 presets, fuller strings and ensembles |
-| Upright Piano KW | 27 MB (7z) | CC0 1.0 | Manual | Single-instrument piano bank, used on piano tracks only |
-| Electric Guitar Clean | 446 MB (unpacked) | CC0 1.0 | Manual | Single-instrument electric guitar bank |
+| GeneralUser GS | 32 MB | GeneralUser GS License v2.0 | One click | **SoundFont — suggested, default foundation and fallback**; the only bank guaranteed to include a drum kit |
+| MuseScore General | 40 MB | MIT | Manual | **SoundFont — suggested, extra general-purpose orchestral bank**; 309 presets, fuller strings and ensembles |
+| Electric Guitar Clean | 446 MB (unpacked) | CC0 1.0 | Manual | SoundFont — single-instrument electric guitar bank |
+| Dexed | 8.9 MB | GPL-3.0 | Manual | VST3 — FM synthesizer, 32 presets |
+| Grand Piano (Audiolatry) | 6 MB | CC BY 3.0 | Manual | VST3 — single-instrument piano |
 
-Installing both suggested banks gives the widest coverage: GeneralUser GS stays the default, while MuseScore General joins the automatic ranking for orchestral families. Download links and extraction notes for the last two are in Settings and in [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md); keep the file names unchanged after extracting so the plugin can recognise them.
+The repository bundles no sound source. On first use, install the default GeneralUser GS as your foundation, then add other sources as you need them (custom sources are supported too).
 
 ## Sound effects
 
@@ -181,7 +182,7 @@ Measured speed: a three-minute song takes about 247 s on CPU and about 28.5 s on
 - **Project size caps** — a project is at most 15 minutes long and 20 tracks wide; going past either is an error.
 - **Audio only, for now** — a video can sit in the project as a reference picture, but this version does not trim, join or transition it.
 - **Tracks hold finished audio** — every clip on the timeline is an already-rendered wav/mp3 that can be auditioned on its own; MIDI, scores and parameters never go on the timeline.
-- **SoundFont only** — no SFZ, Kontakt or VST; converting other source formats is out of scope for this version.
+- **SoundFont and VST3 sources** — no SFZ; sources that need a dedicated container such as Kontakt are out of scope.
 - **No per-note envelope control** — attack and release come from the preset; use short notes with gaps for staccato and velocity plus expression for dynamics.
 - **Chinese instruments are GM approximations** — `guzheng` maps to Koto, `dizi` to Flute, `erhu` to Fiddle; dedicated banks will do better.
 - **Singing quality depends on the voicebank and tuning** — the plugin only provides the install channel, interface and usage.
@@ -202,4 +203,4 @@ Any amount is appreciated.
 
 Code is MIT, see [LICENSE](https://github.com/cloudoyx/any-audio/blob/main/LICENSE).
 
-SoundFonts and third-party components keep their own licenses, see [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md). This repository distributes no sample banks.
+Sound sources and third-party components keep their own licenses, see [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md). This repository distributes no sample banks.

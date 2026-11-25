@@ -129,16 +129,17 @@ dsh plugin --profile desktop add dsh-any-audio
 
 ## 音源
 
-仓库不打包 SoundFont。插件提供两套**建议安装**的音源——GeneralUser GS 作为默认基础音源，MuseScore General 作为额外的通用管弦乐音源——也支持加载放入 `~/.dsh/anyaudio/fonts` 的兼容 SoundFont 音源（`.sf2`、`.sf3`、`.dls`）。该目录是整台机器共用的音源库，所有项目与 Agent 会话共用同一份，装过一次即可处处可用。
+插件支持两类音源：**SoundFont**（`.sf2`、`.sf3`、`.dls`）和 **VST3 乐器插件**。SoundFont 体积小、安装简单；VST3 音色更真实、可调性更好。两类可以同时使用。
 
 | 音源 | 体积 | 许可证 | 获取方式 | 说明 |
 | --- | --- | --- | --- | --- |
-| GeneralUser GS | 32 MB | GeneralUser GS License v2.0 | 一键 | **建议安装 — 默认基础音源与兜底**；唯一保证带鼓组的音源 |
-| MuseScore General | 40 MB | MIT | 一键 | **建议安装 — 额外的通用管弦乐音源**；309 个预设，弦乐与合奏更完整 |
-| Upright Piano KW | 27 MB（7z） | CC0 1.0 | 手动 | 单乐器钢琴库，只用于钢琴轨 |
-| Electric Guitar Clean | 446 MB（解压后） | CC0 1.0 | 手动 | 单乐器电吉他库 |
+| GeneralUser GS | 32 MB | GeneralUser GS License v2.0 | 一键 | **SoundFont — 建议安装，默认基础音源与兜底**；唯一保证带鼓组的音源 |
+| MuseScore General | 40 MB | MIT | 手动 | **SoundFont — 建议安装，额外的通用管弦乐音源**；309 个预设，弦乐与合奏更完整 |
+| Electric Guitar Clean | 446 MB（解压后） | CC0 1.0 | 手动 | SoundFont — 单乐器电吉他库 |
+| Dexed | 8.9 MB | GPL-3.0 | 手动 | VST3 — FM 合成器，32 个音色 |
+| Grand Piano (Audiolatry) | 6 MB | CC BY 3.0 | 手动 | VST3 — 单音色钢琴 |
 
-两套都装覆盖最广：GeneralUser GS 仍是默认音源，MuseScore General 参与管弦乐族的自动选择。后两套的下载地址与解压说明在设置页和 [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md)；解压后保持文件名不变，插件才能识别。
+仓库不打包任何音源。第一次用，先装默认的 GeneralUser GS 作为基础音源，然后根据自己的需要添加其他音源（也支持自定义音源）。
 
 ## 音效
 
@@ -187,7 +188,7 @@ npm 包里不带这些东西，首次使用需下载安装。
 - **工程规模上限**：单个工程最长 15 分钟、最多 20 轨，超出会直接报错。
 - **这版只剪音频**：视频可以作为参考画面一起放进来，但画面上不做裁剪、拼接或转场。
 - **轨道里必须是成品音频**：放在时间轴上的每一段都是已经渲染好的 wav/mp3，可以单独试听；MIDI、乐谱和参数不会直接进时间轴。
-- **只支持 SoundFont**：不支持 SFZ、Kontakt、VST；转换其它音源格式不在本版范围。
+- **音源支持 SoundFont 与 VST3**：不支持 SFZ；Kontakt 等需要专用容器的音源不在支持范围。
 - **没有逐音符包络控制**：发音与释放由预设决定；断奏用短音符加缝隙，强弱用力度与表情控制。
 - **中国乐器是 GM 近似**：`guzheng` 映射 Koto、`dizi` 映射 Flute、`erhu` 映射 Fiddle；专用音源会更好。
 - **唱歌音质由声库和调教决定**：插件只提供安装渠道、接口和使用方式。
@@ -208,4 +209,4 @@ AnyAudio 是一个独立开源项目。如果它对你的工作或创作有所�
 
 代码采用 MIT，见 [LICENSE](https://github.com/cloudoyx/any-audio/blob/main/LICENSE)。
 
-SoundFont 与第三方组件沿用各自许可证，见 [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md)。本仓库不分发任何音源库。
+音源与第三方组件沿用各自许可证，见 [THIRD_PARTY_NOTICES.md](https://github.com/cloudoyx/any-audio/blob/main/THIRD_PARTY_NOTICES.md)。本仓库不分发任何音源库。
