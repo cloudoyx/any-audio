@@ -128,12 +128,12 @@ The plugin supports two kinds of sound source: **SoundFont** (`.sf2`, `.sf3`, `.
 | Source | Size | License | How to get it | Notes |
 | --- | --- | --- | --- | --- |
 | GeneralUser GS | 32 MB | GeneralUser GS License v2.0 | One click | **SoundFont — suggested, default foundation and fallback**; the only bank guaranteed to include a drum kit |
-| MuseScore General | 40 MB | MIT | Manual | **SoundFont — suggested, extra general-purpose orchestral bank**; 309 presets, fuller strings and ensembles |
+| MuseScore General | 40 MB | MIT | Manual | **SoundFont — extra general-purpose orchestral bank**; 309 presets, fuller strings and ensembles |
 | Electric Guitar Clean | 446 MB (unpacked) | CC0 1.0 | Manual | SoundFont — single-instrument electric guitar bank |
 | Dexed | 8.9 MB | GPL-3.0 | Manual | VST3 — FM synthesizer, 32 presets |
 | Grand Piano (Audiolatry) | 6 MB | CC BY 3.0 | Manual | VST3 — single-instrument piano |
 
-The repository bundles no sound source. On first use, install the default GeneralUser GS as your foundation, then add other sources as you need them (custom sources are supported too).
+The repository bundles no sound source. On first use, install the default GeneralUser GS as your foundation, then add other sources as you need them (custom sources such as Ample Sound are supported too).
 
 ## Sound effects
 
@@ -181,8 +181,7 @@ Measured speed: a three-minute song takes about 247 s on CPU and about 28.5 s on
 
 - **Project size caps** — a project is at most 15 minutes long and 20 tracks wide; going past either is an error.
 - **Audio only, for now** — a video can sit in the project as a reference picture, but this version does not trim, join or transition it.
-- **Tracks hold finished audio** — every clip on the timeline is an already-rendered wav/mp3 that can be auditioned on its own; MIDI, scores and parameters never go on the timeline.
-- **SoundFont and VST3 sources** — no SFZ; sources that need a dedicated container such as Kontakt are out of scope.
+- **SoundFont and some VST3 sources** — no SFZ; sources that need a dedicated container such as Kontakt are out of scope.
 - **No per-note envelope control** — attack and release come from the preset; use short notes with gaps for staccato and velocity plus expression for dynamics.
 - **Chinese instruments are GM approximations** — `guzheng` maps to Koto, `dizi` to Flute, `erhu` to Fiddle; dedicated banks will do better.
 - **Singing quality depends on the voicebank and tuning** — the plugin only provides the install channel, interface and usage.

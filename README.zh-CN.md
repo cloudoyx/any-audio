@@ -134,12 +134,12 @@ dsh plugin --profile desktop add dsh-any-audio
 | 音源 | 体积 | 许可证 | 获取方式 | 说明 |
 | --- | --- | --- | --- | --- |
 | GeneralUser GS | 32 MB | GeneralUser GS License v2.0 | 一键 | **SoundFont — 建议安装，默认基础音源与兜底**；唯一保证带鼓组的音源 |
-| MuseScore General | 40 MB | MIT | 手动 | **SoundFont — 建议安装，额外的通用管弦乐音源**；309 个预设，弦乐与合奏更完整 |
+| MuseScore General | 40 MB | MIT | 手动 | **SoundFont — 额外的通用管弦乐音源**；309 个预设，弦乐与合奏更完整 |
 | Electric Guitar Clean | 446 MB（解压后） | CC0 1.0 | 手动 | SoundFont — 单乐器电吉他库 |
 | Dexed | 8.9 MB | GPL-3.0 | 手动 | VST3 — FM 合成器，32 个音色 |
 | Grand Piano (Audiolatry) | 6 MB | CC BY 3.0 | 手动 | VST3 — 单音色钢琴 |
 
-仓库不打包任何音源。第一次用，先装默认的 GeneralUser GS 作为基础音源，然后根据自己的需要添加其他音源（也支持自定义音源）。
+仓库不打包任何音源。第一次用，先装默认的 GeneralUser GS 作为基础音源，然后根据自己的需要添加其他音源（也支持自定义音源，例如 Ample Sound 等）。
 
 ## 音效
 
@@ -187,8 +187,7 @@ npm 包里不带这些东西，首次使用需下载安装。
 
 - **工程规模上限**：单个工程最长 15 分钟、最多 20 轨，超出会直接报错。
 - **这版只剪音频**：视频可以作为参考画面一起放进来，但画面上不做裁剪、拼接或转场。
-- **轨道里必须是成品音频**：放在时间轴上的每一段都是已经渲染好的 wav/mp3，可以单独试听；MIDI、乐谱和参数不会直接进时间轴。
-- **音源支持 SoundFont 与 VST3**：不支持 SFZ；Kontakt 等需要专用容器的音源不在支持范围。
+- **音源支持 SoundFont 与部分 VST3**，不支持 SFZ；Kontakt 等需要专用容器的音源不在支持范围。
 - **没有逐音符包络控制**：发音与释放由预设决定；断奏用短音符加缝隙，强弱用力度与表情控制。
 - **中国乐器是 GM 近似**：`guzheng` 映射 Koto、`dizi` 映射 Flute、`erhu` 映射 Fiddle；专用音源会更好。
 - **唱歌音质由声库和调教决定**：插件只提供安装渠道、接口和使用方式。
