@@ -37,6 +37,12 @@ const mod = entry.factory((id) => {
 const { FontsTab, FxLibTab, TtsTab, SingingTab, Guide, NarrationStep, SingingStep, VoicebankDownloadLinks, VOICEBANK_SOURCES, installVoicebankZip, ONBOARDING_VERSION, onboardedVersion, primeOnboardingConfig, primeOnboardingTts } = mod.__test
 const { jobFailure, setLanguage } = mod.__test
 
+// The page renders in the machine's language by default, and a CI runner is
+// usually English while a developer machine may be Chinese. Pin Chinese here so
+// the structural assertions below do not depend on the host locale; the step
+// that checks the English wording switches explicitly.
+setLanguage('zh')
+
 function strings(node, out = []) {
   if (node === null || node === undefined || node === false) return out
   if (typeof node === 'string') { out.push(node); return out }
