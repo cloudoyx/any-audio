@@ -98,7 +98,18 @@ assert.equal(typeof onboarding[0].component, 'function', 'the step must render a
 assert.equal(mod.__test.bytes(1536), '2 KB')
 assert.equal(mod.__test.bytes(42), '42 B')
 assert.equal(mod.__test.bytes(1.5 * 1024 * 1024), '1.5 MB')
-assert.equal(mod.__test.detectLanguage({ ui: { language: 'auto' } }), 'zh')
+// `auto` follows the browser language, and Node exposes `navigator` too — pin it
+// here so the assertion does not depend on the machine's locale (a CI runner is
+// usually English while a developer machine may be Chinese).
+const originalNavigator = globalThis.navigator
+const withNavigator = (language, run) => {
+  Object.defineProperty(globalThis, 'navigator', { value: { languages: [language], language }, configurable: true })
+  try { run() } finally {
+    Object.defineProperty(globalThis, 'navigator', { value: originalNavigator, configurable: true })
+  }
+}
+withNavigator('zh-CN', () => assert.equal(mod.__test.detectLanguage({ ui: { language: 'auto' } }), 'zh'))
+withNavigator('en-US', () => assert.equal(mod.__test.detectLanguage({ ui: { language: 'auto' } }), 'en'))
 assert.equal(mod.__test.detectLanguage({ ui: { language: 'en' } }), 'en')
 assert.equal(mod.__test.detectLanguage({ ui: { language: 'zh' } }), 'zh')
 
