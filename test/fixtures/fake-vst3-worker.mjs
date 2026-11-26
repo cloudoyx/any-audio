@@ -46,6 +46,8 @@ process.stdin.on('data', (chunk) => {
       // Echo `preset` too: the manager must forward it verbatim and must not
       // invent the field when the caller did not pass one.
       ...(msg.preset === undefined ? {} : { preset: msg.preset }),
+      // Same for the expression curve.
+      ...(msg.ccs === undefined ? {} : { ccs: msg.ccs }),
     })
   }
 })

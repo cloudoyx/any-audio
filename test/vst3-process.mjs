@@ -241,6 +241,27 @@ test('preset 透传：给了就原样送到 worker，不给就不带这个字段
   }
 })
 
+test('ccs 透传：表情曲线原样送到 worker，越界按 kind=param 拦下', async () => {
+  const mgr = createVst3Process(fakeOptions())
+  try {
+    const ccs = [{ t: 0, controller: 11, value: 127 }, { t: 0.5, controller: 11, value: 40 }]
+    const echoed = await mgr.render(task({ ccs }))
+    assert.deepEqual(echoed.ccs, ccs, 'worker 收到的 ccs 必须与输入逐项一致')
+    const without = await mgr.render(task())
+    assert.equal(without.ccs, undefined, '没给 ccs 时不能凭空带上这个字段')
+    await assert.rejects(
+      mgr.render(task({ ccs: [{ t: 0, controller: 11, value: 200 }] })),
+      (err) => err.code === 'BAD_CC' && err.kind === 'param',
+    )
+    await assert.rejects(
+      mgr.render(task({ ccs: [{ t: -1, controller: 11, value: 10 }] })),
+      (err) => err.code === 'BAD_CC' && err.kind === 'param',
+    )
+  } finally {
+    await mgr.shutdown()
+  }
+})
+
 test('preset 不是字符串按 kind=param 拦下', async () => {
   const mgr = createVst3Process(fakeOptions())
   try {

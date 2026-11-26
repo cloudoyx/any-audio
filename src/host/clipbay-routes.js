@@ -12,6 +12,7 @@
  *   POST /clipbay/render?root=&project=     start an export job
  *   GET  /clipbay/render?root=&project=&job= job status
  *   POST /clipbay/render/cancel             cancel a running export
+ *   POST /clipbay/midi?root=&project=       write one MIDI per instrument track
  *   GET  /clipbay/worklet                   the reverb AudioWorklet bundle
  *
  * The media routes must skip the custom client header: `<audio>` / `<video>`
@@ -26,6 +27,7 @@ import { ProjectPathError, MATERIALS_DIR, projectDir, projectFile, resolveInside
 import { MaterialError, deleteMaterial, findMaterial, materialPath } from '../project/materials.js'
 import { ProjectSchemaError } from '../project/schema.js'
 import { exportProject } from '../project/render.js'
+import { exportProjectMidi } from '../audio/midi-export.js'
 import { deleteDraft, listProjects, projectExists, readDraft, readMaterialIndex, readProject, saveProject, writeDraft } from '../project/store.js'
 import { outputDir } from '../tools/shared.js'
 import { describeError, json, readJsonBody, serveFile } from './http.js'
@@ -328,6 +330,18 @@ async function handle(req, res, { url, method, path, ctx }) {
     return json(res, 200, { ok: true, job: publicRenderJob(job) })
   }
 
+  if (path === '/clipbay/midi') {
+    // One MIDI per instrument track, built from the score snapshots the music
+    // tool froze into `sources/`. A project whose music predates those snapshots
+    // answers with zero files, which the panel shows as "nothing to export".
+    if (method !== 'POST') throw new RouteError(405, 'method not allowed')
+    const root = workspaceRootOf(ctx, url)
+    const projectId = projectIdOf(url, 'project')
+    await requireProject(root, projectId)
+    const result = await exportProjectMidi({ workspaceRoot: root, projectId })
+    return json(res, 200, { ok: true, ...result })
+  }
+
   if (path === '/clipbay/render/cancel') {
     if (method !== 'POST') throw new RouteError(405, 'method not allowed')
     const body = await readJsonBody(req)
@@ -365,7 +379,7 @@ async function handle(req, res, { url, method, path, ctx }) {
  * one fixed file from the plugin itself and accepts no path from the request.
  */
 export function needsClientHeader(path) {
-  return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/draft' || path === '/clipbay/render' || path === '/clipbay/render/cancel' || path === '/clipbay/material'
+  return path === '/clipbay/projects' || path === '/clipbay/project' || path === '/clipbay/draft' || path === '/clipbay/render' || path === '/clipbay/render/cancel' || path === '/clipbay/midi' || path === '/clipbay/material'
 }
 
 /**

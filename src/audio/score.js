@@ -207,7 +207,7 @@ function collectNotes(track, warn, drums = false) {
     return parsePitch(value)
   }
   track.notes.forEach((entry, index) => {
-    let start, duration, pitch, velocity, art
+    let start, duration, pitch, velocity, art, expr
     if (Array.isArray(entry)) {
       ;[start, duration, pitch, velocity, art] = entry
     } else if (entry && typeof entry === 'object') {
@@ -216,6 +216,7 @@ function collectNotes(track, warn, drums = false) {
       pitch = entry.p ?? entry.pitch ?? entry.n ?? entry.note
       velocity = entry.v ?? entry.velocity
       art = entry.art ?? entry.articulation
+      expr = entry.expr ?? entry.expression
     } else {
       throw new Error(`track "${track.name}" note #${index} must be an array or object`)
     }
@@ -228,6 +229,16 @@ function collectNotes(track, warn, drums = false) {
       art = art.trim() || undefined
     } else {
       art = undefined
+    }
+    // The CC11 arrival value for this track: the curve reaches `expr` when the
+    // note ends and holds it until the next mark. One number and no time, so the
+    // Agent writes the phrasing instead of counting seconds.
+    if (expr !== undefined && expr !== null && expr !== '') {
+      const value = number(expr, `note #${index} expr`)
+      if (value < 0 || value > 127) warn(`track "${track.name}" note #${index} expr clamped to 0..127`)
+      expr = Math.max(0, Math.min(127, value))
+    } else {
+      expr = undefined
     }
     const pitches = Array.isArray(pitch) ? pitch : [pitch]
     if (!pitches.length) throw new Error(`track "${track.name}" note #${index} has no pitch`)
@@ -248,6 +259,7 @@ function collectNotes(track, warn, drums = false) {
         midi: parseOne(p),
         velocity: Math.max(1, Math.min(127, vel)),
         ...(art ? { art } : {}),
+        ...(expr !== undefined ? { expr } : {}),
       })
     }
   })
@@ -269,6 +281,29 @@ function applyHumanize(notes, humanize, seed) {
       velocity: Math.max(1, Math.min(127, note.velocity + velocityJitter)),
     }
   })
+}
+
+/**
+ * Turn `{ t, value }` points into evenly sampled CC events: a straight line
+ * between two points, one event every 50 ms. Both the automation points and the
+ * note-anchored `expr` marks end up here, so the two routes cannot drift apart.
+ */
+function sampleCurve(points, controller) {
+  const events = []
+  const step = 1 / 20
+  for (let i = 0; i < points.length; i++) {
+    const current = points[i]
+    events.push({ t: current.t, type: 'cc', controller, value: Math.round(current.value) })
+    const next = points[i + 1]
+    if (!next) continue
+    const span = next.t - current.t
+    if (span <= step) continue
+    for (let t = current.t + step; t < next.t - 1e-6; t += step) {
+      const ratio = (t - current.t) / span
+      events.push({ t, type: 'cc', controller, value: Math.round(current.value + (next.value - current.value) * ratio) })
+    }
+  }
+  return events
 }
 
 function automationEvents(automation, warn) {
@@ -303,21 +338,30 @@ function automationEvents(automation, warn) {
     )
   }
   parsed.sort((a, b) => a.t - b.t)
-  const events = []
-  const step = 1 / 20
-  for (let i = 0; i < parsed.length; i++) {
-    const current = parsed[i]
-    events.push({ t: current.t, type: 'cc', controller: cc, value: Math.round(current.value) })
-    const next = parsed[i + 1]
-    if (!next) continue
-    const span = next.t - current.t
-    if (span <= step) continue
-    for (let t = current.t + step; t < next.t - 1e-6; t += step) {
-      const ratio = (t - current.t) / span
-      events.push({ t, type: 'cc', controller: cc, value: Math.round(current.value + (next.value - current.value) * ratio) })
-    }
+  return { trackName, events: sampleCurve(parsed, cc) }
+}
+
+/**
+ * CC11 curve built from the notes' `expr` marks.
+ *
+ * Each mark is an arrival value at that note's end; the value holds until the
+ * next mark. A track with no marks emits nothing at all, which is what keeps a
+ * score without phrasing identical to what it rendered before `expr` existed.
+ * Two marks on the same instant take the weaker one, so two parts landing
+ * together can never add up into a crescendo nobody asked for.
+ */
+function expressionEvents(notes) {
+  const marks = new Map()
+  for (const note of notes) {
+    if (note.expr === undefined) continue
+    const t = note.start + note.duration
+    const previous = marks.get(t)
+    if (previous === undefined || note.expr < previous) marks.set(t, note.expr)
   }
-  return { trackName, events }
+  if (marks.size === 0) return []
+  const points = [{ t: 0, value: 127 }, ...[...marks].map(([t, value]) => ({ t, value }))]
+  points.sort((a, b) => a.t - b.t)
+  return sampleCurve(points, 11)
 }
 
 /**
@@ -435,6 +479,7 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
     events.push({ t: 0, type: 'cc', channel, controller: 10, value: Math.round((pan + 1) * 63.5) })
     events.push({ t: 0, type: 'cc', channel, controller: 91, value: Math.round(reverb * 127) })
     if (chorus > 0) events.push({ t: 0, type: 'cc', channel, controller: 93, value: Math.round(chorus * 127) })
+    for (const event of expressionEvents(notes)) events.push({ ...event, channel })
     for (const note of notes) {
       events.push({ t: note.start, type: 'on', channel, note: note.midi, velocity: note.velocity })
       events.push({ t: note.start + note.duration, type: 'off', channel, note: note.midi })
@@ -462,8 +507,15 @@ export function compileScore(score, { sampleRate = 48000 } = {}) {
         + 'automation.track takes the track name, not its index or MIDI channel.',
       )
     }
+    // Both routes write the same controller. A track that already carries `expr`
+    // marks and then gets an expression automation curve is pressed twice, and
+    // which value survives depends on event order — say it rather than ship a
+    // curve nobody can predict.
+    if (events[0]?.controller === 11 && target.notes.some((note) => note.expr !== undefined)) {
+      warn(`track "${trackName}": "expr" marks and an "expression" automation curve both drive CC11 — use one of them, since the last event at each moment wins`)
+    }
     for (const event of events) target.events.push({ ...event, channel: target.channel })
-    target.events.sort((a, b) => a.t - b.t)
+    target.events.sort((a, b) => a.t - b.t || EVENT_PRIORITY[a.type] - EVENT_PRIORITY[b.type])
   }
 
   const endSec = tracks.reduce((max, track) => Math.max(max, track.endSec), 0)

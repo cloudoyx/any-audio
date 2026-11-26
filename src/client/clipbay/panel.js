@@ -363,6 +363,8 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // one export, and spec §6.8 keeps one-off UI state out of the project.
   const [exportFormat, setExportFormat] = useState('')
   const [exportNormalize, setExportNormalize] = useState(false)
+  const [midiBusy, setMidiBusy] = useState(false)
+  const [midiNotice, setMidiNotice] = useState(null)
   // Read the draft here, at the top level, so 添加到对话 only has to append to a
   // value it already has. Both the hook and its state are stable, so the read
   // does not make the click handler stale.
@@ -393,6 +395,35 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
   // An export renders from project.json on disk, so anything still inside the
   // debounce window has to be written before the job starts.
   const exporter = useExport(root, projectId, { name: project?.name, beforeStart: async () => { flush() } })
+
+  // MIDI export reads only the score snapshots on disk, so it needs no render job
+  // and no draft flush: the scores were written when the music was rendered.
+  const exportMidi = useCallback(async () => {
+    setMidiBusy(true)
+    setMidiNotice(null)
+    try {
+      const data = await api(
+        `/clipbay/midi?root=${encodeURIComponent(root)}&project=${encodeURIComponent(projectId)}`,
+        { method: 'POST' },
+      )
+      if (!data.files?.length) {
+        setMidiNotice({
+          tone: 'error',
+          text: t('没有可导出的谱面：工程里还没有渲染过带谱面的音乐。')
+            + (data.skipped?.length ? t('（{0} 个谱面读取失败）', data.skipped.length) : ''),
+        })
+      } else {
+        setMidiNotice({
+          text: t('已导出 {0} 个 MIDI 文件 → {1}', data.files.length, data.dir)
+            + (data.skipped?.length ? t('，{0} 个谱面跳过', data.skipped.length) : ''),
+        })
+      }
+    } catch (caught) {
+      setMidiNotice({ tone: 'error', text: `${t('导出 MIDI 失败')}：${caught.message}` })
+    } finally {
+      setMidiBusy(false)
+    }
+  }, [root, projectId])
 
   // The transport schedules from the project it is handed, so it must see the
   // current arrangement rather than whatever was loaded when it mounted.
@@ -644,16 +675,22 @@ function ProjectShell({ root, projectId, onBack, inputActions, useInput }) {
             onClick: () => void exporter.start(chosenFormat, { normalize: exportNormalize }),
             kind: 'primary',
             title: t('用当前状态渲染成品，导出后工程不会自动保存。'),
-          }, t('导出')),
+          }, t('导出成品')),
         ),
+      h(Btn, {
+        onClick: () => void exportMidi(),
+        disabled: midiBusy,
+        title: t('把所有音乐素材的谱面导出成 MIDI，一轨一个文件，落到项目的 midi/ 目录。'),
+      }, midiBusy ? t('正在导出…') : t('导出 MIDI')),
       h(Btn, { onClick: () => setHelpOpen(true) }, t('帮助')),
     ),
-    hasDraft ? h(Notice, null, t('有未保存的修改：导出使用当前状态，Agent 读取的是上次保存的版本。')) : null,
+    hasDraft ? h(Notice, null, t('有未保存的修改：导出成品使用当前状态，Agent 读取的是上次保存的版本。')) : null,
     editError ? h(Notice, { tone: 'error' }, editError) : null,
     saveError ? h(Notice, { tone: 'error' }, `${t('保存失败')}：${saveError} ${t('编辑仍在这里，可以重试。')}`) : null,
     mentionNotice ? h(Notice, null, mentionNotice) : null,
     exporter.error ? h(Notice, { tone: 'error' }, exporter.error) : null,
     exporter.job ? h(Notice, exporter.job.status === 'error' ? { tone: 'error' } : null, describeJob(exporter.job)) : null,
+    midiNotice ? h(Notice, midiNotice.tone === 'error' ? { tone: 'error' } : null, midiNotice.text) : null,
     // The preview row: picture on the left, properties on the right, the way
     // 剪映 puts them.
     //
@@ -814,7 +851,7 @@ function HelpDrawer({ open, onClose, surface }) {
           item(t('你在这里改的是草稿，不会立刻写进工程文件。')),
           item(t('点「保存」才写进工程，Agent 才能看到你的修改。')),
           item(t('不点保存就离开，会弹窗提醒；选「放弃」就回到上次保存的版本。')),
-          item(t('「导出」用的是当前状态，不是上次保存的版本。')),
+          item(t('「导出成品」用的是当前状态，不是上次保存的版本。')),
         ),
       ),
       section(t('片段怎么调'),
@@ -828,6 +865,14 @@ function HelpDrawer({ open, onClose, surface }) {
         p(t('选中片段或轨道 → 点「添加到对话」→ 输入框出现引用 → 切到「对话」补充要求再发送。')),
         p(t('它不会自己发消息，只是把引用放进输入框。你可以先引用，再给指令，例如「这段台词换个音色」。')),
       ),
+      section(t('导出'),
+        h('ul', { style: { margin: 0, paddingLeft: 18 } },
+          item(t('「导出成品」把整条时间轴渲成一个文件（WAV / MP3；带参考画面时可出 MP4），落到 .anyaudio/out/。')),
+          item(t('「导出 MIDI」把每个乐器轨单独导成一个 .mid 文件，一轨一个，文件名就是轨道名，落在工程的 midi/ 下。')),
+          item(t('MIDI 里只有音符、力度和表情，不带音量、声像、混响这些混音信息——拿到 Cubase、Reaper 里自己挂音源，平衡由你重新决定。')),
+          item(t('表情在剪辑台里听不听得到，取决于这一轨的音源：SoundFont 能听到，VST3 音源要看它自己支不支持；MIDI 文件里一定带着。')),
+        ),
+      ),
       // Where the files live belongs in the guide, not in the code: a person who
       // knows the layout can find, back up and clean up their own work.
       section(t('文件都在哪'),
@@ -836,7 +881,8 @@ function HelpDrawer({ open, onClose, surface }) {
             row(t('工程'), '.anyaudio/projects/<工程id>/project.json'),
             row(t('素材'), '.anyaudio/projects/<工程id>/materials/'),
             row(t('草稿'), '.anyaudio/projects/<工程id>/project.draft.json'),
-            row(t('导出'), '.anyaudio/out/'),
+            row(t('导出成品'), '.anyaudio/out/'),
+            row(t('MIDI'), '.anyaudio/projects/<工程id>/midi/<谱面>-<hash>/'),
             row(t('临时'), '.anyaudio/tmp/'),
           ),
         ),

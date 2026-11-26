@@ -4,6 +4,8 @@ import { mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { compileScore, parsePitch } from '../src/audio/score.js'
+import { buildTrackMidi, exportProjectMidi } from '../src/audio/midi-export.js'
+import { vst3NoteEvents } from '../src/tools/music.js'
 import { encodeWav, parseWav, peakOf, rmsOf, toDb } from '../src/audio/wav.js'
 import { synthesizeSfx } from '../src/audio/sfx.js'
 import { muxVideo } from '../src/audio/mux.js'
@@ -11,6 +13,8 @@ import { planOffset, pickProgram } from '../src/audio/banks.js'
 import { categoryOfProgram, fontScore, rankFonts } from '../src/audio/scoring.js'
 import { registerAllTools } from '../src/tools/index.js'
 import { findFfmpeg, runFfmpeg } from '../src/tools/shared.js'
+import { projectDir } from '../src/project/paths.js'
+import { BasicMIDI } from 'spessasynth_core'
 
 const repoRoot = resolve('.')
 const anyaudioDir = join(repoRoot, '.anyaudio')
@@ -50,6 +54,33 @@ registerAllTools({
   get: () => undefined,
 })
 const { createProject, readProject } = await import('../src/project/store.js')
+
+/** A project holding one score snapshot; `materials` stems share it, the way a
+ *  stems render freezes the same score onto every stem. */
+async function midiProject(name, score, materials = 1) {
+  const project = await createProject(repoRoot, { name })
+  const dir = projectDir(repoRoot, project.id)
+  await mkdir(join(dir, 'sources'), { recursive: true })
+  await writeFile(join(dir, 'sources', 'm1.score.json'), JSON.stringify(score), 'utf8')
+  const rows = []
+  for (let index = 1; index <= materials; index++) {
+    rows.push({
+      id: `m${index}`,
+      file: `materials/m${index}.wav`,
+      durationSec: 2,
+      kind: index === 1 ? 'music' : 'music-stem',
+      source: { kind: 'generated', snapshot: 'sources/m1.score.json' },
+    })
+  }
+  await writeFile(join(dir, 'materials', 'index.json'), JSON.stringify({ materials: rows }), 'utf8')
+  return { project, dir }
+}
+
+/** Read a written .mid back, so the assertions talk about the file, not the model. */
+async function readMidi(path) {
+  const bytes = await readFile(path)
+  return BasicMIDI.fromArrayBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+}
 
 // Improvement 01 / I-10: the three generating tools refuse to run without a
 // project, because audio a person cannot adjust is the failure this suite is
@@ -255,6 +286,159 @@ await test('automation inside 0..127 stays silent about clamping', async () => {
   assert(!compiled.warnings.some((entry) => entry.includes('automation')), `a valid curve must not warn, got ${JSON.stringify(compiled.warnings)}`)
 })
 
+await test('expr becomes one continuous CC11 curve that arrives when the note ends', async () => {
+  const compiled = compileScore({
+    tracks: [{
+      name: 'cello',
+      instrument: 'cello',
+      notes: [
+        { t: 0, d: 2, p: 'D3', v: 88 },
+        { t: 2, d: 4, p: 'F3', v: 88, expr: 40 },
+      ],
+    }],
+  })
+  const cc = compiled.tracks[0].events.filter((event) => event.type === 'cc' && event.controller === 11)
+  assert(cc.length >= 100, `the curve must be sampled, got ${cc.length} events`)
+  assert(cc[0].t === 0 && cc[0].value === 127, `it starts unattenuated at 0 (${JSON.stringify(cc[0])})`)
+  const last = cc[cc.length - 1]
+  assert(Math.abs(last.t - 6) < 1e-6 && last.value === 40, `it arrives at the mark when the note ends (${JSON.stringify(last)})`)
+  const between = cc.filter((event) => event.t > 3 && event.t < 5)
+  assert(between.every((event) => event.value > 40 && event.value < 127), 'the curve moves steadily, never jumps back to the top')
+  const mono = cc.every((event, index) => index === 0 || event.value <= cc[index - 1].value)
+  assert(mono, 'one mark means one fall, not a sawtooth per note')
+})
+
+await test('a score without expr sends no CC11 at all', async () => {
+  const compiled = compileScore({ tracks: [{ name: 'pad', instrument: 'choir', notes: [[0, 2, 60, 80]] }] })
+  assert(
+    !compiled.tracks[0].events.some((event) => event.controller === 11),
+    'no expr means no CC11 — scores without phrasing render exactly as before',
+  )
+})
+
+await test('two marks on the same instant take the weaker one', async () => {
+  const compiled = compileScore({
+    tracks: [{
+      name: 'split',
+      instrument: 'cello',
+      notes: [
+        { t: 0, d: 1, p: 'D3', v: 88, expr: 100 },
+        { t: 0.5, d: 0.5, p: 'A3', v: 88, expr: 30 },
+      ],
+    }],
+  })
+  const atOne = compiled.tracks[0].events.filter((event) => event.controller === 11 && Math.abs(event.t - 1) < 1e-6)
+  assert(atOne.length === 1 && atOne[0].value === 30, `the weaker mark wins (${JSON.stringify(atOne)})`)
+})
+
+await test('an out-of-range expr is clamped and reported', async () => {
+  const compiled = compileScore({
+    tracks: [{ name: 'lead', instrument: 'violin', notes: [{ t: 0, d: 1, p: 'D4', v: 88, expr: 200 }] }],
+  })
+  const warning = compiled.warnings.find((entry) => entry.includes('expr'))
+  assert(warning && warning.includes('0..127'), `clamping must warn, got ${JSON.stringify(compiled.warnings)}`)
+})
+
+await test('MIDI export writes one file per instrument track, with notes and CC11', async () => {
+  const score = {
+    title: '小样',
+    tracks: [
+      { name: '大提琴', instrument: 'cello', notes: [{ t: 0, d: 2, p: 'D3', v: 90, expr: 60 }] },
+      { name: '鼓', drums: true, notes: [[0, 0.5, 'kick', 100]] },
+    ],
+  }
+  // A stems render freezes the same score onto every stem's snapshot: one score.
+  const { project, dir } = await midiProject('verify-midi-export', score, 2)
+  const result = await exportProjectMidi({ workspaceRoot: repoRoot, projectId: project.id })
+  assert(result.files.length === 2, `one file per instrument track, got ${result.files.length} (${result.files.join(', ')})`)
+  assert(result.files.every((file) => file.startsWith('midi/')), `files land under midi/ (${result.files.join(', ')})`)
+  assert(result.files[0].endsWith('/大提琴.mid'), `the file is named after its track (${result.files[0]})`)
+
+  const parsed = await readMidi(join(dir, result.files[0]))
+  assert(parsed.format === 0 && parsed.timeDivision === 480, `format 0 at 480 ppq, got ${parsed.format}/${parsed.timeDivision}`)
+  const events = parsed.tracks.flatMap((track) => track.events)
+  const on = events.filter((event) => (event.statusByte & 0xf0) === 0x90)
+  const off = events.filter((event) => (event.statusByte & 0xf0) === 0x80)
+  const cc11 = events.filter((event) => (event.statusByte & 0xf0) === 0xb0 && event.data[0] === 11)
+  assert(on.length === 1 && off.length === 1, `one note on and off, got ${on.length}/${off.length}`)
+  assert(on[0].data[0] === 50 && on[0].data[1] === 90 && on[0].ticks === 0, `the note keeps its pitch, velocity and start (${JSON.stringify({ note: on[0].data[0], vel: on[0].data[1], tick: on[0].ticks })})`)
+  assert(cc11.length > 30, `the expression curve is in the file, got ${cc11.length} CC11 events`)
+  assert(cc11[cc11.length - 1].data[1] === 60 && cc11[cc11.length - 1].ticks === 1920, 'the curve ends at the note end (2 s = 1920 ticks at 120 BPM)')
+  assert(events.every((event) => !((event.statusByte & 0xf0) === 0xb0 && [7, 10, 91, 93].includes(event.data[0]))), 'mix CCs stay out of the file')
+
+  const drumMidi = await readMidi(join(dir, result.files[1]))
+  const drumOn = drumMidi.tracks.flatMap((track) => track.events).find((event) => (event.statusByte & 0xf0) === 0x90)
+  assert((drumOn.statusByte & 0x0f) === 9, `a drum track keeps channel 10 (${drumOn.statusByte & 0x0f})`)
+
+  const again = await exportProjectMidi({ workspaceRoot: repoRoot, projectId: project.id })
+  const folder = again.files[0].split('/')[1]
+  const written = await readdir(join(dir, 'midi', folder))
+  assert(written.length === 2, `a second click replaces instead of piling up, got ${written.length} files`)
+})
+
+await test('two tracks with one name get distinct MIDI files', async () => {
+  const score = {
+    title: '同名',
+    tracks: [
+      { name: 'lead', instrument: 'violin', notes: [[0, 1, 'D4', 80]] },
+      { name: 'lead', instrument: 'cello', notes: [[0, 1, 'D3', 80]] },
+    ],
+  }
+  const { project } = await midiProject('verify-midi-names', score)
+  const result = await exportProjectMidi({ workspaceRoot: repoRoot, projectId: project.id })
+  assert(result.files.length === 2, `both tracks export, got ${result.files.length}`)
+  assert(result.files.some((file) => file.endsWith('/lead.mid')), `first keeps the plain name (${result.files.join(', ')})`)
+  assert(result.files.some((file) => file.endsWith('/lead-2.mid')), `the second is suffixed (${result.files.join(', ')})`)
+})
+
+await test('MIDI events at the same tick put the controller before the note', async () => {
+  const compiled = compileScore({
+    tracks: [{ name: 'lead', instrument: 'violin', notes: [{ t: 0, d: 1, p: 'D4', v: 88, expr: 60 }] }],
+  })
+  const bytes = buildTrackMidi(compiled.tracks[0])
+  const parsed = BasicMIDI.fromArrayBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+  const voice = parsed.tracks[0].events.find((event) => (event.statusByte & 0xf0) === 0xb0 || (event.statusByte & 0xf0) === 0x90)
+  assert(voice && (voice.statusByte & 0xf0) === 0xb0 && voice.data[0] === 11, `the curve comes first, got ${JSON.stringify(voice?.statusByte)}`)
+})
+
+await test('VST3 wiring hands over CC11 only, clamped inside the render length', async () => {
+  const compiled = compileScore({
+    tracks: [{
+      name: 'lead',
+      instrument: 'violin',
+      pan: 0.3,
+      reverb: 0.5,
+      notes: [{ t: 0, d: 4, p: 'D4', v: 88, expr: 30 }],
+    }],
+  })
+  const track = compiled.tracks[0]
+  // The note ends exactly on the render length, so the curve's last point sits on it.
+  const events = vst3NoteEvents(track, 4)
+  assert(events.ccs.length > 50, `the curve is handed to the sidecar (${events.ccs.length})`)
+  assert(events.ccs.every((cc) => cc.controller === 11), 'only the expression controller is handed over')
+  assert(events.ccs.every((cc) => cc.t < 4), `no controller at or past the render length (max ${Math.max(...events.ccs.map((cc) => cc.t)).toFixed(3)})`)
+  assert(events.ccs[events.ccs.length - 1].value === 30, 'the curve still arrives at the mark')
+  assert(!events.ccs.some((cc) => [7, 10, 91, 93].includes(cc.controller)), 'mix CCs stay in the audio path')
+})
+
+await test('expr plus an expression automation curve is reported, not silently mixed', async () => {
+  const compiled = compileScore({
+    tracks: [{ name: 'pad', instrument: 'choir', notes: [{ t: 0, d: 2, p: 'C4', v: 80, expr: 60 }] }],
+    automation: [{ track: 'pad', controller: 'expression', points: [[0, 127], [2, 60]] }],
+  })
+  assert(
+    compiled.warnings.some((entry) => entry.includes('both drive CC11')),
+    `expected the double-drive warning, got ${JSON.stringify(compiled.warnings)}`,
+  )
+})
+
+await test('MIDI export on a project with no score writes nothing and says so', async () => {
+  const project = await createProject(repoRoot, { name: 'verify-midi-none' })
+  const result = await exportProjectMidi({ workspaceRoot: repoRoot, projectId: project.id })
+  assert(result.files.length === 0, `nothing to export, got ${result.files.length}`)
+  assert(result.dir === null, 'no folder is created for a project without scores')
+})
+
 await test('automation naming an unknown track lists what the score has', async () => {
   let message = ''
   try {
@@ -325,6 +509,44 @@ await test('per-track gainDb is the real relative level of each track', async ()
   const three = await levels([0, -3, -16])
   near(three[1], -3, 0.6, 'second track of [0,-3,-16]')
   near(three[2], -16, 0.8, 'third track of [0,-3,-16]')
+})
+
+await test('expr really turns a sustained note down in the render', async () => {
+  // The event list is not the feature: what matters is that the SoundFont
+  // synthesiser applies the curve to a note that is already sounding.
+  const tailRatio = async (expr) => {
+    const result = await tools.get('anyaudio_music').execute(
+      {
+        projectId: await freshAttach(),
+        score: {
+          tracks: [{
+            name: 'cello',
+            instrument: 'strings',
+            source: font.id,
+            reverb: 0,
+            notes: [expr === undefined ? [0.2, 3, 'C4', 100] : { t: 0.2, d: 3, p: 'C4', v: 100, expr }],
+          }],
+        },
+        durationSec: 3.6,
+        peakDb: null,
+        output: `.anyaudio/test-tmp/expr-${expr ?? 'none'}.wav`,
+      },
+      exec,
+    )
+    const channels = parseWav(await readFile(result.absolutePath)).channels
+    const rmsOf = (fromSec, toSec) => {
+      const from = Math.max(0, Math.floor(fromSec * 48000))
+      const to = Math.min(channels[0].length, Math.floor(toSec * 48000))
+      let sum = 0
+      for (let i = from; i < to; i++) sum += channels[0][i] ** 2
+      return Math.sqrt(sum / Math.max(1, to - from))
+    }
+    return rmsOf(2.2, 3.0) / Math.max(1e-9, rmsOf(0.4, 1.2))
+  }
+  const plain = await tailRatio(undefined)
+  assert(plain > 0.6, `a note without expr keeps its level (tail/head ${plain.toFixed(2)})`)
+  const shaped = await tailRatio(0)
+  assert(shaped < plain * 0.3, `expr:0 must turn the note down audibly (tail/head ${shaped.toFixed(3)} vs ${plain.toFixed(3)})`)
 })
 
 await test('the font library is one shared directory, not per project', async () => {

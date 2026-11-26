@@ -10,7 +10,8 @@
     worker → 调用方  {"type":"ready","sampleRate":48000}
     调用方 → worker  {"op":"render","id":N,"plugin":"...","notes":[
                         {"pitch":60,"start":0.0,"dur":0.5,"vel":100},...],
-                      "duration":4.0,"out":"...wav","preset":"...state"}
+                      "duration":4.0,"out":"...wav","preset":"...state",
+                      "ccs":[{"t":0.0,"controller":11,"value":127},...]}
     worker → 调用方  {"type":"result","id":N,"ok":true,"peak":0.79,"seconds":4.0}
     调用方 → worker  {"op":"probe","id":N,"plugin":"..."}
     worker → 调用方  {"type":"result","id":N,"ok":true,"programs":[
@@ -25,6 +26,10 @@ preset 可选，三种写法：
     {"kind":"parameter","parameter":"program","value":"PHAROH"}
                                     具名程序参数，渲染前 setattr 到插件上。
 不给就用插件默认状态（上一次渲染用过的预设会被撤掉）。预设装不进插件按 load 报错。
+
+ccs 可选：表情曲线的控制信息（秒、控制器号、0-127 的值），调用方只传第 11 号。
+插件有没有映射这个控制器由插件自己决定，没映射时宿主会静默丢弃，这里不报错。
+每段渲染开头都会先把表情归位到 127，避免上一段的值带进这一段。
 
 probe 只加载插件、枚举参数，找出「参数名像 program/preset/patch 且取值是一串具名值」
 的参数（Dexed 的 program 就是这种），给调用方写进音色档案用；不预热、不出声。
@@ -296,6 +301,31 @@ def parse_notes(raw, duration):
     return notes
 
 
+def parse_ccs(raw, duration):
+    """控制信息：秒 + 控制器号 + 0..127 的值。调用方传的是第 11 号（表情）。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise WorkerError("param", "ccs 必须是数组")
+    ccs = []
+    for index, item in enumerate(raw, 1):
+        if not isinstance(item, dict):
+            raise WorkerError("param", f"第 {index} 条 ccs 不是对象")
+        t = item.get("t", 0.0)
+        if not _number(t) or t < 0:
+            raise WorkerError("param", f"第 {index} 条 ccs 的 t 必须是不小于 0 的秒数")
+        controller = item.get("controller")
+        if not isinstance(controller, int) or isinstance(controller, bool) or not 0 <= controller <= 127:
+            raise WorkerError("param", f"第 {index} 条 ccs 的 controller 必须是 0-127 的整数")
+        value = item.get("value")
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 127:
+            raise WorkerError("param", f"第 {index} 条 ccs 的 value 必须是 0-127 的整数")
+        if t >= duration:
+            raise WorkerError("param", f"第 {index} 条 ccs 的 t={t} 超出渲染时长 {duration}")
+        ccs.append({"t": float(t), "controller": controller, "value": value})
+    return ccs
+
+
 def write_wav(path, audio):
     if audio.ndim == 1:
         audio = np.stack([audio, audio])
@@ -457,7 +487,7 @@ class PluginCache:
         raise WorkerError("load", f"{path.name} 预热 {WARMUP_ATTEMPTS} 次仍无声音，插件可能没有加载采样")
 
 
-def render_audio(plugin, notes, duration):
+def render_audio(plugin, notes, duration, ccs=()):
     # reset=False 是采样器的要求，代价是插件内部状态会跨调用保留。先空跑一段，
     # 让上一段的尾音衰减掉，否则新片段开头会混进旧尾音，静音检测也会被它骗过。
     plugin(
@@ -468,11 +498,18 @@ def render_audio(plugin, notes, duration):
         reset=False,
     )
     messages = []
+    # 插件实例按路径复用且状态会跨调用保留：上一段留下的表情会带进这一段，
+    # 所以每段开头显式把表情归位，再走这一段自己的曲线。
+    messages.append(Message("control_change", channel=0, control=11, value=127, time=0.0))
+    for cc in ccs:
+        messages.append(Message("control_change", channel=0, control=cc["controller"], value=cc["value"], time=cc["t"]))
     for note in notes:
         messages.append(Message("note_on", note=note["pitch"], velocity=note["vel"], time=note["start"]))
         messages.append(Message("note_off", note=note["pitch"], velocity=0, time=note["start"] + note["dur"]))
-    # 同一时刻先收上一个音再起新音，避免同音重触发被截断。
-    messages.sort(key=lambda message: (message.time, 0 if message.type == "note_off" else 1))
+    # 同一时刻先控制信息（让这个音从正确的表情开始），再收上一个音，最后起新音，
+    # 避免同音重触发被截断。
+    priority = {"control_change": 0, "note_off": 1, "note_on": 2}
+    messages.sort(key=lambda message: (message.time, priority.get(message.type, 3)))
     return plugin(
         messages,
         duration=duration,
@@ -497,6 +534,7 @@ def handle_render(cache, msg):
     duration = float(duration)
 
     notes = parse_notes(msg.get("notes"), duration)
+    ccs = parse_ccs(msg.get("ccs"), duration)
     raw_keyswitches = msg.get("keyswitches")
     keyswitches = set()
     if isinstance(raw_keyswitches, list):
@@ -508,7 +546,7 @@ def handle_render(cache, msg):
     path = resolve_plugin_path(plugin_raw)
     check_range(path, notes, keyswitches)
     plugin = cache.get(path, preset)
-    audio = render_audio(plugin, notes, duration)
+    audio = render_audio(plugin, notes, duration, ccs)
     peak = _peak(audio)
     if not np.isfinite(peak) or peak < SILENCE_PEAK:
         raise WorkerError(

@@ -38,8 +38,10 @@ export async function resolvePlugin(raw) {
  *
  * `preset` is the state file of the timbre to load (the caller resolves a
  * timbre name to its file); without it the plugin renders its default state.
+ * `ccs` is the track's expression curve ([{ t, controller, value }]); a plugin
+ * that does not map the controller simply ignores it.
  */
-export async function renderVst3Stem({ plugin, notes, duration, out, manager, keyswitches, preset }) {
+export async function renderVst3Stem({ plugin, notes, duration, out, manager, keyswitches, ccs, preset }) {
   const resolved = await resolvePlugin(plugin)
   const own = manager ?? createVst3Process()
   try {
@@ -49,6 +51,7 @@ export async function renderVst3Stem({ plugin, notes, duration, out, manager, ke
       duration,
       out,
       ...(keyswitches?.length ? { keyswitches } : {}),
+      ...(ccs?.length ? { ccs } : {}),
       ...(preset ? { preset } : {}),
     })
   } finally {

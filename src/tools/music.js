@@ -71,10 +71,20 @@ export async function eachTrackStem(compiled, { renderOne, gain = 1, onStem = nu
   return { levels, rendered }
 }
 
-/** Notes for the VST3 sidecar: the target notes plus a short keyswitch note
- *  before each note that names an articulation. The keyswitch pitches are
- *  returned too, so the sidecar's range check can exempt them. */
-function vst3NoteEvents(track) {
+/** Notes and CC11 for the VST3 sidecar: the target notes, a short keyswitch
+ *  note before each note that names an articulation, and the track's expression
+ *  curve. Only the expression controller is handed over — the mix CCs (volume,
+ *  pan, sends) are applied to the rendered audio instead, because a plugin is
+ *  not obliged to map them. The keyswitch pitches are returned too, so the
+ *  sidecar's range check can exempt them.
+ *
+ *  The curve's last point is the end of a note, which can sit exactly on the
+ *  render length (a part that fills the video). It is kept just inside: the tail
+ *  is truncated anyway, but the sidecar refuses a message at t >= duration and
+ *  would fail the whole track over a controller nobody would hear.
+ *
+ *  Exported so the wiring can be tested without a real plugin. */
+export function vst3NoteEvents(track, durationSec) {
   const keyswitches = new Map((track.vst3?.articulations ?? []).map((item) => [item.id, item.keyswitch]))
   const notes = []
   const usedKeyswitches = new Set()
@@ -91,7 +101,11 @@ function vst3NoteEvents(track) {
     }
     notes.push({ pitch: note.midi, start: note.start, dur: note.duration, vel: note.velocity })
   }
-  return { notes, keyswitches: [...usedKeyswitches] }
+  const latest = Number.isFinite(Number(durationSec)) ? Math.max(0, Number(durationSec) - 1e-3) : Infinity
+  const ccs = track.events
+    .filter((event) => event.type === 'cc' && event.controller === 11)
+    .map((event) => ({ t: Math.min(event.t, latest), controller: 11, value: event.value }))
+  return { notes, keyswitches: [...usedKeyswitches], ccs }
 }
 
 /**
@@ -244,7 +258,7 @@ export async function selectSources(compiled, { catalog = null, fonts = null, wo
 /** Render one VST3 track to a stem at the mix's sample rate and length. */
 async function renderVst3TrackStem(track, { manager, sampleRate, durationSec, workspaceRoot, stamp, index }) {
   const out = scratchPath(workspaceRoot, `vst3-${stamp}-${index}.wav`)
-  const events = vst3NoteEvents(track)
+  const events = vst3NoteEvents(track, durationSec)
   // The preset the score's timbre name resolved to; without one the sidecar
   // renders the instrument's own default state.
   const preset = track.presetParameter
@@ -254,6 +268,7 @@ async function renderVst3TrackStem(track, { manager, sampleRate, durationSec, wo
     plugin: track.vst3.plugin,
     notes: events.notes,
     keyswitches: events.keyswitches,
+    ccs: events.ccs,
     preset,
     duration: durationSec,
     out,
@@ -346,6 +361,7 @@ export const musicToolDefinition = finalizeTool({
     'Drum kits always come from the default SoundFont (the first loaded bank) — pass another kit as "font" if you need it. ' +
     'Score format (seconds on the video timeline): {title, tracks:[{name, instrument, source, preset, gainDb, pan, reverb, drums, humanize:{timingMs,velocity}, notes:[[startSec, durSec, pitch|pitches, velocity, art?]]}], automation:[{track, controller, points:[[sec,value]]}]}. ' +
     'The optional fifth note element "art" has two kinds: plugin articulations (VST3 sources only) — "sus" (sustain), "pm" (palm mute), "ls" (legato slide), "hp" (hammer-on/pull-off); the sidecar sends the matching keyswitch just before the note — and strum gestures (any track) — "strum-down" / "strum-up", which start the chord\'s notes 18 ms apart, lowest to highest for down and the reverse for up, the way a hand crosses the strings. A strum needs a chord (an array of pitches). SoundFont tracks ignore the four plugin articulations but honour the strum gestures. ' +
+    'Expression (CC11): a note written as an object may add "expr", a single arrival value 0–127 (127 = unattenuated, 64 ≈ −12 dB, 0 ≈ silent). The curve starts at 127 on second 0; each mark arrives when that note ends and holds until the next mark, so a phrase that falls away is one number on its last note, and a crescendo is a low value written early plus 127 later; two marks at the same instant take the weaker one. It is a channel control: every note of that track is pushed together. A score with no "expr" sends no CC11 at all, exactly like before. ' +
     'Pitch accepts MIDI numbers or names (D3, F#4, Bb2); instruments accept GM names (piano, cello, strings, koto, shakuhachi, erhu, guzheng), GM program numbers, or an object {program, bank, name} for a patch outside bank 0 (anyaudio_sources action "presets" prints the exact field for every patch). ' +
     'Each track\'s gainDb is the level its stem is rendered at. That is a fact about the file, measured and recorded when the stem lands — it is not a mixing knob. To rebalance later, change the clip gain; do not render again. Positive values lift a track above the loudest one (the whole score is shifted instead of clipping). Per-track levels come back on every call (this tool measures them as part of rendering, one synthesis per track), so there is nothing to ask for; a part sitting more than 12 dB under the loudest one gets a warning. ' +
     'Read the anyaudio-scoring skill for arrangement technique and mixing workflow.',

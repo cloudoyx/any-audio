@@ -76,6 +76,8 @@ A traditional DAW is built for a person, with AI as an assistant. This one is th
 
 Person and agent share one timeline. Select a range, press "Add to conversation", and that range becomes a reference; write what you want changed after it and the agent knows exactly where you mean. The reverse works too: adjust one clip yourself until it sounds right, then have the agent apply that to the rest.
 
+Every instrument track can also be exported as a MIDI file, one per track, ready to open in Cubase, Reaper or another workstation to be re-voiced or refined there.
+
 ## Install
 
 Node.js 22.19+ (22.x) or 24+ (bundled with DSH); ffmpeg is only needed for speech and for muxing video.

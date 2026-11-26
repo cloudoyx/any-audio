@@ -6,6 +6,7 @@
 //   worker -> us  {"type":"result","id":N,"ok":true,"programs":[{"parameter":"program","values":[...]}]}
 //   worker -> us  {"type":"result","id":N,"ok":false,"kind":"param|load|render","error":"..."}
 //   us -> worker  {"op":"render","id":N,"plugin":"...","notes":[...],"duration":4.0,"out":"...","preset":"..."}
+//                 plus optional "ccs":[{ t, controller: 11, value }] — the track's expression curve
 //   us -> worker  {"op":"probe","id":N,"plugin":"..."}
 //   us -> worker  {"op":"shutdown"}
 //
@@ -200,6 +201,25 @@ function validateTask(task) {
   const keyswitches = Array.isArray(task.keyswitches)
     ? task.keyswitches.filter((pitch) => Number.isInteger(pitch) && pitch >= 0 && pitch <= 127)
     : []
+  const ccs = Array.isArray(task.ccs)
+    ? task.ccs.map((cc, index) => {
+      const label = `cc ${index + 1}`
+      if (!cc || typeof cc !== 'object') {
+        throw new Vst3ProcessError(`${label} must be an object`, { code: 'BAD_CC', kind: 'param' })
+      }
+      const t = Number(cc.t)
+      if (!Number.isFinite(t) || t < 0) {
+        throw new Vst3ProcessError(`${label} t must be a non-negative number`, { code: 'BAD_CC', kind: 'param' })
+      }
+      if (!Number.isInteger(cc.controller) || cc.controller < 0 || cc.controller > 127) {
+        throw new Vst3ProcessError(`${label} controller must be an integer 0-127`, { code: 'BAD_CC', kind: 'param' })
+      }
+      if (!Number.isInteger(cc.value) || cc.value < 0 || cc.value > 127) {
+        throw new Vst3ProcessError(`${label} value must be an integer 0-127`, { code: 'BAD_CC', kind: 'param' })
+      }
+      return { t, controller: cc.controller, value: cc.value }
+    })
+    : []
   const preset = task.preset === undefined || task.preset === null ? null : validatePreset(task.preset)
   return {
     plugin: task.plugin,
@@ -207,6 +227,7 @@ function validateTask(task) {
     duration,
     out: task.out,
     ...(keyswitches.length ? { keyswitches } : {}),
+    ...(ccs.length ? { ccs } : {}),
     ...(preset ? { preset } : {}),
   }
 }
